@@ -29,6 +29,7 @@ from core.sandbox.tests.capability import requires_landlock, requires_userns
 
 
 from core.testing.module_bindings import patch_module_attribute
+from core.testing.module_views import scoped_function_imports
 
 
 def _poison(flags, reason="unshare: Operation not permitted"):
@@ -179,22 +180,27 @@ class TestSubprocessBoundaryTranslation:
             def communicate(self, timeout=None):
                 return ("", "RAPTOR: sandbox could not engage")
 
-        patch_module_attribute(monkeypatch, scanner, 'subprocess', "Popen",
-                            lambda *a, **k: _FakeProc())
-        # run_codeql returns [] early if `codeql` isn't on PATH (the case in
-        # CI), never reaching the Popen + exit-code translation under test.
-        # Force it "present" so the real path runs regardless of host.
-        _real_which = scanner.shutil.which
-        patch_module_attribute(monkeypatch,
-            scanner, 'shutil', "which",
-            lambda name: "/usr/bin/codeql" if name == "codeql" else _real_which(name),
-        )
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        out = tmp_path / "out"
-        out.mkdir()
-        with pytest.raises(SandboxSetupError) as ei:
-            scanner.run_codeql(repo, out)
+        launches = []
+
+        def launch(*args, **kwargs):
+            launches.append(args[0])
+            return _FakeProc()
+
+        patch_module_attribute(monkeypatch, scanner, 'subprocess', "Popen", launch)
+        # run_codeql checks the package's lazy availability import, not the
+        # scanner's shutil binding. Keep that check on a private module view.
+        import packages.codeql as codeql
+        with scoped_function_imports(
+            scanner, ['run_codeql'], {'packages.codeql': codeql},
+        ) as imports:
+            getattr(imports, 'packages.codeql').is_available = lambda: True
+            repo = tmp_path / "repo"
+            repo.mkdir()
+            out = tmp_path / "out"
+            out.mkdir()
+            with pytest.raises(SandboxSetupError) as ei:
+                scanner.run_codeql(repo, out)
+        assert len(launches) == 1
         assert "network-only" in str(ei.value)
 
     def test_engage_exit_code_value(self):

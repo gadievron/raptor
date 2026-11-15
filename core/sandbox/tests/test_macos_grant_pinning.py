@@ -381,6 +381,8 @@ class TestPinAuthorityAndProtocol:
         import types as _types
 
         class _NoisyPopen:
+            stdin = stdout = stderr = None
+
             def __init__(self, cmd, **kwargs):
                 self.cmd = cmd
                 self.pid = 4190401

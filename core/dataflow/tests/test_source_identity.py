@@ -106,13 +106,21 @@ def test_unrelated_parameter_does_not_shadow_regex_namespace(tmp_path: Path, bod
         '    if not re.fullmatch(r"[a-z]+", name):\n'
         "        return\n    return open(name)\n"
     )
-    assert known_python_identity_conflict(source, 5, ("re.fullmatch",)) is None
+    conflict = known_python_identity_conflict(source, 5, ("re.fullmatch",))
+    if body == "re.fullmatch = replacement":
+        # A helper parameter can receive the module singleton; mutating a
+        # member is not the same as harmlessly shadowing the local name.
+        assert conflict == "dynamic source namespace invalidates the library identity"
+    else:
+        assert conflict is None
     (tmp_path / "app.py").write_text(source)
     control = sb.try_tier0(
         fix_diff='+    if not re.fullmatch(r"[a-z]+", name):\n', repo_root=tmp_path,
         sink_uri="app.py", sink_line=7, sink_class="pathtrav",
     )
-    assert control.status is sb.Tier0Status.SOUND
+    expected = (sb.Tier0Status.NOT_APPLICABLE
+                if body == "re.fullmatch = replacement" else sb.Tier0Status.SOUND)
+    assert control.status is expected
 
 
 @pytest.mark.skipif(not z3_available(), reason="z3-solver not installed")

@@ -170,10 +170,45 @@ def test_non_c_review_keeps_legacy_behavior(tmp_path):
     assert _build_covered_set([_record(file="unit.py")], require_c_foundation=True) == {"unit.py:f"}
 
 
-def test_binary_subject_projection_is_not_misclassified_as_c_source():
+def _binary_model_inputs(root, name):
+    from core.audit.binary_context import assemble_binary_context
+    from core.audit.binary_review_scope import binary_view_anchor
+    from core.audit.knowledge_runtime import AuditKnowledgeRuntime
+    from core.audit.orchestrator import StudyQueue
+    from core.inventory.binary_builder import binary_path_key
+    from packages.ghidra.model import REDatabase, REFunction
+
+    module = root / name
+    module.write_bytes(b"owned inert module fixture, not executable")
+    database = REDatabase(source_tool="ghidra", binary_path=str(module), functions=[
+        REFunction(name="f", address=4096, size=16, source_tool="ghidra",
+                   decompilation="unsigned f(unsigned n) { return n + 1; }")])
+    ctx = assemble_binary_context(target_path=module, file_path=binary_path_key(module),
+                                  function_name="f", db=database)
+    runtime = AuditKnowledgeRuntime(module, StudyQueue(), deadline=float("inf"))
+    try:
+        origin = runtime._origin(ctx)
+        anchor = binary_view_anchor(origin.binary_identity)
+    finally:
+        runtime.close("owned_fixture_complete")
+    assert anchor is not None and anchor.startswith("bin:inputs3:")
+    identity = origin.binary_identity
+    return module, origin.file, anchor, f"bin:{identity.module_sha256}:{identity.address:x}:{identity.size:x}"
+
+
+def test_binary_subject_projection_is_not_misclassified_as_c_source(tmp_path):
     from core.coverage.journal import make_function_key
-    file = "binary:module.c"
-    assert _build_covered_set([_record(file=file)], require_c_foundation=True) == {make_function_key(file, "f")}
+    module, file, anchor, plain = _binary_model_inputs(tmp_path, "module.c")
+    record = _record(file=file)
+    item = record["functions_analysed"][0]
+    item.pop(journal_mac.TOKEN_KEY)
+    item["hash"] = anchor
+    item[journal_mac.TOKEN_KEY] = journal_mac.mint_coverage_row(item, "llm")
+    key = make_function_key(file, "f")
+    # MAC alone cannot replace the current implementation-view oracle.
+    assert not _build_covered_set([record], require_c_foundation=True)
+    assert _build_covered_set([record], require_c_foundation=True,
+                              _binary_view_hashes={key: anchor}) == {key}
 
 
 def test_operator_model_name_alone_does_not_bypass_model_review_policy(tmp_path):
@@ -184,29 +219,22 @@ def test_operator_model_name_alone_does_not_bypass_model_review_policy(tmp_path)
 
 def test_binary_inventory_with_c_filename_does_not_gain_source_language_requirements(tmp_path):
     from core.coverage.journal import make_function_key
-    from core.audit.record import binary_item_hash
-    anchor = binary_item_hash({'sha256': 'a'*64}, {'address': 4096, 'size': 16})
-    row = ReviewJournalEntry(ts='2026-11-10T00:00:00Z',run_id='owned',file='image.c',function='f',
-                             verdict='clean',source_hash=anchor,producer='audit',model='scripted')
-    row = _signed(tmp_path/'out', row)
-    covered=set()
-    _verify_entries_fold(covered,[row],target_path=tmp_path,current_spans={},reuse_sink=None,
-        binary_hashes={'image.c:f':anchor},current_strategies_fn=lambda *_:set(),current_model=None,
-        source_label='owned-binary',require_c_foundation=True)
-    assert covered == {'image.c:f'}
-    # Projection reuse additionally needs the selected module's measured bytes.
-    import hashlib
-    from core.inventory.binary_builder import binary_path_key
-    module = tmp_path / 'image.c.bin'
-    module.write_bytes(b'owned inert binary inventory fixture')
-    digest = hashlib.sha256(module.read_bytes()).hexdigest()
-    file = binary_path_key(module)
-    anchor = binary_item_hash({'sha256': digest}, {'address': 4096, 'size': 16})
-    record = _record('audit', file)
-    item = record['functions_analysed'][0]
+    module, file, anchor, plain = _binary_model_inputs(tmp_path, "image.c")
+    key = make_function_key(file, "f")
+    row = ReviewJournalEntry(ts="2026-11-10T00:00:00Z", run_id="owned", file=file,
+        function="f", verdict="clean", source_hash=anchor, producer="audit", model="scripted")
+    row = _signed(tmp_path / "out", row)
+    covered = set()
+    _verify_entries_fold(covered, [row], target_path=module, current_spans={}, reuse_sink=None,
+        binary_hashes={key: plain}, binary_view_hashes={key: anchor},
+        current_strategies_fn=lambda *_: set(), current_model=None,
+        source_label="owned-binary", require_c_foundation=True)
+    assert covered == {key}
+    record = _record("audit", file)
+    item = record["functions_analysed"][0]
     item.pop(journal_mac.TOKEN_KEY)
-    item['hash'] = anchor
-    item[journal_mac.TOKEN_KEY] = journal_mac.mint_coverage_row(item, 'audit')
-    checklist = {'files':[{'path':file,'sha256':digest,'items':[{'name':'f','address':4096,'size':16}]}]}
-    assert _build_covered_set([record],target_path=str(module),checklist=checklist,
-                              require_c_foundation=True) == {make_function_key(file, 'f')}
+    item["hash"] = anchor
+    item[journal_mac.TOKEN_KEY] = journal_mac.mint_coverage_row(item, "audit")
+    assert not _build_covered_set([record], require_c_foundation=True)
+    assert _build_covered_set([record], require_c_foundation=True,
+                              _binary_view_hashes={key: anchor}) == {key}

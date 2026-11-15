@@ -16,6 +16,7 @@ from core.llm.providers import StructuredResponse
 
 
 class ScriptedClient:
+    _attempt_admission_protocol = 1
     _call_cost_history = None
 
     def __init__(self, initial_status="suspicious"):
@@ -30,6 +31,9 @@ class ScriptedClient:
         return False
 
     def generate_structured(self, prompt, schema, **kwargs):
+        admit = kwargs.pop("accounting_attempt_admission", None)
+        if admit is not None:
+            assert admit() is True
         task = kwargs["task_type"]
         self.calls.append((task, prompt))
         if task == "study":
@@ -376,7 +380,7 @@ def test_mixed_late_orchestrator_publishes_only_delivered_current_packet(
         monkeypatch.setattr(orch, "_build_context", lambda *a, **kw: dict(ctx))
         committed = []
         monkeypatch.setattr(
-            orch, "_commit_outcome", lambda cfg, outcome, gap: committed.append(outcome)
+            orch, "_record_acknowledged_outcome", lambda cfg, outcome, gap: committed.append(outcome)
         )
         result = orch.OrchestratorResult(outcomes=[prior], clean=1, reviewed=1)
         record = SimpleNamespace(all_joern_flows=lambda: ["owned saved context"])
@@ -463,7 +467,7 @@ def test_failed_mixed_pass_keeps_late_delta_and_consumes_its_round(
         result = orch.OrchestratorResult(outcomes=[prior], clean=1, reviewed=1)
         committed = []
         monkeypatch.setattr(
-            orch, "_commit_outcome", lambda cfg, outcome, gap: committed.append(outcome)
+            orch, "_record_acknowledged_outcome", lambda cfg, outcome, gap: committed.append(outcome)
         )
         record = SimpleNamespace(all_joern_flows=lambda: ["owned saved context"])
         gap = {"file": "owned.c", "name": "f", "line_start": 2, "line_end": 2}
@@ -583,6 +587,9 @@ def test_failed_study_stays_unavailable_when_other_information_is_published(
 
     def failed_study(self, prompt, schema, **kwargs):
         if kwargs["task_type"] == "study":
+            admit = kwargs.pop("accounting_attempt_admission", None)
+            if admit is not None:
+                assert admit() is True
             self.calls.append(("study", prompt))
             assert self.request_ids[0] in prompt
             assert "typedef struct" in prompt
@@ -626,7 +633,7 @@ def test_failed_study_stays_unavailable_when_other_information_is_published(
         monkeypatch.setattr(orch, "_build_context", lambda *a, **kw: dict(ctx))
         committed = []
         monkeypatch.setattr(
-            orch, "_commit_outcome", lambda cfg, outcome, gap: committed.append(outcome)
+            orch, "_record_acknowledged_outcome", lambda cfg, outcome, gap: committed.append(outcome)
         )
         result = orch.OrchestratorResult(outcomes=[prior], clean=1, reviewed=1)
         record = SimpleNamespace(all_joern_flows=lambda: ["owned saved context"])
@@ -776,6 +783,9 @@ def test_actual_runtime_stays_open_through_deepen_and_closes_afterward(
 
     class Client(ScriptedClient):
         def generate_structured(self, prompt, schema, **kwargs):
+            admit = kwargs.pop("accounting_attempt_admission", None)
+            if admit is not None:
+                assert admit() is True
             if kwargs["task_type"] == "study":
                 self.request_ids[:] = [
                     re.search(r'"request_id"\s*:\s*"([^\"]+)"', prompt).group(1)

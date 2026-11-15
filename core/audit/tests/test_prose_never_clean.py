@@ -122,9 +122,8 @@ COMPELLING_COUNTER = (
     "stack buffer when the caller passes tainted input"
 )
 
-# Every hypothesis refuted with a grounded (local, non-delegated)
-# counter: the record the in-review all-refuted block and the
-# post-loop self-contradiction pass act on.
+# Model-local counters are reviewer claims, not admitted refutations or
+# explicit source-bound withdrawals. They must not retire the concern.
 REFUTED = [{
     "mechanism": "SQL injection via $id",
     "confidence": "refuted",
@@ -471,7 +470,7 @@ class TestPhraseDecidesNothing:
     @pytest.mark.parametrize("scenario,status,expect", [
         ("plain", "finding", ("dark", 1)),
         ("plain", "suspicious", ("suspicious", 1)),
-        ("all-refuted", "finding", ("clean", 0)),
+        ("all-refuted", "finding", ("dark", 1)),
         ("adversarial-refuted", "suspicious", ("suspicious", 1)),
         ("adversarial-stands", "suspicious", ("suspicious", 1)),
         ("joern-up-covered", "finding", ("dark", 1)),

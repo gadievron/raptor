@@ -468,19 +468,10 @@ _SITES = [{'anchor': ['TestCheckerProvenance', 'test_build_lands_in_raptor_owned
  {'anchor': ['TestSubprocessBoundaryTranslation', 'test_run_codeql_translates_engage_exit_code'],
   'attribute': 'Popen',
   'binding': 'subprocess',
-  'call': "monkeypatch.setattr(scanner.subprocess, 'Popen', lambda *a, **k: _FakeProc())",
+  'call': "monkeypatch.setattr(scanner.subprocess, 'Popen', launch)",
   'file': 'core/sandbox/tests/test_engagement_failloud.py',
   'kind': 'monkey',
   'line': 179,
-  'receiver': 'scanner'},
- {'anchor': ['TestSubprocessBoundaryTranslation', 'test_run_codeql_translates_engage_exit_code'],
-  'attribute': 'which',
-  'binding': 'shutil',
-  'call': "monkeypatch.setattr(scanner.shutil, 'which', lambda name: '/usr/bin/codeql' if name == "
-          "'codeql' else _real_which(name))",
-  'file': 'core/sandbox/tests/test_engagement_failloud.py',
-  'kind': 'monkey',
-  'line': 185,
   'receiver': 'scanner'},
  {'anchor': ['test_stalled_manager_is_reaped_and_late_claim_is_revoked'],
   'attribute': 'Popen',
@@ -1360,7 +1351,7 @@ def test_real_selftest_fixture_restores_registry_and_trust_marker(slot, exit_mod
         generator = fixture()
         owner = next(generator)
         assert sys.modules["raptor_self_test"] is owner
-        assert os.environ["_RAPTOR_TRUSTED"] == "1"
+        assert ("_RAPTOR_TRUSTED" in os.environ, os.environ.get("_RAPTOR_TRUSTED")) == trust
         caught = None
         try:
             if exit_mode == "normal":

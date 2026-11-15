@@ -77,6 +77,7 @@ def test_f046_lazy_attribute_access_returns_correct_objects(fresh_core_json):
     """After `import core.json`, accessing each lazy name must return
     the same object as a direct submodule import."""
     import core.json
+    from core.json import bounded as bounded_mod
     from core.json import cache as cache_mod
     from core.json import utils as utils_mod
 
@@ -87,6 +88,7 @@ def test_f046_lazy_attribute_access_returns_correct_objects(fresh_core_json):
     assert core.json.load_json is utils_mod.load_json
     assert core.json.save_json is utils_mod.save_json
     assert core.json.load_json_with_comments is utils_mod.load_json_with_comments
+    assert core.json.load_json_stream_bounded is bounded_mod.load_json_stream_bounded
 
 
 def test_f046_unknown_attribute_raises_attribute_error(fresh_core_json):
@@ -105,7 +107,7 @@ def test_f046_dir_includes_all_public_names(fresh_core_json):
     names = set(dir(core.json))
     expected = {
         "CacheEnvelope", "JsonCache", "MISSING", "TTL_FOREVER",
-        "load_json", "save_json", "load_json_with_comments",
+        "load_json", "save_json", "load_json_with_comments", "load_json_stream_bounded",
     }
     missing = expected - names
     assert not missing, f"dir(core.json) missing: {missing}"
@@ -158,7 +160,8 @@ def test_f046_all_unchanged(fresh_core_json):
         "MISSING", "RE_DATABASE_MAX_BYTES", "TTL_FOREVER",
         "append_jsonl", "dumps_artifact", "dumps_canonical",
         "dumps_display", "iterencode_canonical",
-        "load_json", "load_json_bounded", "load_json_unbounded",
+        "load_json", "load_json_bounded", "load_json_stream_bounded",
+        "load_json_unbounded",
         "load_json_with_comments", "load_jsonl", "loads",
         "loads_bounded", "save_json",
     }

@@ -32,12 +32,16 @@ if __name__ == "__main__":
 _STRIP_ADOPTERS = [
     "core/audit/sweep.py",
     "core/dataflow/cvefix_bridge.py",
-    "packages/semgrep/nosemgrep.py",
     "packages/exploitability_validation/orchestrator.py",
     "packages/llm_analysis/dataflow_validation.py",
     "packages/llm_analysis/agent.py",
     "packages/llm_analysis/patch_gate.py",
 ]
+
+# SARIF consumers retain decoding and artifact-base resolution in the shared
+# SARIF substrate rather than stripping raw URI text themselves.
+_SARIF_URI_ADOPTERS = ["packages/semgrep/nosemgrep.py"]
+
 
 # Modules whose ``_relative_path`` / ``path_to_module`` helpers must
 # delegate to core.paths rather than carry their own bodies.
@@ -72,7 +76,7 @@ def test_module_imports_substrate(rel_path):
 
 
 @pytest.mark.parametrize(
-    "rel_path", sorted({*_STRIP_ADOPTERS, *_TRIPLET_ADOPTERS})
+    "rel_path", sorted({*_STRIP_ADOPTERS, *_TRIPLET_ADOPTERS, *_SARIF_URI_ADOPTERS})
 )
 def test_no_hand_rolled_stripper(rel_path):
     src = (REPO_ROOT / rel_path).read_text(encoding="utf-8")
@@ -138,3 +142,16 @@ def test_triplet_helpers_delegate(rel_path):
         f"{rel_path} re-grew a local path_to_module body; delegate to "
         "core.paths.path_to_module"
     )
+
+
+@pytest.mark.parametrize("rel_path", _SARIF_URI_ADOPTERS)
+def test_sarif_consumer_uses_shared_uri_resolver(rel_path):
+    import ast
+
+    tree = ast.parse((REPO_ROOT / rel_path).read_text(encoding="utf-8"))
+    names = {alias.name for node in tree.body
+             if isinstance(node, ast.ImportFrom) and node.module == "core.sarif.parser"
+             for alias in node.names}
+    assert {"ArtifactUriResolver", "sarif_uri_path"} <= names
+    assert any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+               and node.func.id == "sarif_uri_path" for node in ast.walk(tree))

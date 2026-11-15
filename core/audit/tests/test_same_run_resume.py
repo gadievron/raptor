@@ -20,6 +20,7 @@ from core.coverage.journal import (
     now_iso,
 )
 from core.staleness import hash_span
+from core.audit.tests.test_binary_review_origin import binary_inputs as binary_inputs
 
 _SOURCE = """\
 int check_pw(const char *pw) {
@@ -887,7 +888,7 @@ class TestDarkRowVerifiedFoldRoutes:
     importing for settled verdicts — for dark they must resurface."""
 
     def _fold(self, entries, target, current_spans=None,
-              binary_hashes=None):
+              binary_hashes=None, binary_view_hashes=None):
         from core.audit.gaps import _verify_entries_fold
         covered: set = set()
         sink: dict = {}
@@ -895,6 +896,7 @@ class TestDarkRowVerifiedFoldRoutes:
             covered, entries, target_path=target,
             current_spans=current_spans or {"auth.c:check_pw": (1, 5)},
             binary_hashes=binary_hashes,
+            binary_view_hashes=binary_view_hashes,
             reuse_sink=sink,
             current_strategies_fn=lambda *_: set(_current_strategies()),
             current_model="model-a",
@@ -940,28 +942,33 @@ class TestDarkRowVerifiedFoldRoutes:
         covered, sink = self._fold([row], target)
         assert covered == {"auth.c:check_pw"}
 
-    def test_binary_dark_row_never_credits(self, tmp_path):
-        # The binary branch credits and continues without ever
-        # reaching the reuse import — a dark binary row has no
-        # re-adjudication route even with reuse on.
-        target = _write_target(tmp_path)
-        row = self._stamped(tmp_path, target, verdict="dark",
-                            source_hash="bin:deadbeef")
-        covered, sink = self._fold(
-            [row], target,
-            binary_hashes={"auth.c:check_pw": "bin:deadbeef"},
-        )
-        assert covered == set()
-        assert sink == {}
-        # Control: a settled binary row with a matching anchor stays
-        # covered.
-        row = self._stamped(tmp_path, target, verdict="clean",
-                            source_hash="bin:deadbeef")
-        covered, sink = self._fold(
-            [row], target,
-            binary_hashes={"auth.c:check_pw": "bin:deadbeef"},
-        )
-        assert covered == {"auth.c:check_pw"}
+    def test_binary_dark_row_never_credits(self, tmp_path, binary_inputs):
+        from core.audit.binary_review_scope import binary_view_anchor
+        from core.coverage.journal import load_entries, make_function_key
+
+        target, runtime, context = binary_inputs
+        origin = runtime._origin(context())
+        anchor = binary_view_anchor(origin.binary_identity)
+        assert anchor is not None and anchor.startswith("bin:inputs3:")
+        key = make_function_key(origin.file, origin.function)
+        plain = (f"bin:{origin.binary_identity.module_sha256}:"
+                 f"{origin.binary_identity.address:x}:{origin.binary_identity.size:x}")
+
+        def fold(verdict, stored):
+            out = tmp_path / (verdict + str(len(stored)))
+            row = ReviewJournalEntry(ts=now_iso(), run_id="owned", file=origin.file,
+                function=origin.function, verdict=verdict, source_hash=stored,
+                producer="audit", model="model-a")
+            append_entry(out, row)
+            signed, = load_entries(out)
+            return self._fold([signed], target, binary_hashes={key: plain},
+                              binary_view_hashes={key: anchor})
+
+        # A current implementation view still cannot retire a dark review.
+        assert fold("dark", anchor) == (set(), {})
+        # A settled review needs the full current input view, not module bytes alone.
+        assert fold("clean", plain) == (set(), {})
+        assert fold("clean", anchor) == ({key}, {})
 
     def test_dark_resurface_named_in_reuse_stats(self, tmp_path):
         # The resurfacing is attributable: the not-reusable split

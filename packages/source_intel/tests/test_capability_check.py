@@ -143,9 +143,8 @@ def test_line_uses_privileged_cap_returns_false_on_missing_file():
 # =====================================================================
 
 
-def test_capability_dominates_emits_not_exploitable(tmp_path):
-    """Privileged capable() in same function as memory-corruption
-    sink → NOT_EXPLOITABLE."""
+def test_capability_call_presence_without_enforcement_receipt_stays_uncertain(tmp_path):
+    """Call-site presence cannot prove denial polarity or sink ordering."""
     src = tmp_path / "test.c"
     src.write_text(
         "int privileged(int *p) {\n"
@@ -168,7 +167,7 @@ def test_capability_dominates_emits_not_exploitable(tmp_path):
         return_value=result,
     ):
         v = SourceIntelValidator(repo_root=tmp_path)
-        assert v.validate(finding) == ValidatorVerdict.NOT_EXPLOITABLE
+        assert v.validate(finding) == ValidatorVerdict.UNCERTAIN
 
 
 def test_unprivileged_capability_does_not_dominate(tmp_path):

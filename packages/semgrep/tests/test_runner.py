@@ -91,14 +91,14 @@ with patch.object(sys, "path", sys.path.copy()):
 
 
 @pytest.fixture(autouse=True)
-def _scope_isolation_ok(request):
-    """Unit command tests own the gate; live tests use the real capability."""
+def _scope_isolation_ok(request, monkeypatch):
+    """Share patch ownership with body patches so teardown cannot revive mocks."""
     if request.node.get_closest_marker("integration"):
         yield
         return
-    with patch("packages.semgrep.runner.scope_isolation_available",
-               return_value=True):
-        yield
+    monkeypatch.setattr("packages.semgrep.runner.scope_isolation_available",
+                        lambda *args, **kwargs: True)
+    yield
 
 
 @pytest.fixture
@@ -200,7 +200,11 @@ class TestScopeIsolationAvailable:
 # build_cmd --------------------------------------------------------------------
 
 class TestBuildCmd:
-    def test_minimal(self):
+    def test_minimal(self, monkeypatch):
+        import packages.semgrep.runner as consumer
+
+        # Command construction must not depend on a host-installed launcher.
+        patch_module_attribute(monkeypatch, consumer, "shutil", "which", lambda name: None)
         cmd = build_cmd(Path("/src"), "p/security-audit", semgrep_bin="semgrep")
         assert cmd[0] == "semgrep"
         assert "scan" in cmd
