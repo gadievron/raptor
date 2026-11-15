@@ -845,8 +845,14 @@ def _parse_sarif(sarif_path: Path) -> list[dict] | None:
         return None
     try:
         matches: list[dict] = []
-        for run in data.get("runs", []) or []:
-            for result in run.get("results", []) or []:
+        runs = data.get("runs")
+        if not isinstance(runs, list):
+            raise ValueError("SARIF runs must be a list")
+        for run in runs:
+            results = run.get("results", [])
+            if not isinstance(results, list):
+                raise ValueError("SARIF results must be a list when present")
+            for result in results:
                 msg = result.get("message", {})
                 text = msg.get("text", "") if isinstance(msg, dict) else str(msg)
                 file = ""
