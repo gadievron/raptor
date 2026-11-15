@@ -43,6 +43,8 @@ msg = {
   "file":  p_call[0].file,
   "line":  int(p_call[0].line),
   "col":   int(p_call[0].column),
+  "line_end": int(p_call[0].line_end),
+  "col_end": int(p_call[0].column_end),
   "message": "Candidate: %s() appears in a potential signal handler (CWE-364). Review registration, interrupted operations and async-signal-safety requirements; nonlocal jumps also require checking subsequent calls." % unsafe_fn
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -82,6 +84,8 @@ msg = {
   "file":  p_call[0].file,
   "line":  int(p_call[0].line),
   "col":   int(p_call[0].column),
+  "line_end": int(p_call[0].line_end),
+  "col_end": int(p_call[0].column_end),
   "message": "Candidate: %s() appears in a potential sigaction handler (CWE-364). Review registration, interrupted operations and async-signal-safety requirements; nonlocal jumps also require checking subsequent calls." % unsafe_fn
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -121,6 +125,8 @@ msg = {
   "file":  p_call[0].file,
   "line":  int(p_call[0].line),
   "col":   int(p_call[0].column),
+  "line_end": int(p_call[0].line_end),
+  "col_end": int(p_call[0].column_end),
   "message": "Candidate: %s() appears in a potential sigaction handler (CWE-364). Review registration, interrupted operations and async-signal-safety requirements; nonlocal jumps also require checking subsequent calls." % unsafe_fn
 }
 print("COCCIRESULT:" + json.dumps(msg))

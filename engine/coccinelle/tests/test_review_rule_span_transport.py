@@ -51,6 +51,27 @@ _SCRIPTS = [
     ("popen_fclose", 3),
     ("popen_fclose", 4),
     ("open_creat_no_mode", 0),
+    ("gfp_kernel_under_spinlock", 0),
+    ("sign_extension_widen", 0),
+    ("sign_extension_widen", 1),
+    ("sign_extension_widen", 2),
+    ("sign_extension_widen", 3),
+    ("signal_handler_unsafe", 0),
+    ("signal_handler_unsafe", 1),
+    ("signal_handler_unsafe", 2),
+    ("signal_sigkill_sigstop", 0),
+    ("signal_sigkill_sigstop", 1),
+    ("signal_sigkill_sigstop", 2),
+    ("signal_sigkill_sigstop", 3),
+    ("sleep_under_spinlock", 0),
+    ("stack_addr_escape", 0),
+    ("stack_addr_escape", 1),
+    ("unchecked_strtol", 0),
+    ("unchecked_strtol", 1),
+    ("va_arg_mismatch", 0),
+    ("va_arg_mismatch", 1),
+    ("va_arg_mismatch", 2),
+    ("va_arg_mismatch", 3),
     ("inet_ntoa_double_call", 0), ("kfree_not_rcu", 0),
     ("toctou_stat_open", 0),
     ("socket_no_cloexec", 0), ("socket_no_cloexec", 1),
@@ -75,7 +96,7 @@ def _report(name, index, position, **bindings):
     tree = ast.parse(_python_statements(scripts[index]))
     tree.body = [node for node in tree.body if not isinstance(node, (ast.Import, ast.ImportFrom))]
     output = io.StringIO()
-    namespace = {"json": json, "islice": islice, "p_use": [position], "p_copy": [SimpleNamespace(file="owned.c", line=1, column=1, line_end=1, column_end=8)], "fmt": '"%s"', "count": "8", "before": (), "after": (), "dst": "owned", "sys": SimpleNamespace(stderr=output, stdout=output), "buf": "owned", "n": "count", "ast": ast, "re": re, "ARR": "buffer", "offset": "1", "COMMAND": "F_SETFD", "FLAGS": "O_NONBLOCK", "p": [position], "p1": [position], "p2": [position], "fn": "consume", "E": "owned_pointer", "PARAM": "count", "TD": "struct payload", "TL": "int", "T": "char", "LOCAL": "owned", "swap1": "htons", "swap2": "ntohs", "V": "secret"}
+    namespace = {"json": json, "islice": islice, "p_use": [position], "p_copy": [SimpleNamespace(file="owned.c", line=1, column=1, line_end=1, column_end=8)], "fmt": '"%s"', "count": "8", "before": (), "after": (), "dst": "owned", "sys": SimpleNamespace(stderr=output, stdout=output), "buf": "owned", "n": "count", "ast": ast, "re": re, "ARR": "buffer", "offset": "1", "COMMAND": "F_SETFD", "FLAGS": "O_NONBLOCK", "p": [position], "p_call": [position], "unsafe_fn": "printf", "p1": [position], "p2": [position], "fn": "consume", "E": "owned_pointer", "PARAM": "count", "TD": "struct payload", "TL": "int", "T": "char", "LOCAL": "owned", "swap1": "htons", "swap2": "ntohs", "V": "secret"}
     namespace.update(bindings)
     with redirect_stdout(output):
         exec(compile(tree, str(rule), "exec"), namespace)
@@ -113,6 +134,16 @@ def test_report_spans_survive_parser_and_deduplication(name, index):
         ("sizeof_array_param", 1): "sizeof_array_param_unsized",
         ("free_nonbase_ptr", 1): "free_nonbase_ptr_inc",
         ("socket_no_cloexec", 1): "accept_no_cloexec",
+        ("sign_extension_widen", 0): "sign_extension_char",
+        ("sign_extension_widen", 1): "sign_extension_char",
+        ("sign_extension_widen", 2): "sign_extension_short",
+        ("sign_extension_widen", 3): "sign_extension_short",
+        ("stack_addr_escape", 1): "stack_addr_escape_outparam",
+        ("unchecked_strtol", 1): "strtol_null_endptr",
+        ("va_arg_mismatch", 0): "va_arg_promoted_type",
+        ("va_arg_mismatch", 1): "va_arg_promoted_type_short",
+        ("va_arg_mismatch", 2): "va_arg_promoted_type_float",
+        ("va_arg_mismatch", 3): "va_arg_promoted_type_bool",
     }.get((name, index), name)
     assert all(row.rule == expected_rule and row.message for row in rows)
     assert rows[0].message == rows[1].message

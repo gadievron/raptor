@@ -62,6 +62,8 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message":   "Sleeping function called while holding spinlock — potential deadlock (CWE-764)"
 }
 print("COCCIRESULT:" + json.dumps(msg))
