@@ -702,10 +702,13 @@
     "core/testing/tests/async_loop_probe.py": "22cd73d345913f277c2551e2f92739351688829805cb1fb366729eb463f8372d",
     "core/testing/tests/conftest.py": "4448550dece53fa5ba7df0b334342adaf1963fb9e799230262422c265d90d7d4",
     "core/testing/tests/test_annotation_fifo_release_ownership.py": "960a38d11d7d0bc8e188ce804f545e8e760a98de5ccb57f4cf6fafedf07e5f79",
+    "core/testing/tests/test_annotation_holder_retirement_ownership.py": "dad29876778e3df76ee16058c067926c4acec7c91eb3be469375010588a90eb1",
     "core/testing/tests/test_announcement_thread_ownership.py": "b7cf28177b4086917abe11f95861cbbbe68848dfa093ca32aab93a1329cd5e0c",
     "core/testing/tests/test_asan.py": "cddd9e1d610b28f0a3fcf00bd7f0fc4972441ed3ed366179311a1739f69c241b",
     "core/testing/tests/test_asan_transport_scope.py": "e65a9d1ef07509ab0b6c4accf32445e888796881e4c0ae11a18976b5b8106a9b",
     "core/testing/tests/test_async_loop_ownership.py": "efb2678bee33e5c1397401b9536903fb443d6af2a98e0fd86acaab711beaa2b5",
+    "core/testing/tests/test_atomic_fifo_finalizer_ownership.py": "71a3bb1dd3d55938875dd9dad68116062ca0074349c9557f669a0614f403a4f0",
+    "core/testing/tests/test_atomic_fifo_second_open_ownership.py": "64de3d6c9b48a77337b6ffe1c1359d0d26dd256228be4593ad5f06003f7559e4",
     "core/testing/tests/test_audit_cli_recorder_scope.py": "1868bbd0118fc4e8d7dc80c8e63c03fcea203e7fc5a664e7904e712e3822600a",
     "core/testing/tests/test_audit_fresh_file_ownership.py": "48795564619a1747826e33aa3d9addd2cf95b21ffa9e147e349f80dde337ec82",
     "core/testing/tests/test_audit_multi_worker_start_rescue_ownership.py": "3ded01f0e491aafc90277674f33acb1d0d0cbbe36fe2c89e696937831a8690ef",
@@ -729,17 +732,21 @@
     "core/testing/tests/test_checklist_target_fixture_scope.py": "5527a5a111c335bc9fe5b604a95e99de662ed3014a050d5ec6fd23edcf8abef2",
     "core/testing/tests/test_checklist_timeout_cache_scope.py": "1f46b222e96f110cd81efe77040a7fb12763cb8b84fc9aa303f71b6c17e139f5",
     "core/testing/tests/test_checklist_timeout_runtime_scope.py": "7ffe06714944808bf80a61852e94653962d0402f849de42367838d9ef03ef19a",
+    "core/testing/tests/test_cli_handler_attachment_ownership.py": "a16d9ccc08d0d8f1651a3adf03d8000c6acc2c9ab92febf50ad5899ec9e268cb",
     "core/testing/tests/test_cli_import_lifetime.py": "7c259ba8112c237e479d6226552db3a812506382ee9d5520e5c70d2593bd3e5c",
     "core/testing/tests/test_cli_import_ownership.py": "1ab144ffc503c6fbe290aa303395ff2b7816b2edc42ab360749d1385662e76e2",
     "core/testing/tests/test_cli_launch_inventory.py": "b809e570f06eea81b909984f724acd9ee586c7c9b99f4e6d1a55ee4f4a361fac",
     "core/testing/tests/test_cli_launch_ownership.py": "31a75dd16b25068b009deef11a11f8849926412e3740d87b5fb2095037f37910",
     "core/testing/tests/test_collection_bootstrap_ownership.py": "a7747474f563198b3efc601b214a13d633b0078cbcd988d3060928a0a0190671",
+    "core/testing/tests/test_compact_writer_guard_setup_ownership.py": "5cecb20ab5382c42715648bba654c2921f99af5e7735c80d9728b83a16e73769",
     "core/testing/tests/test_compact_writer_worker_ownership.py": "e73002c7b942e3556f22a2fd39d859cbb657cac0930d0808ff4a39f166ae97a4",
+    "core/testing/tests/test_compaction_temp_handoff_ownership.py": "7fd1ee33f97426113c16db4114468164da272b0c8630c647a595b62260154dd5",
     "core/testing/tests/test_compile_grant_fixture_ownership.py": "92c0974119ae9a25121654dc62df8be6064328987e25d9c3ea3694c7a23db4a2",
     "core/testing/tests/test_composite_registry_ownership.py": "949506624f406f08fc2b7265d26f7099bb79f7c36ed0a75e52c2889fa3878845",
     "core/testing/tests/test_config_descriptor_observer_setup_ownership.py": "08bbba6b417aba58a6ddedc04f53bc356d22e18ed331f2a1d71cc5177a27132e",
     "core/testing/tests/test_corpus_git_recorder_scope.py": "be2be5ab31bc30fcc356cd49c264898a5b3e128cf5854ab2ce3692d2611dd741",
     "core/testing/tests/test_coverage_append_fixture_transfer_ownership.py": "cd7b92280b98d51d34a017cf73d7396f7d796cbac31aacf1bb1b180159a5957f",
+    "core/testing/tests/test_coverage_holder_retirement_ownership.py": "b38fee58ad075acb423c9bf186389601ff113bb74c5c6d4ef6f999d99e5e15ff",
     "core/testing/tests/test_coverage_rollback_fixture_transfer_ownership.py": "54eb316123c1a3d3171448d75e3f1b4678dbdcbc09b0a16ec54e67875f1d7634",
     "core/testing/tests/test_darwin_cwd_fixture_scope.py": "116169f6764c7ce8a701796adfdc16e3256f125da279797d8aa8f01b29b360b2",
     "core/testing/tests/test_dead_pid_helper_ownership.py": "ff9857ba7d804c5628f5c5c7b7538b08295e8c493106a9da7dab286dbc6c13b9",
@@ -749,6 +756,7 @@
     "core/testing/tests/test_descriptor_observer_setup_ownership.py": "1f3649718be7aa61dc91b23cf305858f311fef7a198e93bd227106f2937b43ed",
     "core/testing/tests/test_detection_fifo_worker_ownership.py": "1f24c4a189cac0cb8020a2fda7a35a62ec4f46acf1ae265d512a58ed9bd9ee0a",
     "core/testing/tests/test_dispatcher_finalizer_registration_ownership.py": "4ef06fd3f972b7f68ee3aaaf697832853acd62c43ddbbbc2fc198cf494d5e81d",
+    "core/testing/tests/test_dispatcher_route_guard_owner.py": "267ca7eb9b01cd9d14c2db36b763ae70e8b2a575291b158632aaaf2b38cafaf7",
     "core/testing/tests/test_egress_first_call_worker_ownership.py": "487c3a880d50ed846baedb4650230980d2ad9dcdb11c2b26da22d3110e13819f",
     "core/testing/tests/test_egress_fixture_lifetime.py": "26d40d4a766dbb9c61b9683696f934ee81cb3d7263a24824bd8da210d6c9ff5b",
     "core/testing/tests/test_etc_copy_worker_ownership.py": "4977986e6f3ce7d93942a8349f888a09fcf9a63100655970c563f3e91bf6bab8",
@@ -763,11 +771,14 @@
     "core/testing/tests/test_forecast_run_fixture_scope.py": "235e5409970100133216f5b78e95939b4b762f49d8394db28b3c3b456e7eb9ea",
     "core/testing/tests/test_foreign_import_worker_ownership.py": "9942f2b515079773cad93b1a0f419f614365b5054900339e517b9dfced90d062",
     "core/testing/tests/test_foreign_registry_mock_worker_ownership.py": "3c1cc3b19fc0f75b0a0ea313733c68363e090a738e353f8e015b02cf7a7db92d",
+    "core/testing/tests/test_frida_log_path_adoption_ownership.py": "2001cfd7755ee9498a551f45675f1f808319ea133371178c3f186eb8aa649469",
+    "core/testing/tests/test_gateway_setup_ownership.py": "2ec484d50dadffe20298574144f756a9ab2764569f7d3053e8ce4a4a2c163437",
     "core/testing/tests/test_git_hermeticity.py": "5bc6019e66d4056c97096446f69a02092d88783c69ad393f0dc676d1c8e20bd6",
     "core/testing/tests/test_harden_guard_fixture_scope.py": "8a0308609fc2f715793401ca8cabf8a9e02d8cdf8d33fc677505bed9413d17bf",
     "core/testing/tests/test_high_fd_fixture_cleanup.py": "e62c1ac0e968f91e944d50894185289eb25406a3b709fecdc1fffa6411f523e1",
     "core/testing/tests/test_host_interface_fixture_scope.py": "449c77d5fb3238d9bb113bffa6c1ac8340bcd73d3a27b6ad62021d578c45afd1",
     "core/testing/tests/test_infile_registry_ownership.py": "fa4bfc140032fb98596099f40b2f999bebda74a637e90d933261e544d5446aae",
+    "core/testing/tests/test_inline_health_manager_ownership.py": "40a263b64b0dd196e7d5bef71927dce917dd35fdc6bbe43c018e2ad6898f900b",
     "core/testing/tests/test_interrupt_finalize_recorder_scope.py": "aa1e0723f110fbd52c365d1e817715b2e60276ee6c212faaa1d66ec7d11bc602",
     "core/testing/tests/test_iris_store_worker_ownership.py": "1f8dee568a9a35a71364981eac920989f027a1e868ecb5821711ed53dcc5b454",
     "core/testing/tests/test_jail_fixture_ownership.py": "1b961ddfc2ce7af4c3e5e7ea3a4503320bc94d5a0f86e070a0b71a5d9c05787f",
@@ -783,15 +794,19 @@
     "core/testing/tests/test_llm_tripwire.py": "9ef88998f06fe207994561e7e85fc916f3b19631a44b70f788c38cebd674832f",
     "core/testing/tests/test_local_lock_clock_fixture_scope.py": "fccf2ddf6e47213dcf1d2f9e9da9b0f8905c5fbff99ef4d479f9c70ece44c734",
     "core/testing/tests/test_local_lookup_fixture_scope.py": "6e25b1a14548a53a5c9367f7de0b70c727f11e96078b98d3d2acb5f255015522",
+    "core/testing/tests/test_log_capture_setup_ownership.py": "8df2f8e17f40d134ddeacb27a96842720b9424c053ffeda42c2292b5ced9a3e9",
     "core/testing/tests/test_logging_fixture_teardown_ownership.py": "64c5d73a56ba163ec9f906942bb16e33dc3764fcfff5826eb678a1baeefefc39",
+    "core/testing/tests/test_logging_manager_cache_ownership.py": "3781cd00fd7ab91c9c74e2e2396691f1a23a3ffb5f787b101d29a072680ed117",
     "core/testing/tests/test_macro_fifo_worker_ownership.py": "5ae1be3bdf6dde7372679907d5798fe0fcb8c2e12e8e3a5e4bc29443a7b6487c",
     "core/testing/tests/test_memory_flush_worker_ownership.py": "b2bcf06ffb9429efef4540f70199fdce05fde26bf1b19e0ffe80fe39ab2d1d10",
+    "core/testing/tests/test_metadata_holder_retirement_ownership.py": "12fb45e8a25d0899b732e0b8e6ff5181617605dba91745fda6779f0a92d57688",
     "core/testing/tests/test_model_holder_observer_setup_ownership.py": "bc8846c0b49449a7c9489f33dd002cf5488bde2a60cdbb6721c9343aa09e4240",
     "core/testing/tests/test_multi_holder_observer_setup_ownership.py": "853024cbb070574d4364992d112b156c01eb110ae7507cd4a21800306afbd846",
     "core/testing/tests/test_neutral_cwd_worker_ownership.py": "bb2496861dc96cf733ef0d832843864d5e54cdb625fcad6de1fcb1718a3058e9",
     "core/testing/tests/test_nonce_fixture_publication_ownership.py": "800c09d359a66c9ac74fdc2a71d9a12d40c2f83aea72ffdc6849a20349711e7e",
     "core/testing/tests/test_observation_log_setup_ownership.py": "dbc5a3ac739ea309c05ca893b1dd4f8a22bb6d6bacf84726a61648ba111e8a72",
     "core/testing/tests/test_os_boundary_fixture_scope.py": "05f7854af8e8090657a0d7248c16e284f0e89de326e0f5fddc368da4c76e2803",
+    "core/testing/tests/test_osv_caplog_fixture_ownership.py": "c7a04441c72edde83c93481c9929f1d350aefe44fb3fcbe8e799d7257a0b288f",
     "core/testing/tests/test_outer_pipe_tracker_setup_ownership.py": "f072d7cdc14bc248b6d5f9c657930baf6f6c08a0c377eb1915fc3eafc5c5c824",
     "core/testing/tests/test_paired_directory_setup_ownership.py": "f0ca900e9f6bb0172533a52e9b58415c74894ae74778bc9a3ecb84db72094603",
     "core/testing/tests/test_parser_proxy_fixture_state.py": "e0f44e0e3055304f5ea54b80628e2e7fb2177443d354d849a5621e49eceff009",
@@ -816,17 +831,26 @@
     "core/testing/tests/test_raw_fixture_transfer_ownership.py": "f9d3b85b6791255dd492e41f678c1c4f0d6c178539623e4740d85f2344573426",
     "core/testing/tests/test_registry_fixture_lifetime.py": "092bdb590175271c89ef5e8342d78db83c0cb874d6bde451f2325eb5f386c617",
     "core/testing/tests/test_registry_resource_owners.py": "0bdc8fd5790318de7570173208934105fd47a8c5ce47da3831e6649c99dfd2aa",
+    "core/testing/tests/test_relay_descriptor_ownership.py": "4e09ee8371e804f92e1925f7c7acc426c38f78486c3d6cf714e2c8f252bf976a",
     "core/testing/tests/test_remaining_import_path_ownership.py": "27e60a059d1bb9f1bc579c8dd6a3fb58a759c07725a91765f223d89a8db00894",
     "core/testing/tests/test_remaining_log_fixture_teardown_ownership.py": "7c95840dce2510ae63d882a64722a92842a3075eb91b8a4ddf9e4ee855a755d7",
+    "core/testing/tests/test_remaining_logger_manager_ownership.py": "a7e03608c9601ad2e29b0c020dab12b6c00f3e23be9115cfe0edaeffc16c219f",
     "core/testing/tests/test_remaining_module_fixture_scope.py": "404a12f1a687b40398ee3eade17fc8a205271d7a5f61f4002ee696fe86a9bfa0",
     "core/testing/tests/test_reset_cache_ownership.py": "6c8236cdaba5c67dda377d6dc42292f0644b074796e8235303fea25f95c264f3",
     "core/testing/tests/test_resource_setup_cleanup.py": "1286e79de0eb40b065bdbacdd0cf5027a7f2227a431fdffc71028efe77fec31d",
+    "core/testing/tests/test_resume_fingerprint_setup_ownership.py": "e7684c786341ce60a55f84a7831736ed30aac5d8c5a37a9da8c9783b16b764a1",
+    "core/testing/tests/test_resume_seed_setup_ownership.py": "06bb80c96cdf06a403a9caebea14f3bc89be8d77639731fb7e9586eb75235546",
+    "core/testing/tests/test_reused_writer_dup2_ownership.py": "0290bc68c3524f7d051ef736d448aabdbca37417550b0ac4a563206d8c4e2430",
     "core/testing/tests/test_review_delegate_fixture_scope.py": "59d4b09098bf0942ca81726ad59663ffac75106a1209ae781f1f62d3b9332e07",
     "core/testing/tests/test_runner_cleanup.py": "5b4e9b63792dab2af133b566a4585dd1e5b256ed314e37ac133767dcbfe26e23",
     "core/testing/tests/test_runtime_fault_fixture_scope.py": "a87b15717e63ae5d35ef962dfcf2a110d9f57fdac9e1eebbd13b3724a34ff473",
+    "core/testing/tests/test_sage_bash_case_setup_ownership.py": "75b1ff680eb0f185fd9e436f89dd720049ad3f245e8f624a6edc2e02adefa2cf",
     "core/testing/tests/test_sage_memory_setup_ownership.py": "8931159179fc693a3a168d3676ab504d2a28f7c000304d7378581d7c7bfd3873",
+    "core/testing/tests/test_sage_reviewer_case_setup_ownership.py": "c23a957216b2a40637548e2a960aa80898beab32cc1e66087570cd3bee44db48",
     "core/testing/tests/test_sanwit_pid_fixture_ownership.py": "927fbc329c45f885f0bab75701d14e6b3c1f3b41b3e53cd10c00ef2ed53159c2",
+    "core/testing/tests/test_sca_wrapper_case_setup_ownership.py": "f2be7df99930f79471e1a5ffb5d69cee7909ff8dea71949a88b19f57cd706cbb",
     "core/testing/tests/test_scan_result_setup_ownership.py": "756f887cdf4b88a9ba17491f7bfb22334cb1fc081b4742176fe6efef22f91d5d",
+    "core/testing/tests/test_scorecard_guard_owner.py": "5ae2d804bc49e1017cbdb27e2ae1693ac15cac308855f09f13c99ad5f5d52206",
     "core/testing/tests/test_scratch_cleanup_worker_ownership.py": "0b1e0e397eb13ebd5330ec6cbb0631c31459c075230f11d319c384e4391488cf",
     "core/testing/tests/test_security_mock_scope.py": "c0155726ac53064b00336b2742728e92c669c2bb909a24194f53510c815adcb2",
     "core/testing/tests/test_selftest_harness.py": "b4976789d44e8a02a4e319da005a801be97fbe26ec74841393c8bebc73f07ec5",
@@ -837,8 +861,10 @@
     "core/testing/tests/test_source_cache_worker_ownership.py": "4a12914a71fae693d8fdd5ceea255d0a82bc841ea9ff3fda75fa539bc5b17215",
     "core/testing/tests/test_spawn_outer_pipe_tracker_ownership.py": "434428ba76ed53eafcd8f2ba96e79c6c6b46b98bb65963a0545ad5a52b8f9c31",
     "core/testing/tests/test_spawn_pipe_observer_setup_ownership.py": "86485d4b6c1434042c9d9410bca90f9427105dd76d4544cb9115ccd88bf6958b",
+    "core/testing/tests/test_stale_audit_loop_ownership.py": "6b91d8cad1bfe6e67da90c7602e162c2db7eb0e7ba62236cd600ac05c5609908",
     "core/testing/tests/test_standalone_cli.py": "b249673b6568a18def7ffda66b23453b8c2bca7121999e3087a6e8fed1ccd679",
     "core/testing/tests/test_startup_cleanup.py": "fbd5417bbdd8ef07140705b2bcc589e098eb9b0e244ce376b905b4459b2f4261",
+    "core/testing/tests/test_state_pin_alias_ownership.py": "3db508421737d928acf0fdba50de2e81b2e9c001c65b82e3b935905b16e1941b",
     "core/testing/tests/test_storage_fault_fixture_scope.py": "83043ddc61aa7d17e322e653f134671fff350dccf5457bc99fe1cd2f8cc649fe",
     "core/testing/tests/test_storage_thread_ownership.py": "7617cf03df59282e4ba1174a60e155b0338d6a68f6baaf1aca1d8576b6928028",
     "core/testing/tests/test_stream_fixture_metadata_setup_ownership.py": "3c91d2d664a4732106d2c816248686529e4f12207db748a2580c9a2cae6d08cf",
@@ -846,7 +872,10 @@
     "core/testing/tests/test_summary_fifo_worker_ownership.py": "effe3252a6ac6622220ec457e78990eb05c31b2358d52cc20f6b55d59df66aac",
     "core/testing/tests/test_summary_thread_worker_ownership.py": "f68ef95e45181e5b48a9d8f816ef6d3828db6231d64773dc7cd7d6b6862be3e3",
     "core/testing/tests/test_summary_writer_fixture_activation_ownership.py": "55784fa4ccd701172173daaa0e98973b32cbd5dd8fec25c61a6f423927173986",
+    "core/testing/tests/test_telemetry_append_opener_ownership.py": "1c2d00cb496ebceb9bf5d07c45e22b4fc596dca0134e7a32cdafdd80d7ac9263",
+    "core/testing/tests/test_tempfile_directory_path_ownership.py": "a8ce23850e3d4334082d2daa65d92543e7488e5507ac800b54a5edb096fb0c8e",
     "core/testing/tests/test_tempfile_fixture_scope.py": "4ed3084caf08b3365876919ff898a3d4019b6160ce198584b9014bfd48a390a8",
+    "core/testing/tests/test_tempfile_view_path_ownership.py": "ecff584dc8869c4dbad48af22ab2f2c86c70db2127b52a4fc7d951a796946157",
     "core/testing/tests/test_throttle_acquire_worker_ownership.py": "967936f7a210b88885b1138b24016ad92372f2fef9194d06b17369b84099631b",
     "core/testing/tests/test_throttle_restore_worker_ownership.py": "fa2b8f834db70fc407e9341a377f47460acea208caa91402f8811266c90bfc0e",
     "core/testing/tests/test_throttle_signal_worker_ownership.py": "878117bba7eba0866d499a90691769aec69b03075f1231c929ee5a809f2057b4",
@@ -49930,6 +49959,462 @@
       "count": 1,
       "contract": "owned-in-process",
       "purpose": "Loads the repository raptor-llm-ask CLI in process with its LLMClient and isolated worker replaced by owned mocks; ExitStack restores sys.path and logging, and the test asserts worker routing and terminal sanitisation without provider execution."
+    },
+    {
+      "path": "core/testing/tests/test_annotation_holder_retirement_ownership.py",
+      "scope": "test_holder_close_error_still_joins_worker",
+      "signature": "c82b2e715723dd679988581e5dde634da07fb991c8bb9f855fe52e234f0637dc",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_annotation_holder_retirement_ownership.py",
+      "scope": "test_holder_close_error_still_joins_worker",
+      "signature": "d48df963d8d9a1ca362cc9c3c560c628d70c5840543a2679b6fd4fc5169f1d9f",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_atomic_fifo_finalizer_ownership.py",
+      "scope": "test_fifo_fixture_closes_victim_after_holder_close_error",
+      "signature": "c82b2e715723dd679988581e5dde634da07fb991c8bb9f855fe52e234f0637dc",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_atomic_fifo_finalizer_ownership.py",
+      "scope": "test_fifo_fixture_closes_victim_after_holder_close_error",
+      "signature": "d48df963d8d9a1ca362cc9c3c560c628d70c5840543a2679b6fd4fc5169f1d9f",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_atomic_fifo_second_open_ownership.py",
+      "scope": "test_fifo_fixture_owns_first_descriptor_during_setup",
+      "signature": "c82b2e715723dd679988581e5dde634da07fb991c8bb9f855fe52e234f0637dc",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_atomic_fifo_second_open_ownership.py",
+      "scope": "test_fifo_fixture_owns_first_descriptor_during_setup",
+      "signature": "d48df963d8d9a1ca362cc9c3c560c628d70c5840543a2679b6fd4fc5169f1d9f",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_cli_handler_attachment_ownership.py",
+      "scope": "test_cli_handler_owns_attachment_boundary",
+      "signature": "31f0ab57e9f8e9608dfe029f63a4a663e87adb742214048fdbac0cf8c8a93591",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_cli_handler_attachment_ownership.py",
+      "scope": "test_cli_handler_owns_attachment_boundary",
+      "signature": "d48df963d8d9a1ca362cc9c3c560c628d70c5840543a2679b6fd4fc5169f1d9f",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_compact_writer_guard_setup_ownership.py",
+      "scope": "test_compact_writer_fixture_owns_guard_before_setup",
+      "signature": "c82b2e715723dd679988581e5dde634da07fb991c8bb9f855fe52e234f0637dc",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_compact_writer_guard_setup_ownership.py",
+      "scope": "test_compact_writer_fixture_owns_guard_before_setup",
+      "signature": "d48df963d8d9a1ca362cc9c3c560c628d70c5840543a2679b6fd4fc5169f1d9f",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_compaction_temp_handoff_ownership.py",
+      "scope": "test_compaction_temp_callback_owns_descriptor_until_return",
+      "signature": "c82b2e715723dd679988581e5dde634da07fb991c8bb9f855fe52e234f0637dc",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_compaction_temp_handoff_ownership.py",
+      "scope": "test_compaction_temp_callback_owns_descriptor_until_return",
+      "signature": "d48df963d8d9a1ca362cc9c3c560c628d70c5840543a2679b6fd4fc5169f1d9f",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_coverage_holder_retirement_ownership.py",
+      "scope": "test_coverage_holder_close_error_still_joins_worker",
+      "signature": "c82b2e715723dd679988581e5dde634da07fb991c8bb9f855fe52e234f0637dc",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_coverage_holder_retirement_ownership.py",
+      "scope": "test_coverage_holder_close_error_still_joins_worker",
+      "signature": "ac4c4b22f7bcfee545ae8a7b0e1e131b6e2d25c1c75d555839d9348c3e4f66e8",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_dispatcher_route_guard_owner.py",
+      "scope": "test_dispatcher_route_guard_outlives_body_undo",
+      "signature": "31f0ab57e9f8e9608dfe029f63a4a663e87adb742214048fdbac0cf8c8a93591",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_dispatcher_route_guard_owner.py",
+      "scope": "test_dispatcher_route_guard_outlives_body_undo",
+      "signature": "d48df963d8d9a1ca362cc9c3c560c628d70c5840543a2679b6fd4fc5169f1d9f",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_frida_log_path_adoption_ownership.py",
+      "scope": "test_observation_log_owns_allocation_before_path_conversion",
+      "signature": "c82b2e715723dd679988581e5dde634da07fb991c8bb9f855fe52e234f0637dc",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_frida_log_path_adoption_ownership.py",
+      "scope": "test_observation_log_owns_allocation_before_path_conversion",
+      "signature": "d48df963d8d9a1ca362cc9c3c560c628d70c5840543a2679b6fd4fc5169f1d9f",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_gateway_setup_ownership.py",
+      "scope": "test_setup_error_retires_gateway_directory",
+      "signature": "c82b2e715723dd679988581e5dde634da07fb991c8bb9f855fe52e234f0637dc",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_gateway_setup_ownership.py",
+      "scope": "test_setup_error_retires_gateway_directory",
+      "signature": "d48df963d8d9a1ca362cc9c3c560c628d70c5840543a2679b6fd4fc5169f1d9f",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_inline_health_manager_ownership.py",
+      "scope": "test_inline_health_callback_owns_manager_cache",
+      "signature": "31f0ab57e9f8e9608dfe029f63a4a663e87adb742214048fdbac0cf8c8a93591",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_inline_health_manager_ownership.py",
+      "scope": "test_inline_health_callback_owns_manager_cache",
+      "signature": "d48df963d8d9a1ca362cc9c3c560c628d70c5840543a2679b6fd4fc5169f1d9f",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_log_capture_setup_ownership.py",
+      "scope": "test_log_capture_owns_handler_before_setup",
+      "signature": "31f0ab57e9f8e9608dfe029f63a4a663e87adb742214048fdbac0cf8c8a93591",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_log_capture_setup_ownership.py",
+      "scope": "test_log_capture_owns_handler_before_setup",
+      "signature": "d48df963d8d9a1ca362cc9c3c560c628d70c5840543a2679b6fd4fc5169f1d9f",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_logging_manager_cache_ownership.py",
+      "scope": "test_logging_fixture_owns_manager_cache",
+      "signature": "31f0ab57e9f8e9608dfe029f63a4a663e87adb742214048fdbac0cf8c8a93591",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_logging_manager_cache_ownership.py",
+      "scope": "test_logging_fixture_owns_manager_cache",
+      "signature": "d48df963d8d9a1ca362cc9c3c560c628d70c5840543a2679b6fd4fc5169f1d9f",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_metadata_holder_retirement_ownership.py",
+      "scope": "test_metadata_holder_close_error_still_joins_worker",
+      "signature": "c82b2e715723dd679988581e5dde634da07fb991c8bb9f855fe52e234f0637dc",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_metadata_holder_retirement_ownership.py",
+      "scope": "test_metadata_holder_close_error_still_joins_worker",
+      "signature": "d48df963d8d9a1ca362cc9c3c560c628d70c5840543a2679b6fd4fc5169f1d9f",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_osv_caplog_fixture_ownership.py",
+      "scope": "run_child",
+      "signature": "de99f171dec30a384ec909b7a95eaffff7b19c73c8a3b772b1f4f09106655d45",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Explicit isolated Python one-case pytest child,30s timeout,plugin autoload disabled,private HOME/tmp,owned captured output and exact JUnit/observation assertions."
+    },
+    {
+      "path": "core/testing/tests/test_osv_caplog_fixture_ownership.py",
+      "scope": "test_caplog_fixture_owns_schema_connection",
+      "signature": "a4dfcfeb4a275ca3a7a884f9762e89f470a8eeee46c50b83cc7879f2e9ff7e33",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Explicit isolated Python one-case pytest child,30s timeout,plugin autoload disabled,private HOME/tmp,owned captured output and exact JUnit/observation assertions."
+    },
+    {
+      "path": "core/testing/tests/test_relay_descriptor_ownership.py",
+      "scope": "test_relay_descriptor_closes_before_path_cleanup",
+      "signature": "0d0f0ee7e32537c3b1e8b3319a999c868686667787e3902ee9b2d41d5f2183db",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Explicit isolated Python one-case pytest child,30s timeout,plugin autoload disabled,private HOME/tmp,owned captured output and exact JUnit/observation assertions."
+    },
+    {
+      "path": "core/testing/tests/test_remaining_logger_manager_ownership.py",
+      "scope": "test_remaining_logging_fixture_owns_manager_cache",
+      "signature": "31f0ab57e9f8e9608dfe029f63a4a663e87adb742214048fdbac0cf8c8a93591",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_remaining_logger_manager_ownership.py",
+      "scope": "test_remaining_logging_fixture_owns_manager_cache",
+      "signature": "d48df963d8d9a1ca362cc9c3c560c628d70c5840543a2679b6fd4fc5169f1d9f",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_resume_fingerprint_setup_ownership.py",
+      "scope": "test_setup_error_retires_resume_fingerprint_directory",
+      "signature": "c82b2e715723dd679988581e5dde634da07fb991c8bb9f855fe52e234f0637dc",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_resume_fingerprint_setup_ownership.py",
+      "scope": "test_setup_error_retires_resume_fingerprint_directory",
+      "signature": "d48df963d8d9a1ca362cc9c3c560c628d70c5840543a2679b6fd4fc5169f1d9f",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_resume_seed_setup_ownership.py",
+      "scope": "test_setup_error_retires_resume_seed_directory",
+      "signature": "c82b2e715723dd679988581e5dde634da07fb991c8bb9f855fe52e234f0637dc",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_resume_seed_setup_ownership.py",
+      "scope": "test_setup_error_retires_resume_seed_directory",
+      "signature": "d48df963d8d9a1ca362cc9c3c560c628d70c5840543a2679b6fd4fc5169f1d9f",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_reused_writer_dup2_ownership.py",
+      "scope": "test_reused_writer_callback_owns_duplication_setup",
+      "signature": "31f0ab57e9f8e9608dfe029f63a4a663e87adb742214048fdbac0cf8c8a93591",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_reused_writer_dup2_ownership.py",
+      "scope": "test_reused_writer_callback_owns_duplication_setup",
+      "signature": "d48df963d8d9a1ca362cc9c3c560c628d70c5840543a2679b6fd4fc5169f1d9f",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_sage_bash_case_setup_ownership.py",
+      "scope": "test_setup_error_retires_sage_bash_directory",
+      "signature": "c82b2e715723dd679988581e5dde634da07fb991c8bb9f855fe52e234f0637dc",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_sage_bash_case_setup_ownership.py",
+      "scope": "test_setup_error_retires_sage_bash_directory",
+      "signature": "d48df963d8d9a1ca362cc9c3c560c628d70c5840543a2679b6fd4fc5169f1d9f",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_sage_reviewer_case_setup_ownership.py",
+      "scope": "test_setup_error_retires_sage_reviewer_directory",
+      "signature": "c82b2e715723dd679988581e5dde634da07fb991c8bb9f855fe52e234f0637dc",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_sage_reviewer_case_setup_ownership.py",
+      "scope": "test_setup_error_retires_sage_reviewer_directory",
+      "signature": "d48df963d8d9a1ca362cc9c3c560c628d70c5840543a2679b6fd4fc5169f1d9f",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_sca_wrapper_case_setup_ownership.py",
+      "scope": "test_setup_error_retires_sca_wrapper_directory",
+      "signature": "c82b2e715723dd679988581e5dde634da07fb991c8bb9f855fe52e234f0637dc",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_sca_wrapper_case_setup_ownership.py",
+      "scope": "test_setup_error_retires_sca_wrapper_directory",
+      "signature": "d48df963d8d9a1ca362cc9c3c560c628d70c5840543a2679b6fd4fc5169f1d9f",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_scorecard_guard_owner.py",
+      "scope": "test_scorecard_guard_outlives_body_undo",
+      "signature": "31f0ab57e9f8e9608dfe029f63a4a663e87adb742214048fdbac0cf8c8a93591",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_scorecard_guard_owner.py",
+      "scope": "test_scorecard_guard_outlives_body_undo",
+      "signature": "d48df963d8d9a1ca362cc9c3c560c628d70c5840543a2679b6fd4fc5169f1d9f",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_stale_audit_loop_ownership.py",
+      "scope": "test_stale_audit_loop_owns_files_before_write",
+      "signature": "c82b2e715723dd679988581e5dde634da07fb991c8bb9f855fe52e234f0637dc",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_stale_audit_loop_ownership.py",
+      "scope": "test_stale_audit_loop_owns_files_before_write",
+      "signature": "d48df963d8d9a1ca362cc9c3c560c628d70c5840543a2679b6fd4fc5169f1d9f",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_state_pin_alias_ownership.py",
+      "scope": "test_state_pin_guard_canonicalises_aliases",
+      "signature": "31f0ab57e9f8e9608dfe029f63a4a663e87adb742214048fdbac0cf8c8a93591",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_state_pin_alias_ownership.py",
+      "scope": "test_state_pin_guard_canonicalises_aliases",
+      "signature": "d48df963d8d9a1ca362cc9c3c560c628d70c5840543a2679b6fd4fc5169f1d9f",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_telemetry_append_opener_ownership.py",
+      "scope": "test_telemetry_append_opener_owns_descriptor",
+      "signature": "c82b2e715723dd679988581e5dde634da07fb991c8bb9f855fe52e234f0637dc",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_telemetry_append_opener_ownership.py",
+      "scope": "test_telemetry_append_opener_owns_descriptor",
+      "signature": "d48df963d8d9a1ca362cc9c3c560c628d70c5840543a2679b6fd4fc5169f1d9f",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_tempfile_directory_path_ownership.py",
+      "scope": "test_tempfile_directory_path_setup_retires_allocation",
+      "signature": "31f0ab57e9f8e9608dfe029f63a4a663e87adb742214048fdbac0cf8c8a93591",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_tempfile_directory_path_ownership.py",
+      "scope": "test_tempfile_directory_path_setup_retires_allocation",
+      "signature": "d48df963d8d9a1ca362cc9c3c560c628d70c5840543a2679b6fd4fc5169f1d9f",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_tempfile_view_path_ownership.py",
+      "scope": "test_tempfile_view_path_setup_retires_allocation",
+      "signature": "31f0ab57e9f8e9608dfe029f63a4a663e87adb742214048fdbac0cf8c8a93591",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
+    },
+    {
+      "path": "core/testing/tests/test_tempfile_view_path_ownership.py",
+      "scope": "test_tempfile_view_path_setup_retires_allocation",
+      "signature": "d48df963d8d9a1ca362cc9c3c560c628d70c5840543a2679b6fd4fc5169f1d9f",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "Fixed sys.executable -I -B child,20s process-group owner,explicit scrubbed environment,owned output files,zero return and forbidden-attempt assertions."
     }
   ],
   "shell_routers": {
