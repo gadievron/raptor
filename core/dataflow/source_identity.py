@@ -122,6 +122,9 @@ def known_python_identity_conflict(
     child: ast.AST = call
     while child in parents:
         frame = parents[child]
+        if isinstance(frame, ast.TypeAlias) and child is frame.value:
+            if any(getattr(parameter, "name", None) == root for parameter in frame.type_params):
+                return "source library root is shadowed by a type parameter"
         if isinstance(frame, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             if any(child is statement for statement in frame.body):
                 if isinstance(frame, ast.ClassDef):
