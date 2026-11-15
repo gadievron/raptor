@@ -1072,7 +1072,9 @@ _SUB_STATIC_TAGS = frozenset({"assumed_propagation", "binding_approx"})
 def _taint_path_tiers(finding: dict) -> list[str]:
     """Every tier string recorded on the finding: the path-level
     ``path_tier`` (scan-shape ``metadata`` / validation-shape
-    ``taint_crossfile`` blocks) plus per-step ``properties.tier``."""
+    ``taint_crossfile`` blocks) plus per-step ``properties.tier`` across
+    primary and sibling paths.
+    """
     tiers: list[str] = []
     for block_key in ("metadata", "taint_crossfile"):
         block = finding.get(block_key)
@@ -1081,7 +1083,16 @@ def _taint_path_tiers(finding: dict) -> list[str]:
             if isinstance(tier, str) and tier:
                 tiers.append(tier)
     path = finding.get("dataflow_path")
+    paths = [path]
     if isinstance(path, dict):
+        alternatives = path.get("alternative_paths")
+        if isinstance(alternatives, list):
+            paths.extend(alternatives)
+    # Producer and SARIF paths retain flat sibling alternatives. A static
+    # primary does not make an approximated sibling representable in CodeQL.
+    for path in paths:
+        if not isinstance(path, dict):
+            continue
         steps = [path.get("source"), *(  # type: ignore[misc]
             path.get("steps") if isinstance(path.get("steps"), list)
             else []
