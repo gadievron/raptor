@@ -119,6 +119,11 @@ class VulnerabilityAnalysis:
             value = getattr(self, name)
             if value is not None and not isinstance(value, bool):
                 raise ValueError(f"{name} must be a boolean or None for abstention")
+        for name, upper in (("exploitability_score", 1), ("cvss_estimate", 10)):
+            value = getattr(self, name)
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not 0 <= value <= upper):
+                raise ValueError(f"{name} must be a finite number between 0 and {upper}")
 
 
 # Dict schema for LLM structured generation (consistent with other callers)
