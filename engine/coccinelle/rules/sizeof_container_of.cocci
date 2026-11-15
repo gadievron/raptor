@@ -40,6 +40,8 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message":   "Candidate: allocation-origin storage reaches container_of; review enclosing-object capacity, member offset and pointer provenance (CWE-131)."
 }
 print("COCCIRESULT:" + json.dumps(msg))

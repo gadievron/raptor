@@ -16,6 +16,8 @@ _SCRIPTS = [
     ("is_err_not_ptr_err", 0), ("is_err_not_ptr_err", 1),
     ("is_err_not_ptr_err", 2), ("double_byteswap", 0),
     ("sensitive_data_leak", 0),
+    ("division_by_zero", 0), ("division_by_zero", 1),
+    ("double_sizeof", 0), ("double_sizeof", 1), ("sizeof_container_of", 0),
 ]
 
 
@@ -27,7 +29,7 @@ def _report(name, index, position, **bindings):
     tree = ast.parse(scripts[index])
     tree.body = [node for node in tree.body if not isinstance(node, (ast.Import, ast.ImportFrom))]
     output = io.StringIO()
-    namespace = {"json": json, "p": [position], "swap1": "htons", "swap2": "ntohs", "V": "secret"}
+    namespace = {"json": json, "p": [position], "p2": [position], "PARAM": "count", "swap1": "htons", "swap2": "ntohs", "V": "secret"}
     namespace.update(bindings)
     with redirect_stdout(output):
         exec(compile(tree, str(rule), "exec"), namespace)
@@ -48,7 +50,12 @@ def test_report_spans_survive_parser_and_deduplication(name, index):
     assert [(row.file, row.line, row.column, row.line_end, row.column_end) for row in rows] == [
         ("owned.c", 4, 2, 5, 18), ("owned.c", 4, 2, 6, 23),
     ]
-    assert all(row.rule == name and row.message for row in rows)
+    expected_rule = {
+        ("division_by_zero", 0): "division_by_zero_param",
+        ("division_by_zero", 1): "modulo_by_zero_param",
+        ("double_sizeof", 1): "pointer_scaling_double",
+    }.get((name, index), name)
+    assert all(row.rule == expected_rule and row.message for row in rows)
     assert rows[0].message == rows[1].message
 
 
