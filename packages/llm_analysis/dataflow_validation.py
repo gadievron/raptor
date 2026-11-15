@@ -1862,6 +1862,10 @@ def _verdict_from_prebuilt(
         if _any_match_at_finding_location(evidence.matches, finding):
             return "confirmed"
         return "inconclusive"
+    if _taint_sub_static_exemption(finding):
+        # Prebuilt silence cannot disprove producer-recorded approximate
+        # edges. Independent deeper hypothesis validation stays available.
+        return "inconclusive"
     # No matches. Refutation is justified only when the query has broad
     # source coverage AND we can verify the finding's file is in the
     # DB. The two checks together rule out the most common false-
