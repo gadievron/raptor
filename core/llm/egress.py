@@ -574,6 +574,7 @@ def _reset_for_tests() -> None:
         _original_proxy_env = None
 
 
+
 def register_web_target(url: str) -> None:
     """Admit a web target to the active transport proxy before preflight."""
     from urllib.parse import urlsplit
