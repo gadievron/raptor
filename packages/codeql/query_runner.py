@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -246,6 +247,23 @@ class QueryResult:
 # Older CLIs reject the flag as unknown, so the runner version-gates it
 # (skip entirely below this) rather than risking a failed analyze.
 THREAT_MODEL_MIN_VERSION = (2, 15, 3)
+
+
+def _preserve_previous_sarif(path: Path) -> None:
+    """Retain the previous attempt before asking analyze for current output."""
+    if not os.path.lexists(path):
+        return
+    if path.is_dir():
+        raise IsADirectoryError(f"SARIF output is a directory: {path}")
+    previous = Path(tempfile.mkdtemp(prefix=".codeql-previous-", dir=path.parent))
+    try:
+        path.replace(previous / path.name)
+    except BaseException:
+        try:
+            previous.rmdir()
+        except BaseException:
+            pass  # Preserve the failed archival operation.
+        raise
 
 
 class QueryRunner:
@@ -657,6 +675,7 @@ class QueryRunner:
         # Execute analysis in sandbox (network blocked — packs pre-fetched)
         try:
             from core.sandbox import run as sandbox_run
+            _preserve_previous_sarif(sarif_path)
             result = sandbox_run(
                 temporary_command(cmd, scoped=True),
                 block_network=True,
@@ -755,6 +774,7 @@ class QueryRunner:
                     )
                     if dl.returncode == 0:
                         logger.info("✓ Downloaded %s — retrying analysis", pack_name)
+                        _preserve_previous_sarif(sarif_path)
                         result = sandbox_run(
                             temporary_command(cmd, scoped=True), block_network=True,
                             **self._analysis_scope(cmd, database_path, out_dir, actual_suite_path),
@@ -1057,6 +1077,7 @@ class QueryRunner:
 
         try:
             from core.sandbox import run as sandbox_run
+            _preserve_previous_sarif(sarif_path)
             result = sandbox_run(
                 temporary_command(cmd, scoped=True),  # type: ignore[arg-type]
                 block_network=True,
@@ -1544,6 +1565,7 @@ class QueryRunner:
         ).append_to(cmd, include_disk_cache=False)
         analysis_start = time.time()
         try:
+            _preserve_previous_sarif(sarif_path)
             proc = sandbox_run(
                 temporary_command(cmd, scoped=True), block_network=True,  # type: ignore[arg-type]
                 **self._analysis_scope(cmd, db, out_dir, pack_dir),
