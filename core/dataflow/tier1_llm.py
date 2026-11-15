@@ -935,6 +935,17 @@ def try_tier1b(
                     f"not dominate sink (advisory or reassigned)",
                     spec=mech,
                 )
+        if sink_class == "xss":
+            return Tier0Result(
+                Tier0Status.NOT_APPLICABLE,
+                "character exclusion proved, but HTML sink interpretation "
+                "and output composition are unverified",
+                spec=mech,
+                extras={"validator_line": validator_line, "var_name": mech.var_name,
+                        "llm_extracted": True,
+                        "smt_character_model": {"sound": True, "source_bound": False,
+                                                "reasoning": verdict.reasoning}},
+            )
         # Same artifact format as Tier 0 mechanical extraction — the
         # soundness mechanism is identical (Z3 regex proof).  The
         # ``llm_extracted`` flag in ``extras`` records that the LLM
