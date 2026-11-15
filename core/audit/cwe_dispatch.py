@@ -35,10 +35,11 @@ _TOOL_SCOPE: dict[str, dict[str, str]] = {
             "in between, within the same function."
         ),
         "teardown_lifetime.cocci": (
-            "Callback-lifetime race: an asynchronous callback (timer, "
-            "workqueue, hrtimer) is cancelled then its container is "
-            "freed, but a callback already executing on another CPU "
-            "still holds a reference."
+            "Callback cancellation/free candidates: selected asynchronous "
+            "cancel calls precede a container free. Callback registration, "
+            "concurrent execution, container use and prior quiescence "
+            "need independent evidence; silence does not establish "
+            "lifetime safety."
         ),
         "smt:check-early-release": (
             "Path feasibility: checks whether a resource release can "
