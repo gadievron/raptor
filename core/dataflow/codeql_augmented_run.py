@@ -167,10 +167,17 @@ def analyze(
 
     Raises:
         :class:`CodeQLRunError`: on non-zero exit or timeout.
+        :class:`ValueError`: queries are not a non-empty sequence of
+        non-empty strings. Invalid queries leave prior output intact.
     """
+    if isinstance(queries, (str, bytes, bytearray)) or not isinstance(queries, Sequence):
+        raise ValueError("analyze: queries must be a sequence of non-empty strings")
+    queries = tuple(queries)
     if not queries:
         msg = "analyze: at least one query spec required"
         raise ValueError(msg)
+    if any(not isinstance(query, str) or not query.strip() for query in queries):
+        raise ValueError("analyze: query specs must be non-empty strings")
 
     if extension_pack is not None:
         _require_data_only_pack(Path(extension_pack))
