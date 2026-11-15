@@ -1715,6 +1715,7 @@ def make_call_operand(
     Explicit mutation and ambiguous address/bitwise argument syntax require
     a state-effect model and decline before allocating a call occurrence.
     """
+    text = str.__str__(text)
     if len(text) > _MAX_CONDITION_CHARS:
         raise ValueError("call operand exceeds the condition character limit")
     text = text.strip()
