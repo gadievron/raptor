@@ -43,6 +43,8 @@ msg = {
   "file":  p2[0].file,
   "line":  int(p2[0].line),
   "col":   int(p2[0].column),
+  "line_end": int(p2[0].line_end),
+  "col_end": int(p2[0].column_end),
   "message":   "Path-check/open candidate: stat/lstat/access at line %s then pathname open — review check reliance, lookup anchors, directory mutability, open flags and descriptor validation (CWE-367)." % p1[0].line
 }
 print("COCCIRESULT:" + json.dumps(msg))

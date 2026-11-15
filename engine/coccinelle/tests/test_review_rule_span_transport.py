@@ -52,6 +52,8 @@ _SCRIPTS = [
     ("popen_fclose", 4),
     ("open_creat_no_mode", 0),
     ("inet_ntoa_double_call", 0), ("kfree_not_rcu", 0),
+    ("toctou_stat_open", 0),
+    ("socket_no_cloexec", 0), ("socket_no_cloexec", 1),
     ("rcu_no_lock", 0),
     ("rcu_dereference_outside_rcu", 0), ("rcu_dereference_outside_rcu", 1),
 ]
@@ -85,7 +87,9 @@ def test_report_spans_survive_parser_and_deduplication(name, index):
     first = SimpleNamespace(file="owned.c", line="4", column="2", line_end="5", column_end="18")
     second = SimpleNamespace(file="owned.c", line="4", column="2", line_end="6", column_end="23")
     bindings = {"FLAGS": "O_CREAT"} if name == "open_creat_no_mode" else {}
-    if name == "kfree_not_rcu":
+    if name == "socket_no_cloexec":
+        bindings["TYPE"] = "SOCK_STREAM"
+    if name in {"kfree_not_rcu", "toctou_stat_open"}:
         bindings["p1"] = [SimpleNamespace(file="owned.c", line=1, column=7, line_end=1, column_end=15)]
     first_output = _report(name, index, first, **bindings)
     second_output = _report(name, index, second, **bindings)
@@ -108,6 +112,7 @@ def test_report_spans_survive_parser_and_deduplication(name, index):
         ("copy_user_size_mismatch", 2): "copy_from_user_sizeof_ptr",
         ("sizeof_array_param", 1): "sizeof_array_param_unsized",
         ("free_nonbase_ptr", 1): "free_nonbase_ptr_inc",
+        ("socket_no_cloexec", 1): "accept_no_cloexec",
     }.get((name, index), name)
     assert all(row.rule == expected_rule and row.message for row in rows)
     assert rows[0].message == rows[1].message
@@ -181,3 +186,10 @@ def test_unknown_strncpy_format_remains_candidate():
 def test_open_mode_flag_filters_stay_quiet(flags):
     position = SimpleNamespace(file="owned.c", line=4, column=2, line_end=5, column_end=18)
     assert _report("open_creat_no_mode", 0, position, FLAGS=flags) == ""
+
+
+@pytest.mark.parametrize("flags", ["SOCK_CLOEXEC", "SOCK_STREAM | SOCK_CLOEXEC"],
+                         ids=["exact-flag", "or-flag"])
+def test_socket_cloexec_flags_stay_quiet(flags):
+    position = SimpleNamespace(file="owned.c", line=4, column=2, line_end=5, column_end=18)
+    assert _report("socket_no_cloexec", 0, position, TYPE=flags) == ""
