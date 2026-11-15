@@ -3035,18 +3035,26 @@ def _python_chain_reaches_sink(
                     local_slots[var] = _python_name_has_local_slot(scope_root, var)
                 if not local_slots[var]:
                     chain.discard(var)
-    # Other calls on the validator row can replace an external slot even
-    # when the certified call itself returned an immutable value. Locals
-    # retain their captured value; the library certificate grants no purity
-    # contract to neighbouring calls. Decline the complete chain when it
-    # touched an external slot: later local aliases can already be stale.
-    if external_slot_seen and sanitizer_call_spans and any(
-        isinstance(node, ast.Call) and node.lineno == validator_line
-        and (node.lineno, node.col_offset, node.end_lineno, node.end_col_offset)
-        not in sanitizer_call_spans
-        for node in _walk_same_scope(scope_root)
-    ):
-        return False
+    # Opaque evaluation beside the validator can replace an external slot.
+    # The certified call and its syntax have their existing exemption;
+    # neighbouring descriptors and operators have no purity contract.
+    # Decline the complete chain because later local aliases may be stale.
+    if external_slot_seen and sanitizer_call_spans:
+        certified_nodes = {
+            part
+            for node in _walk_same_scope(scope_root)
+            if isinstance(node, ast.Call)
+            and (node.lineno, node.col_offset, node.end_lineno, node.end_col_offset)
+            in sanitizer_call_spans
+            for part in ast.walk(node)
+        }
+        if any(
+            node.lineno == validator_line and node not in certified_nodes
+            and _python_possible_call(node)
+            for node in _walk_same_scope(scope_root)
+            if hasattr(node, "lineno")
+        ):
+            return False
     # Loop back-edge kill: a rebind textually AFTER the sink (or before
     # the validator) still reaches the sink on the next iteration when
     # it shares a loop with the sink — the flat forward pass cannot see
