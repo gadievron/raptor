@@ -81,6 +81,7 @@ class TestDetect(unittest.TestCase):
 
     def test_elf_binary_detection(self):
         with tempfile.NamedTemporaryFile(delete=False) as f:
+            self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
             f.write(ELF_MAGIC)
             f.write(b"\x00" * 1024)
             tmp = Path(f.name)
@@ -107,6 +108,7 @@ class TestDetect(unittest.TestCase):
             + b"\x00\x16"                              # e_machine s390x (BE)
         )
         with tempfile.NamedTemporaryFile(delete=False) as f:
+            self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
             f.write(be_magic)
             f.write(b"\x00" * 1024)
             tmp = Path(f.name)
@@ -121,6 +123,7 @@ class TestDetect(unittest.TestCase):
     def test_little_endian_elf_machine_unchanged(self):
         # Direction two: the LE read stays correct.
         with tempfile.NamedTemporaryFile(delete=False) as f:
+            self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
             f.write(ELF_MAGIC)
             f.write(b"\x00" * 1024)
             tmp = Path(f.name)
@@ -150,6 +153,7 @@ class TestDetect(unittest.TestCase):
 
     def test_macho_binary_detection(self):
         with tempfile.NamedTemporaryFile(delete=False) as f:
+            self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
             f.write(MACHO_64_LE_MAGIC)
             f.write(b"\x00" * 1024)
             tmp = Path(f.name)
@@ -166,6 +170,7 @@ class TestDetect(unittest.TestCase):
         # must surface a chmod blocker so plan() rejects cleanly
         # instead of execute() failing mid-run.
         with tempfile.NamedTemporaryFile(delete=False) as f:
+            self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
             f.write(MACHO_64_LE_MAGIC)
             f.write(b"\x00" * 1024)
             tmp = Path(f.name)
@@ -185,6 +190,7 @@ class TestDetect(unittest.TestCase):
 
     def test_macho_executable_on_darwin_has_no_blockers(self):
         with tempfile.NamedTemporaryFile(delete=False) as f:
+            self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
             f.write(MACHO_64_LE_MAGIC)
             f.write(b"\x00" * 1024)
             tmp = Path(f.name)
@@ -207,6 +213,7 @@ class TestDetect(unittest.TestCase):
         ):
             with self.subTest(magic=magic.hex()):
                 with tempfile.NamedTemporaryFile(delete=False) as f:
+                    self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
                     f.write(_fat_macho_fixture(magic, is_64=is_64))
                     tmp = Path(f.name)
                 try:
@@ -219,6 +226,7 @@ class TestDetect(unittest.TestCase):
 
     def test_java_class_magic_is_not_mislabelled_as_fat_macho(self):
         with tempfile.NamedTemporaryFile(suffix=".class", delete=False) as f:
+            self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
             f.write(b"\xca\xfe\xba\xbe\x00\x00\x00\x34" + b"\x00" * 64)
             tmp = Path(f.name)
         try:
@@ -247,6 +255,7 @@ class TestDetect(unittest.TestCase):
 
     def test_pe_executable_detection(self):
         with tempfile.NamedTemporaryFile(suffix=".exe", delete=False) as f:
+            self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
             f.write(_pe_fixture(0x014C))
             tmp = Path(f.name)
         try:
@@ -261,6 +270,7 @@ class TestDetect(unittest.TestCase):
 
     def test_pe_dll_detection(self):
         with tempfile.NamedTemporaryFile(suffix=".dll", delete=False) as f:
+            self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
             f.write(_pe_fixture(0x8664))
             tmp = Path(f.name)
         try:
@@ -273,6 +283,7 @@ class TestDetect(unittest.TestCase):
     def test_pe_sys_detection_provides_kernel_fuzzing_hints(self):
         """Windows kernel drivers must produce clear, actionable guidance."""
         with tempfile.NamedTemporaryFile(suffix=".sys", delete=False) as f:
+            self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
             f.write(_pe_fixture(0xAA64))
             tmp = Path(f.name)
         try:
@@ -288,6 +299,7 @@ class TestDetect(unittest.TestCase):
 
     def test_linux_kernel_module_is_not_treated_as_a_user_mode_campaign(self):
         with tempfile.NamedTemporaryFile(suffix=".ko", delete=False) as f:
+            self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
             f.write(ELF_MAGIC)
             f.write(b"\x00" * 1024)
             tmp = Path(f.name)
@@ -303,6 +315,7 @@ class TestDetect(unittest.TestCase):
 
     def test_c_source_file_detected(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".c", delete=False) as f:
+            self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
             f.write("int main(void){ return 0; }\n")
             tmp = Path(f.name)
         try:
@@ -315,6 +328,7 @@ class TestDetect(unittest.TestCase):
 
     def test_cpp_header_detected(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".hpp", delete=False) as f:
+            self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
             f.write("#pragma once\nvoid foo(int x);\n")
             tmp = Path(f.name)
         try:
@@ -325,6 +339,7 @@ class TestDetect(unittest.TestCase):
 
     def test_unknown_file_format(self):
         with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
+            self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
             f.write(b"\xde\xad\xbe\xef" * 16)
             tmp = Path(f.name)
         try:
