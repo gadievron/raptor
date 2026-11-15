@@ -112,13 +112,14 @@ module IntTruncConfig implements DataFlow::ConfigSig {
 module IntTruncFlow = TaintTracking::Global<IntTruncConfig>;
 
 /*
- * ---- Severity escalation: does the truncated value flow to a
- *      memory operation? ----
+ * ---- Optional finding context: does the converted value reach a
+ *      candidate allocation-size or buffer-length argument? ----
  */
 
 /**
- * Holds if `castExpr` is the source of a value that eventually reaches
- * an allocation or buffer-length parameter.
+ * Holds if `castExpr` locally flows to an argument selected by API name
+ * and position, or to an array extent. Name-only call matches require
+ * callee and argument review before attributing memory-safety impact.
  */
 predicate flowsToMemoryOperation(Cast castExpr) {
   exists(FunctionCall fc, int argIdx |
