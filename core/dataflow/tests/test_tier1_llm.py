@@ -1861,3 +1861,25 @@ def test_global_slot_validator_row_call_and_local_control(tmp_path):
         else:
             print(json.dumps(observations))
             assert result.status is sb.Tier0Status.NOT_APPLICABLE, observations
+
+
+def test_validator_row_descriptor_external_slot(tmp_path):
+    from core.dataflow.smt_barrier import Tier0Status
+
+    for shared in (False, True):
+        line = "    safe = html.escape('<input>'); trigger.touch"
+        source = ("import html\nsafe = ''\nclass Trigger:\n    @property\n    def touch(self):\n        global safe\n        safe = '<raw marker>'\ntrigger = Trigger()\ndef process():\n"
+                  + ("    global safe\n" if shared else "") + line + "\n    sink(safe)\n")
+        seen = []
+        namespace = {"sink": seen.append}
+        exec(compile(source, "owned-descriptor.py", "exec"), namespace)
+        namespace["process"]()
+        assert seen == (["<raw marker>"] if shared else ["&lt;input&gt;"])
+        (tmp_path / "app.py").write_text(source)
+        reply = json.dumps({"kind": "known_safe_call", "validator_source_line": line,
+                            "variable_name": "safe", "charset": "", "forbidden": "",
+                            "library_call": "html.escape", "exact_type": "str"})
+        result = t1.try_tier1b(fix_diff="+" + line + "\n", repo_root=tmp_path,
+                              sink_uri="app.py", sink_line=len(source.splitlines()),
+                              sink_class="xss", language="python", complete=lambda *_: reply)
+        assert result.status is (Tier0Status.NOT_APPLICABLE if shared else Tier0Status.SOUND), (shared, seen, result)
