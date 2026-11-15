@@ -6,6 +6,7 @@
 // This remains a detection lead, not proof that the two callers overlap.
 // Covers CWE-362 / CWE-667.
 // @role: detection
+// raptor: confirm-only
 
 @publish@
 identifier writer, tag, ptr, payload, flag;
