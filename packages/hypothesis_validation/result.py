@@ -1,20 +1,17 @@
-"""Validation result — the runner's verdict on a hypothesis.
+"""Hypothesis verdict labels and their recorded tool observations.
 
-Verdicts are NOT LLM opinions; they are derived from tool evidence:
+The runner combines a model evaluation with mechanical downgrade rules:
+failed or incomplete tool runs remain inconclusive, and match presence
+constrains which claims can be accepted. Definitive SMT directions follow
+the hypothesis's declared polarity over the supplied predicates.
 
-  confirmed   — at least one tool produced concrete evidence (file/line
-                matches, dataflow path, satisfiable constraint) consistent
-                with the hypothesis claim.
-  refuted     — tool ran successfully but produced no evidence supporting
-                the hypothesis (and at least one tool was applicable).
-  inconclusive — no applicable tool, all tools failed, or evidence was
-                ambiguous. The runner does NOT downgrade to "refuted" in
-                this case — absence of mechanical evidence is not absence
-                of bug.
+These labels retain the scope of the rule, query or predicate model that
+produced them. Source-backed promotion and refutation require the consuming
+pipeline's admission and evidence checks.
 
-Verdicts are auditable: every evidence item records the exact tool
-invocation (rule text, command, target) and tool output. A reviewer can
-re-run any invocation to verify.
+Each evidence record stores the adapter name, rule text, summary, matches,
+execution status and optional hypothesis reference. Reproducing an invocation
+also requires the target content and tool configuration from its owning run.
 """
 
 from dataclasses import dataclass, field
@@ -94,10 +91,9 @@ class Evidence:
 class ValidationResult:
     """The result of validating a hypothesis.
 
-    A confirmed hypothesis becomes a finding with concrete tool evidence.
-    A refuted hypothesis is discarded. Inconclusive hypotheses are
-    annotated as "requires manual review" — they do not become findings,
-    but neither are they marked clean.
+    The owning pipeline interprets these labels under its evidence policy.
+    Inconclusive retains failed, incomplete or ambiguous analysis for review.
+    Recorded matches and model results keep their original scope.
     """
 
     verdict: Verdict
