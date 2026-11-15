@@ -161,16 +161,16 @@ def test_refused_zip_keeps_existing_advisories(tmp_path: Path) -> None:
     bomb = buf.getvalue()
 
     http = _ZipServingHttp({"PyPI/all.zip": good})
-    db = OsvOfflineDB(tmp_path / "osv.sqlite", http=http)
-    db.ensure_fresh(["PyPI"])
-    assert db.query("PyPI", "django", "4.2.0")
+    with closing(OsvOfflineDB(tmp_path / "osv.sqlite", http=http)) as db:
+        db.ensure_fresh(["PyPI"])
+        assert db.query("PyPI", "django", "4.2.0")
 
-    http.zips["PyPI/all.zip"] = bomb
-    stats = db.ensure_fresh(["PyPI"], force=True)
-    # Refused ingest reports no stats for the ecosystem...
-    assert stats == []
-    # ...and the previously ingested advisories remain queryable.
-    assert db.query("PyPI", "django", "4.2.0")
+        http.zips["PyPI/all.zip"] = bomb
+        stats = db.ensure_fresh(["PyPI"], force=True)
+        # Refused ingest reports no stats for the ecosystem...
+        assert stats == []
+        # ...and the previously ingested advisories remain queryable.
+        assert db.query("PyPI", "django", "4.2.0")
 
 
 def test_unknown_ecosystem_silently_skipped(tmp_path: Path) -> None:
@@ -212,10 +212,10 @@ def test_ingest_skips_zip_slip_paths(tmp_path: Path) -> None:
                      json.dumps(_osv("OK", "PyPI", "x", fixed="1.0")))
     blob = buf.getvalue()
     http = _ZipServingHttp({"PyPI/all.zip": blob})
-    db = OsvOfflineDB(tmp_path / "osv.sqlite", http=http)
-    stats = db.ensure_fresh(["PyPI"])
-    assert stats[0].advisories == 1
-    assert stats[0].skipped == 2
+    with closing(OsvOfflineDB(tmp_path / "osv.sqlite", http=http)) as db:
+        stats = db.ensure_fresh(["PyPI"])
+        assert stats[0].advisories == 1
+        assert stats[0].skipped == 2
 
 
 def test_query_without_version_returns_all(tmp_path: Path) -> None:
@@ -325,28 +325,28 @@ def test_failed_ingest_rolls_back_and_keeps_existing_advisories(
     the write lock) while the pipeline's warn-and-degrade carried on."""
     rec = _osv("GHSA-keep", "PyPI", "keptpkg", fixed="2.0")
     http = _ZipServingHttp({"PyPI/all.zip": _make_zip([rec])})
-    db = OsvOfflineDB(tmp_path / "osv.sqlite", http=http, ttl_seconds=0)
-    assert db.ensure_fresh(["PyPI"])
-    assert db.query("PyPI", "keptpkg", "1.0")
+    with closing(OsvOfflineDB(tmp_path / "osv.sqlite", http=http, ttl_seconds=0)) as db:
+        assert db.ensure_fresh(["PyPI"])
+        assert db.query("PyPI", "keptpkg", "1.0")
 
-    # Second refresh blows up after the DELETE (inside the insert
-    # loop) — simulate via a record that crashes _insert_record.
-    import pytest as _pytest
+        # Second refresh blows up after the DELETE (inside the insert
+        # loop) — simulate via a record that crashes _insert_record.
+        import pytest as _pytest
 
-    def _boom(*a, **k):
-        raise RuntimeError("simulated mid-ingest failure")
+        def _boom(*a, **k):
+            raise RuntimeError("simulated mid-ingest failure")
 
-    original = db._insert_record
-    db._insert_record = _boom               # type: ignore[method-assign]
-    try:
-        with _pytest.raises(RuntimeError):
-            db._ingest_ecosystem("PyPI", "PyPI")
-    finally:
-        db._insert_record = original        # type: ignore[method-assign]
+        original = db._insert_record
+        db._insert_record = _boom               # type: ignore[method-assign]
+        try:
+            with _pytest.raises(RuntimeError):
+                db._ingest_ecosystem("PyPI", "PyPI")
+        finally:
+            db._insert_record = original        # type: ignore[method-assign]
 
-    assert db._conn is not None
-    assert db._conn.in_transaction is False
-    assert db.query("PyPI", "keptpkg", "1.0")
+        assert db._conn is not None
+        assert db._conn.in_transaction is False
+        assert db.query("PyPI", "keptpkg", "1.0")
 
 
 def test_post_lock_freshness_recheck_failure_releases_the_lock(
@@ -360,18 +360,18 @@ def test_post_lock_freshness_recheck_failure_releases_the_lock(
 
     rec = _osv("GHSA-keep2", "PyPI", "keptpkg2", fixed="2.0")
     http = _ZipServingHttp({"PyPI/all.zip": _make_zip([rec])})
-    db = OsvOfflineDB(tmp_path / "osv.sqlite", http=http, ttl_seconds=0)
-    db._init_db()
+    with closing(OsvOfflineDB(tmp_path / "osv.sqlite", http=http, ttl_seconds=0)) as db:
+        db._init_db()
 
-    def _boom(eco):
-        raise RuntimeError("simulated corrupt ingest_meta")
+        def _boom(eco):
+            raise RuntimeError("simulated corrupt ingest_meta")
 
-    original = db._is_fresh
-    db._is_fresh = _boom                    # type: ignore[method-assign]
-    try:
-        with _pytest.raises(RuntimeError):
-            db._ingest_ecosystem("PyPI", "PyPI")
-    finally:
-        db._is_fresh = original             # type: ignore[method-assign]
-    assert db._conn is not None
-    assert db._conn.in_transaction is False
+        original = db._is_fresh
+        db._is_fresh = _boom                    # type: ignore[method-assign]
+        try:
+            with _pytest.raises(RuntimeError):
+                db._ingest_ecosystem("PyPI", "PyPI")
+        finally:
+            db._is_fresh = original             # type: ignore[method-assign]
+        assert db._conn is not None
+        assert db._conn.in_transaction is False
