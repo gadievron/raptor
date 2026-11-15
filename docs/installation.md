@@ -113,7 +113,7 @@ Mounting the release checkout selects the RAPTOR version; the image digest pins
 the tools environment separately. The `latest` image tag refers to that tools
 environment, not to a RAPTOR release. You can pull it with:
 ```bash
-docker pull docker.io/danielcuthbert/raptor:latest@sha256:43e43f725969ebabd0eaa55700a0344e2e9ef386f0ff7c07827b75f0206816ec
+docker pull docker.io/danielcuthbert/raptor:latest@sha256:2bd3d903c1cb45adaa1048f2ccdfed38bfef60aace6c5d5f3f1fb683c1cf666d
 ```
 
 or build it locally using the included `Dockerfile`:
@@ -148,7 +148,7 @@ To start the published image:
 ```bash
 docker run -it \
   -v "$(pwd):/workspaces/raptor" \
-  docker.io/danielcuthbert/raptor:latest@sha256:43e43f725969ebabd0eaa55700a0344e2e9ef386f0ff7c07827b75f0206816ec
+  docker.io/danielcuthbert/raptor:latest@sha256:2bd3d903c1cb45adaa1048f2ccdfed38bfef60aace6c5d5f3f1fb683c1cf666d
 ```
 
 To mount a target folder as well:
@@ -156,7 +156,7 @@ To mount a target folder as well:
 docker run -it \
   -v "$(pwd):/workspaces/raptor" \
   -v "/path/to/target-folder:/workspaces/target" \
-  docker.io/danielcuthbert/raptor:latest@sha256:43e43f725969ebabd0eaa55700a0344e2e9ef386f0ff7c07827b75f0206816ec
+  docker.io/danielcuthbert/raptor:latest@sha256:2bd3d903c1cb45adaa1048f2ccdfed38bfef60aace6c5d5f3f1fb683c1cf666d
 ```
 
 For a locally built image, replace the published image reference in these commands
