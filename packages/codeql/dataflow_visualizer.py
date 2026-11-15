@@ -107,7 +107,9 @@ class DataflowVisualizer:
         """
         Generate interactive HTML visualization.
 
-        Creates a self-contained HTML file with embedded D3.js visualization.
+        Embeds graph data and styles in the HTML and loads D3.js from an
+        external CDN for the interactive view. If the library cannot load,
+        the page displays an unavailable-library notice.
 
         Args:
             dataflow: DataflowPath object
