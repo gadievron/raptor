@@ -105,10 +105,11 @@ def _unique_file_paths(finding: Finding) -> Iterator[str]:
 def _describe_pool_completeness(*, file_count: int, truncated: bool) -> str:
     """Render the pool-completeness label the downstream LLM reads.
 
-    Distinguishes "we read every referenced file" from "we capped at
-    N files" so the LLM knows whether the absence of a candidate
-    reflects "no validator exists" or "we didn't look at the file
-    that defines it"."""
+    Counts the selected paths and discloses omissions from the file budget.
+    It does not certify successful or complete reads or extractions;
+    those losses are reported separately in ``extraction_failures``.
+    An empty candidate pool does not establish that no validator exists.
+    """
     if truncated:
         return f"scoped_to_first_{file_count}_files_truncated"
     if file_count == 0:
