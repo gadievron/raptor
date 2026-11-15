@@ -27,7 +27,7 @@ from core.analysis.sanitizer_cut_postpass import (  # noqa: E402
 from core.testing.treesitter import requires_ts  # noqa: E402
 
 #: Sink file whose line 6 is a getParameter call that flows through
-#: an encoder — a same-file trace anchored at line 6 suppresses.
+#: an encoder — a same-file trace at line 6 yields a context candidate.
 _SINK_JAVA = """import org.owasp.encoder.Encode;
 import javax.servlet.http.HttpServletRequest;
 import java.io.PrintWriter;
@@ -124,9 +124,9 @@ class TestCrossFileTraceRefused:
         assert "trace" not in stats["source_kind_counts"]
 
     @requires_ts("java")
-    def test_same_file_trace_still_suppresses(self, tmp_path):
-        # Two-direction: an intra-file trace anchored at the sink
-        # file's own source line keeps the pre-existing suppression.
+    def test_same_file_trace_retains_context_candidate(self, tmp_path):
+        # An intra-file trace still reaches evaluation at its exact source;
+        # unresolved HTML context prevents enforcement afterward.
         repo, sink, _, out = _setup(tmp_path)
         sarif_path = tmp_path / "scan.sarif"
         sarif_path.write_text(json.dumps(
@@ -134,9 +134,20 @@ class TestCrossFileTraceRefused:
         stats = run_postpass([sarif_path], repo, out)
         assert stats["examined"] == 1
         assert stats["source_kind_counts"].get("trace") == 1
-        assert stats["recorded_suppress"] == 1
+        assert stats["recorded_suppress"] == 0
+        assert stats["recorded_candidate"] == 1
+        assert stats["enforced"] == 0
         assert stats["refused_reasons"].get(
             "trace-source-cross-file") is None
+        records = [json.loads(line) for line in (out / "suppressions.jsonl").read_text().splitlines()]
+        assert len(records) == 1
+        record = records[0]
+        assert record["verdict"] == "sanitizer_candidate"
+        assert record["dropped"] is False and record["enforced"] is False
+        assert record["sink_arg"] == "safe" and record["witness_lines"] == [7]
+        assert record["bindings"]
+        assert all("html_text_or_quoted_attribute_sink_context_and_policy"
+                   in binding["unverified_source_contracts"] for binding in record["bindings"])
 
     @requires_ts("java")
     def test_line_only_trace_keeps_same_file_assumption(self, tmp_path):

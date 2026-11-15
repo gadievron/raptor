@@ -484,10 +484,14 @@ class TestGateEndToEnd:
         result = _java_gate(
             _JAVA_SRC, "handle", "out.println", "data", ["x"])
         assert not result.suppress
-        # The declared-local twin still earns the suppression.
+        # The local twin retains its value binding, without context proof.
         result2 = _java_gate(
             _JAVA_SRC, "local", "out.println", "data", ["x"])
-        assert result2.suppress
+        assert result2.verdict == "candidate_only" and not result2.suppress
+        assert result2.value_bound_bindings
+        assert all("html_text_or_quoted_attribute_sink_context_and_policy"
+                   in binding.unverified_source_contracts
+                   for binding in result2.value_bound_bindings)
 
     def test_python_global_rebinding_does_not_suppress(self):
         from core.analysis.sanitizer_cut import evaluate_finding
@@ -677,7 +681,7 @@ void handle(char *x) {
         # Recall control for the positional rule: a method-top
         # declarator's window spans the whole body, so a store after
         # it — past an intervening nested block — keeps local grade
-        # and the declared-local suppression.
+        # and the declared-local value binding.
         pytest.importorskip("tree_sitter_java")
         src = '''import org.owasp.encoder.Encode;
 public class T {
@@ -691,7 +695,11 @@ public class T {
 }
 '''
         result = _java_gate(src, "handle", "out.println", "data", ["x"])
-        assert result.suppress
+        assert result.verdict == "candidate_only" and not result.suppress
+        assert result.value_bound_bindings
+        assert all("html_text_or_quoted_attribute_sink_context_and_policy"
+                   in binding.unverified_source_contracts
+                   for binding in result.value_bound_bindings)
 
     def test_java_store_inside_nested_block_keeps_identity(self):
         # Builder-level twin: the store INSIDE a nested block is

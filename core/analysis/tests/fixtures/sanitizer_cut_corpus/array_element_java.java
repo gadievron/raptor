@@ -1,10 +1,10 @@
 import org.owasp.encoder.Encode;
 
 public class ArrayElement {
-    // Expected verdict: suppress (b19 element-exclusive sanitizer
-    // definitions — the tracked local array's only write to the
-    // consumed element is a catalog sanitizer call; the one-scalar-hop
-    // copy is exact because Java locals are unaliasable).
+    // Context-unverified candidate: the tracked array's only write
+    // to the consumed element is a catalogue encoder call. The scalar
+    // copy preserves that association, but HTML output context and
+    // attribute policy remain separate unverified premises.
     public void handle(String x, java.io.PrintWriter out) {
         String[] values = new String[2];
         values[0] = Encode.forHtml(x);

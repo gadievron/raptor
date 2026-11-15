@@ -26,7 +26,7 @@ from core.analysis.sanitizer_cut_postpass import run_postpass  # noqa: E402
 # Source-shaped line in an UNRELATED method + fully sanitized sink
 # method: pre-scoping this refused (resolver: no enclosing method for
 # the cross-method candidate); post-scoping the sink method's own
-# candidate suppresses and the unrelated one is scoped out.
+# candidate is evaluated and the unrelated one is scoped out.
 _CROSS_METHOD_SAFE = """import org.owasp.encoder.Encode;
 import javax.servlet.http.HttpServletRequest;
 import java.io.PrintWriter;
@@ -136,15 +136,30 @@ class TestMethodSpan:
 
 
 class TestCrossMethodScoping:
-    def test_cross_method_candidate_scoped_out_and_suppresses(self, tmp_path):
+    def test_cross_method_candidate_scoped_out_before_context_refusal(self, tmp_path):
         stats, out = _run(tmp_path, _CROSS_METHOD_SAFE, sink_line=12)
-        assert stats["recorded_suppress"] == 1
+        assert stats["recorded_suppress"] == 0
+        assert stats["recorded_candidate"] == 1
+        assert stats["enforced"] == 0
         assert stats["mechanism_counts"].get("cross-method:candidate-scoped", 0) >= 1
         assert (out / "suppressions.jsonl").exists()
+        record = json.loads((out / "suppressions.jsonl").read_text())
+        assert record["verdict"] == "sanitizer_candidate"
+        assert record["bindings"] and record["dropped"] is False
+        assert all("html_text_or_quoted_attribute_sink_context_and_policy"
+                   in binding["unverified_source_contracts"] for binding in record["bindings"])
 
     def test_params_entry_redundant_with_condition3(self, tmp_path):
         stats, out = _run(tmp_path, _PARAM_FED_SINK, sink_line=13)
         assert stats["recorded_suppress"] == 0
+        from core.analysis.cfg_builder_java import build_java_intraproc_cfg
+
+        cfg = build_java_intraproc_cfg(_PARAM_FED_SINK, "helper")
+        assert cfg is not None
+        mixed = next(node for node in cfg.nodes() if "msg" in node.defs)
+        assert {"safe", "data"} <= mixed.uses
+        sink = next(node for node in cfg.nodes() if "out.println" in node.calls)
+        assert "msg" in sink.uses
         # A candidate_only evidence record is fine; a suppress verdict
         # is the failure this test exists to catch.
         rec_file = out / "suppressions.jsonl"
@@ -193,10 +208,12 @@ public class Test {
 
 
 class TestScopeBeforeCap:
-    def test_source_dense_file_scopes_then_suppresses(self, tmp_path):
+    def test_source_dense_file_scopes_then_retains_context_candidate(self, tmp_path):
         stats, out = _run(tmp_path, _SOURCE_DENSE_SAFE, sink_line=15)
         assert stats["refused_reasons"].get("no-source-candidates", 0) == 0
-        assert stats["recorded_suppress"] == 1
+        assert stats["recorded_suppress"] == 0
+        assert stats["recorded_candidate"] == 1
+        assert stats["enforced"] == 0
         assert stats["mechanism_counts"].get(
             "cross-method:candidate-scoped", 0) >= 4
 
