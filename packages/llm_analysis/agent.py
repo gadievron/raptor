@@ -2422,9 +2422,21 @@ class AutonomousSecurityAgentV2:
         """
         # Path 1: reuse orchestrator's earlier validation if present.
         existing = (vuln.analysis or {}).get("dataflow_validation") or {}
+        if not isinstance(existing, dict):
+            existing = {}
         verdict = existing.get("verdict")
-        if verdict in ("confirmed", "refuted", "inconclusive"):
+        if verdict in ("confirmed", "inconclusive"):
             return verdict
+        if verdict == "refuted":
+            from packages.llm_analysis.verification_tier import mechanical_receipt
+
+            # This gate stamps a CodeQL refutation. Cached diagnostics or
+            # other proof mechanisms cannot acquire that producer identity.
+            if all(existing.get(key) is None or isinstance(existing.get(key), str)
+                   for key in ("method", "tier")) and mechanical_receipt(
+                {"analysis": {"dataflow_validation": existing}}, "false_positive",
+            ) == "codeql:dataflow":
+                return verdict
 
         # Path 2: fresh Tier 1 check against the run's CodeQL DBs.
         if getattr(self, "_codeql_dbs", None) is None:

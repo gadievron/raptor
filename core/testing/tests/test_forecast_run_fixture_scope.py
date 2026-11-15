@@ -9,6 +9,7 @@ import pytest
 from core.audit import run_lock
 from core.audit.tests import test_audit_forecast_cli as native
 from core.audit import codeql_provision
+from core.run import metadata
 
 
 @pytest.mark.parametrize("name", ["test_forecast_exits_zero_spend", "test_forecast_without_inventory_fails_loudly", "test_capped_run_skips_band"])
@@ -36,6 +37,9 @@ def test_actual_forecast_fixture_preserves_borrowed_resources(tmp_path, capsys, 
         loads.append((mod, mod.cmd_run))
         return mod
 
+    def ambient_ancestor():
+        raise AssertionError("forecast fixture probed ambient process ancestry")
+
     def unrelated(cmd, **kwargs):
         calls.append((cmd, kwargs))
         return token
@@ -43,6 +47,7 @@ def test_actual_forecast_fixture_preserves_borrowed_resources(tmp_path, capsys, 
     expected = pytest.raises(failure, match="owned body failure") if failure else nullcontext()
     try:
         with pytest.MonkeyPatch.context() as owner:
+            owner.setattr(metadata, "_find_claude_ancestor", ambient_ancestor)
             owner.setattr(native, "_load_cli", load)
             owner.setattr(subprocess, "run", unrelated)
             with expected:
@@ -76,6 +81,7 @@ def test_actual_forecast_fixture_preserves_borrowed_resources(tmp_path, capsys, 
             assert borrowed.fd == borrowed_fd and borrowed.held
             os.fstat(borrowed_fd)
             assert subprocess.run is unrelated
+            assert metadata._find_claude_ancestor is ambient_ancestor
     finally:
         for handle in tuple(registry):
             if all(handle is not b for b in before):

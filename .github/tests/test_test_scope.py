@@ -144,8 +144,12 @@ class TestIsTestFile:
     def test_test_suffix(self):
         assert is_test_file(Path("core/llm/client_test.py"))
 
-    def test_in_tests_dir(self):
-        assert is_test_file(Path("core/llm/tests/helpers.py"))
+    @pytest.mark.parametrize("name", [
+        "helpers.py", "_resume_setup_ownership.py", "_foreign_import_workers.py",
+        "__init__.py", "conftest.py", "_test_private.py",
+    ])
+    def test_non_collectible_modules_in_tests_dir(self, name):
+        assert not is_test_file(Path("core/llm/tests") / name)
 
     def test_not_test(self):
         assert not is_test_file(Path("core/llm/client.py"))
@@ -217,11 +221,11 @@ class TestPrivateWorkerDrivers:
         with pytest.raises(ValueError, match="private.*driver"):
             compute_tier_dispatch([str(changed)], repo)
 
-    def test_unregistered_worker_name_is_not_suppressed(self, repo):
+    def test_unregistered_worker_name_is_not_directly_collected(self, repo):
         other = Path("core/other/tests/worker_other_cases.py")
         (repo / other).write_text("def test_other_case(): pass\n")
         result = compute_tier_dispatch([str(other)], repo)
-        assert result["python"]["files"] == [other]
+        assert other not in result["python"]["files"]
 
     def test_private_cases_remain_test_inputs(self):
         assert is_test_file(self.WORKER)
@@ -234,6 +238,48 @@ class TestPrivateWorkerDrivers:
         result = scope.with_private_test_drivers(graph, repo)
         assert graph == {self.WORKER: {existing}}
         assert result[self.WORKER] == {existing, self.DRIVER}
+
+
+class TestHelperDriverDependencies:
+    def test_helper_imported_only_by_conftest_selects_owning_tests(self, tmp_path):
+        sources = {
+            "core/example/tests/helpers.py": "VALUE = 1\n",
+            "core/example/tests/conftest.py": "from core.example.tests import helpers\n",
+            "core/example/tests/test_driver.py": "def test_driver(): pass\n",
+            "core/example/tests/nested/other_test.py": "def test_nested(): pass\n",
+            "core/other/tests/test_unrelated.py": "def test_unrelated(): pass\n",
+        }
+        for name, source in sources.items():
+            target = tmp_path / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(source)
+        result = compute_tier_dispatch(["core/example/tests/helpers.py"], tmp_path)
+        assert result["python"]["files"] == [
+            Path("core/example/tests/nested/other_test.py"),
+            Path("core/example/tests/test_driver.py"),
+        ]
+        assert not _is_full_dispatch(result)
+
+    @pytest.mark.parametrize("changed", ["_worker.py", "_bridge.py", "helpers.py"])
+    def test_transitive_helpers_select_only_collectible_driver(self, tmp_path, changed):
+        root = Path("core/example/tests")
+        sources = {
+            "_worker.py": "raise RuntimeError('must never import helper')\n",
+            "_bridge.py": "from pathlib import Path\nWORKER = Path(__file__).with_name('_worker.py')\n",
+            "helpers.py": "from core.example.tests import _bridge\n",
+            "test_driver.py": "from core.example.tests import helpers\n",
+            "other_test.py": "def test_other(): pass\n",
+            "conftest.py": "# fixture graph input, not a pytest target\n",
+            "__init__.py": "",
+        }
+        for name, source in sources.items():
+            target = tmp_path / root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(source)
+        result = compute_tier_dispatch([str(root / changed)], tmp_path)
+        assert result["python"]["files"] == [root / "test_driver.py"]
+        full = compute_tier_dispatch(["pyproject.toml"], tmp_path)
+        assert full["python"]["files"] == [root / "other_test.py", root / "test_driver.py"]
 
 
 class TestFileInDir:

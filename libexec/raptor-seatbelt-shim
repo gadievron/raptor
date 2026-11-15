@@ -494,6 +494,18 @@ def main() -> int:
                 os.close(death_fd)
             except OSError:
                 pass
+        try:
+            os.setpgid(0, 0)
+        except OSError:
+            pass
+        # Report from the trusted child before handing control to exec.
+        # The watcher may not have run yet. Use the original owned status
+        # fd before remapping can close it or fail to establish fd 3.
+        if status_fd is not None:
+            try:
+                os.write(status_fd, b"G%d\n" % os.getpid())
+            except OSError:
+                pass
         if status_fd is not None:
             try:
                 if status_fd != _STATUS_CHILD_FD:
@@ -503,10 +515,6 @@ def main() -> int:
                     os.set_inheritable(_STATUS_CHILD_FD, True)
             except OSError:
                 pass
-        try:
-            os.setpgid(0, 0)
-        except OSError:
-            pass
         # Strip RAPTOR-internal markers so NOTHING crosses into the sandbox.
         # The trust marker authorizes THIS (unsandboxed) dispatch shim only —
         # it must not be visible to the sandboxed target. The fd markers are
@@ -604,29 +612,16 @@ def main() -> int:
         os._exit(125)
 
     child_holder["pid"] = child
-    # The watcher KEEPS its status write end: it is the reporting
-    # channel for the sandbox-group pid (G, below) and grant-pin
-    # violations (P). EOF promptness for the orchestrator is
-    # unchanged — it drains the pipe only after this shim exits (its
-    # communicate() waits on us), at which point every write-end copy
-    # is closed.
+    # The watcher KEEPS its status write end for grant-pin violations
+    # (P). The child reports its own group (G) before its exec.
+    # The orchestrator retains its existing post-wait status drain;
+    # the target trampoline closes the child's copy before target exec.
     # Mirror the child into its own pgrp from the parent side too, to close
     # the fork→setpgid race (whichever wins, the child leads group == child).
     try:
         os.setpgid(child, child)
     except OSError:
         pass
-    # Report the sandbox process-group leader to the orchestrator.
-    # Written before any target code can run, so a watcher killed
-    # later cannot have skipped it: the parent's backstop sweep uses
-    # it to killpg-attribute group members after this shim is gone
-    # (the ppid walk from a dead shim pid attributes nothing).
-    if status_fd is not None:
-        try:
-            os.write(status_fd, b"G%d\n" % child)
-        except OSError:
-            pass
-
     # Latest while-alive process-table snapshot, refreshed by the reap
     # loop below, plus the CUMULATIVE lineage ledger (see the sweep
     # block comment): "pids" maps every descendant ever attributed to

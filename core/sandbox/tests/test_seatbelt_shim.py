@@ -36,7 +36,7 @@ _READY_BYTE = b"K"
 
 def _drain(fd):
     """Read the status channel to EOF. The channel now carries the
-    watcher's ``G<pid>\n`` sandbox-group report (and ``P`` on a
+    shim child's ``G<pid>\n`` sandbox-group report (and ``P`` on a
     grant-pin violation) alongside the trampoline's readiness byte,
     so a single fixed-size read no longer captures the protocol."""
     data = b""
@@ -117,7 +117,7 @@ class TestSeatbeltShim:
         os.close(sr)
         os.close(dw)
         assert _READY_BYTE in data
-        # The watcher reports the sandbox process-group leader before
+        # The trusted shim child reports its process-group leader before
         # any target code runs — well-formed and plausible.
         import re as _re
         m = _re.search(rb"G(\d+)\n", data)

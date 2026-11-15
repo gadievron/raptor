@@ -148,7 +148,7 @@ SEATBELT_SHIM = str(
 #               stopped matching mid-run; the shim SIGKILLed the
 #               sandbox tree. Outranks K: the run is tainted even
 #               though setup succeeded.
-#   b"G<pid>\n" watcher shim — the sandbox process-group leader's pid,
+#   b"G<pid>\n" trusted shim child — the sandbox process-group leader's pid,
 #               reported so the parent's backstop sweep can attribute
 #               group members even after the shim itself is gone.
 _READY_BYTE = b"K"
@@ -157,7 +157,7 @@ _PIN_TAMPER_BYTE = b"P"
 
 def _parse_group_report(data: bytes) -> int | None:
     """Sandbox process-group leader pid from the status-channel bytes
-    (the watcher's ``G<pid>\\n`` report), or None when absent."""
+    (the shim's ``G<pid>\\n`` report), or None when absent."""
     m = re.search(rb"G(\d{1,9})\n", data)
     return int(m.group(1)) if m else None
 
@@ -1625,13 +1625,6 @@ def run_sandboxed(cmd: list[str], *,
         except BaseException as failure:
             _teardown_shim_tree(_process, failure)
             raise
-        # Successful communicate has already reaped the child. Retire streams
-        # without an implicit abort-time Popen context owner.
-        _retire_parent_resources(
-            *(stream.close for stream in (_process.stdout, _process.stderr, _process.stdin)
-              if stream is not None),
-            primary_error=None,
-        )
         # Post-wait descendant sweep on the NORMAL-completion path
         # too — pre-fix, normal completion just reaped the shim and a
         # fork+setsid descendant survived the run outright. By this
@@ -1645,15 +1638,24 @@ def run_sandboxed(cmd: list[str], *,
         # target code ran, so a shim killed later cannot have skipped
         # it): sandbox process-group members stay attributable even
         # with the shim gone. Best-effort.
-        try:
-            _grp = _parse_group_report(_harvest_status())
-            _sweep_descendants(_process.pid,
-                               extra_pgids=(_grp,) if _grp else ())
-        except Exception:
-            logger.warning(
-                "macOS sandbox: post-run descendant sweep failed",
-                exc_info=True,
-            )
+        def _sweep_after_wait() -> None:
+            try:
+                _grp = _parse_group_report(_harvest_status())
+                _sweep_descendants(_process.pid,
+                                   extra_pgids=(_grp,) if _grp else ())
+            except Exception:
+                logger.warning(
+                    "macOS sandbox: post-run descendant sweep failed",
+                    exc_info=True,
+                )
+        # Successful communicate has already reaped the child. Attempt the
+        # descendant backstop even if a stream owner fails to retire.
+        _retire_parent_resources(
+            *(stream.close for stream in (_process.stdout, _process.stderr, _process.stdin)
+              if stream is not None),
+            _sweep_after_wait,
+            primary_error=None,
+        )
         result = subprocess.CompletedProcess(
             sandbox_cmd, _retcode, _stdout, _stderr,  # type: ignore[arg-type]
         )

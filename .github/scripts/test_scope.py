@@ -384,21 +384,17 @@ def expand_conftest(changed_py: set[Path], all_py: list[Path]) -> set[Path]:
 
 
 def is_test_file(path: Path) -> bool:
-    """Heuristic: a .py file is a test if its name starts with test_ or
-    ends with _test, or it lives under a tests/ directory.
+    """Match pytest's default module names, plus registered private cases.
 
-    Files under ``fixtures/`` are excluded — they are test data (e.g.
-    Flask apps) that pytest must not collect as test modules.
+    Directory membership alone does not make a Python module collectible:
+    helpers may parse command-line arguments or install process-local guards.
+    They remain import-graph inputs; registered private cases execute through
+    ``resolve_test_drivers``. Fixture trees remain data, even with test names.
     """
-    if not path.name.endswith(".py"):
+    if path.suffix != ".py" or "fixtures" in path.parts:
         return False
-    parts = path.parts
-    if "fixtures" in parts:
-        return False
-    name = path.stem
-    if name.startswith("test_") or name.endswith("_test"):
-        return True
-    return "tests/" in str(path) or "/tests/" in str(path)
+    return (path.stem.startswith("test_") or path.stem.endswith("_test")
+            or path in PRIVATE_TEST_DRIVERS)
 
 
 def file_in_dir(path: Path, directory: str) -> bool:
@@ -932,6 +928,16 @@ def compute_tier_dispatch(
         if path.startswith(("bin/", "libexec/"))
         for literal in (path, Path(path).name)
     }
+    # Standalone test helpers are often launched by a literal filename rather
+    # than imported. Keep those execution dependencies in the same AST graph,
+    # without ever importing or directly collecting the helper. Basename
+    # collisions conservatively select every possible owning driver.
+    helper_paths = [path for path in all_py if "tests" in path.parts
+                    and not is_test_file(path)
+                    and path.name not in {"__init__.py", "conftest.py"}]
+    helper_literals = {literal: set() for path in helper_paths
+                       for literal in (str(path), path.name)}
+    references = {**script_literals, **helper_literals}
     graph_seeds = changed_py.intersection(all_py)
     if graph_seeds or resource_files or script_literals:
         print(f"Building import graph for {total} Python files...")
@@ -949,13 +955,13 @@ def compute_tier_dispatch(
 
         reverse_graph, parse_failures = build_graph(
             all_py, repo, on_divisions=collect_fixture_dirs,
-            literal_references=script_literals or None,
+            literal_references=references or None,
         )
-    elif script_literals:
+    elif references and (graph_seeds or script_literals):
         # Collect references during the existing AST walk: reparsing the tree
         # here costs tens of seconds on this repository's complete source set.
         reverse_graph, parse_failures = build_graph(
-            all_py, repo, literal_references=script_literals,
+            all_py, repo, literal_references=references,
         )
     elif graph_seeds:
         reverse_graph, parse_failures = build_graph(all_py, repo)
@@ -963,6 +969,12 @@ def compute_tier_dispatch(
         # Metadata, tier-owned data and Python paths outside this graph have
         # no graph seeds. Tier-specific extra triggers below still run.
         reverse_graph, parse_failures = {}, 0
+    for helper in helper_paths:
+        consumers = references.get(str(helper), set()) | references.get(helper.name, set())
+        if consumers:
+            reverse_graph[helper] = set(reverse_graph.get(helper, ())) | consumers
+    for literal in script_literals:
+        script_literals[literal] = references[literal]
     reverse_graph = with_private_test_drivers(reverse_graph, repo)
     if parse_failures:
         print(f"Import graph incomplete ({parse_failures} parse failures) — full tier dispatch")
@@ -1061,6 +1073,9 @@ def compute_tier_dispatch(
         matrix_drivers.add(matrix_driver)
 
     closure = transitive_dependents(changed_py | matrix_drivers, reverse_graph)
+    # A fixture's imported helper affects the same tests as an edit to the
+    # conftest itself. Conftests are graph nodes, never executable targets.
+    closure |= expand_conftest(closure, all_py)
 
     pct = f"{len(closure) / total * 100:.0f}%" if total else "?"
     print(f"Closure: {len(closure)}/{total} files ({pct})")
