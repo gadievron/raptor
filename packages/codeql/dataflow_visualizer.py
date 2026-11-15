@@ -24,7 +24,7 @@ if __name__ == "__main__":
 from core.atomic_fs import write_text_atomically
 from core.llm.context_window import DATAFLOW_STEP_CONTEXT_LINES
 from core.logging import get_logger
-from core.source import read_text_capped
+from core.source import read_contained_text_capped
 from core.source.lines import split_lines
 from packages.codeql.dataflow_validator import DataflowPath
 
@@ -161,8 +161,8 @@ class DataflowVisualizer:
         })
         edges.append({'source': sink_id - 1, 'target': sink_id})
 
-        # Read source code for each location. In some super niche cases, this might be a vulnerability, albeit very unlikely and low impact.
-        # Anyhoo, we fix it by ensuring the file path is within the repo.
+        # Resolve for distinct outside-root messaging; the anchored reader
+        # checks containment again when opening each source file.
         for node in nodes:
             try:
                 # Validate file path to prevent directory traversal
@@ -184,7 +184,9 @@ class DataflowVisualizer:
                     # located in a repo's multi-hundred-MB
                     # generated/blob file was pulled into memory
                     # each time.
-                    got = read_text_capped(file_path, newline="")
+                    got = read_contained_text_capped(
+                        repo_resolved, file_path, newline="",
+                    )
                     if got is None:
                         node['code_context'] = (
                             f"Error reading file: {node['file']}"
