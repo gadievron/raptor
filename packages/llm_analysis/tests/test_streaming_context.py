@@ -4,7 +4,7 @@ from itertools import product
 
 import pytest
 
-from core.source import read_text_capped, split_lines
+from core.source import read_contained_text_capped, read_text_capped, split_lines
 from core.source.windows import read_text_line_window_capped
 from packages.llm_analysis import agent
 from packages.llm_analysis.agent import VulnerabilityContext
@@ -35,9 +35,9 @@ def test_finding_and_dataflow_differential(tmp_path, monkeypatch, raw):
     path.write_bytes(raw)
     for cap in (0, 1, 3, 5, 10, 100):
         monkeypatch.setattr(agent, 'read_text_line_window_capped',
-            lambda path, start, end: read_text_line_window_capped(path, start, end, max_chars=cap))
-        monkeypatch.setattr(agent, 'read_text_capped',
-            lambda path, **kw: read_text_capped(path, cap, **kw))
+            lambda path, start, end, **kw: read_text_line_window_capped(path, start, end, max_chars=cap, **kw))
+        monkeypatch.setattr(agent, 'read_contained_text_capped',
+            lambda root, path, **kw: read_contained_text_capped(root, path, max_chars=cap, **kw))
         content, _ = read_text_capped(path, cap, newline='')
         lines = split_lines(content)
         ctx = make_context(tmp_path)
