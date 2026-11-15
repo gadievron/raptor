@@ -1,12 +1,12 @@
 // use_after_unlock.cocci — Find object accesses after a lock release
 // where the lock was the only thing pinning the object's lifetime.
 //
-// Only the kernel-IPC variant is active. ipc_lock()/ipc_unlock()
-// carry a lifetime convention the pattern can rely on: the object is
-// looked up under RCU and the per-object lock is what keeps it alive
-// against RCU-deferred freeing, so ANY member access after
-// ipc_unlock(obj) races a concurrent IPC_RMID (the historical
-// exploitable sem/shm/msg use-after-free class).
+// Only the kernel-IPC variant is active. An ipc_unlock followed by a
+// member access is a lifetime-review candidate associated with the
+// historical sem/shm/msg removal race class. This local pattern does not
+// establish lock acquisition, stable object identity, absence of lock
+// reacquisition or other RCU/reference protection, or concurrent removal.
+// Review those caller-specific facts before concluding a use-after-free.
 //
 // Generic spin_lock/mutex_lock legs are intentionally absent. For an
 // ordinary lock there is no static way to tell field-protection (the
@@ -43,5 +43,5 @@ for _p in p_use:
     _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
           "line_end": int(_p.line_end), "col_end": int(_p.column_end),
           "rule": "use_after_unlock",
-          "message": "'%s->%s' accessed after ipc_unlock — use-after-free risk" % (obj, fld)}
+          "message": "Candidate: '%s->%s' accessed after ipc_unlock; review object identity, lock reacquisition, lifetime protection and concurrent removal before concluding use-after-free" % (obj, fld)}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
