@@ -25,6 +25,8 @@ class EnvelopeOnly:
     trailing_bytes: int
     table_offsets: tuple[int, ...]
     index_spans: tuple[tuple[int, int], ...]
+    root_inode: int
+    id_count: int
     namespace_complete: bool = field(default=False, init=False)
     authenticated_build: bool = field(default=False, init=False)
     observed_child_context: bool = field(default=False, init=False)
@@ -106,12 +108,16 @@ def inspect_header(header, artifact_bytes, *, max_artifact_bytes, max_inodes, ma
         boundary = fragment_table
     if directory_table + 2 > boundary:
         return EnvelopeRefusal('directory region lacks metadata framing')
+    # Kernel SQUASHFS_INODE_BLK uses a 32-bit block. Refuse high bits
+    # rather than silently interpreting a different Python block address.
+    if root_inode >> 48:
+        return EnvelopeRefusal('unsupported root inode reference bits')
     if (root_inode & 0xffff >= 8192
             or inode_table + (root_inode >> 16) + 2 > directory_table):
         return EnvelopeRefusal('root inode outside declared inode region')
     return EnvelopeOnly(inodes, block_bytes, compression, used, artifact_bytes - used,
                         (inode_table, directory_table, fragment_table, lookup_table,
-                         id_table, xattr_table), tuple(spans))
+                         id_table, xattr_table), tuple(spans), root_inode, ids)
 
 
 
