@@ -11,9 +11,9 @@ rules:
   # No pattern-sanitizers on purpose: the idioms that genuinely establish
   # trust (allowlist validation, canonicalisation-then-check) are
   # branch-shaped and cannot be soundly expressed as taint-mode sanitizers
-  # without name-guessing false-negative risk. Guard adequacy is adjudicated
-  # downstream (Z3 prescreen / LLM validation), matching the SSRF rules'
-  # posture.
+  # without name-guessing false-negative risk. Guard adequacy still requires
+  # review of the original source and its consumers. Conditional prescreen
+  # models, where available, are diagnostics rather than source-level proof.
   # ---------------------------------------------------------------------------
   - id: raptor.java.trust-boundary-session-write
     message: >-
