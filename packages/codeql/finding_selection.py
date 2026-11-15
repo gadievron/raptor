@@ -174,6 +174,12 @@ def _scan_file(
             continue
         second_result = next(results, None)
         prefix = (first_result,) if second_result is None else (first_result, second_result)
+        referenced_results = (
+            result for result in run["results"] if isinstance(result, dict)
+            and any(key in result for key in ("ruleId", "ruleIndex", "rule"))
+        )
+        next(referenced_results, None)
+        multiple_references = next(referenced_results, None) is not None
         run_key: str | None = None
         rule_owners: dict[int, dict] = {}
         context_keys: dict[tuple[str, int], str] = {}
@@ -182,9 +188,9 @@ def _scan_file(
         def resolve_rule(result: dict) -> dict:
             nonlocal rule_resolver
             index = result.get("ruleIndex")
-            # A single result cannot amortize an ID index. Ordinary indexed
-            # references already validate in constant time without a cache.
-            if (second_result is None or ("rule" not in result
+            # A single reference cannot amortize an ID index. Reference-free
+            # candidates keep their existing counting and ranking behavior.
+            if (not multiple_references or ("rule" not in result
                     and type(index) is int and index >= 0)):
                 return get_result_rule(run, result)
             if rule_resolver is None:
