@@ -122,6 +122,9 @@ class VulnerabilityAnalysis:
         for name in ("reasoning", "attack_scenario"):
             if not isinstance(getattr(self, name), str):
                 raise ValueError(f"{name} must be a string")
+        if (not isinstance(self.prerequisites, list)
+                or any(not isinstance(item, str) for item in self.prerequisites)):
+            raise ValueError("prerequisites must be a list of strings")
         for name, upper in (("exploitability_score", 1), ("cvss_estimate", 10)):
             value = getattr(self, name)
             if (isinstance(value, bool) or not isinstance(value, (int, float))
