@@ -389,3 +389,4 @@ for (file, function, start), events in _packet_evidence.items():
                       "rule": "packet_length_inverted_guard",
                       "message": "Packet-derived length is rejected when smaller than the skb-derived budget, then reaches an skb range consumer. Review the upper-bound check and buffer window."}
             sys.stderr.write("COCCIRESULT:" + json.dumps(result) + "\n")
+            break  # This guard location has its sole report.
