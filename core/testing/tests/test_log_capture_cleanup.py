@@ -41,36 +41,37 @@ def private_logger():
 def test_class_capture_cleanup(module_name, class_name, stage, tmp_path, monkeypatch):
     module = import_module(module_name)
     logger, borrowed = private_logger()
+    case = None
     handler = logging.FileHandler(tmp_path / "owned.log")
-    stream = handler.stream
-    wrapper = SimpleNamespace(logger=logger)
-    if module_name.endswith("test_security_event"):
-        monkeypatch.setattr(
-            module, "core_logging", SimpleNamespace(RaptorLogger=lambda: wrapper)
-        )
-    else:
-        monkeypatch.setattr(module, "RaptorLogger", lambda: wrapper)
-    monkeypatch.setattr(module, "_CapturingHandler", lambda: handler)
-    add = logger.addHandler
-
-    def attach(item):
-        add(item)
-        if stage == "attach-error":
-            raise OSError("attachment interrupted")
-        if stage == "attach-interrupt":
-            raise KeyboardInterrupt("attachment interrupted")
-
-    monkeypatch.setattr(logger, "addHandler", attach)
-
-    class Controlled(getattr(module, class_name)):
-        def runTest(self):
-            logger.warning("owned message")
-            if stage == "body-error":
-                raise RuntimeError("body failed")
-
-    case = Controlled()
-    result = unittest.TestResult()
     try:
+        stream = handler.stream
+        wrapper = SimpleNamespace(logger=logger)
+        if module_name.endswith("test_security_event"):
+            monkeypatch.setattr(
+                module, "core_logging", SimpleNamespace(RaptorLogger=lambda: wrapper)
+            )
+        else:
+            monkeypatch.setattr(module, "RaptorLogger", lambda: wrapper)
+        monkeypatch.setattr(module, "_CapturingHandler", lambda: handler)
+        add = logger.addHandler
+
+        def attach(item):
+            add(item)
+            if stage == "attach-error":
+                raise OSError("attachment interrupted")
+            if stage == "attach-interrupt":
+                raise KeyboardInterrupt("attachment interrupted")
+
+        monkeypatch.setattr(logger, "addHandler", attach)
+
+        class Controlled(getattr(module, class_name)):
+            def runTest(self):
+                logger.warning("owned message")
+                if stage == "body-error":
+                    raise RuntimeError("body failed")
+
+        case = Controlled()
+        result = unittest.TestResult()
         if stage == "attach-interrupt":
             with pytest.raises(KeyboardInterrupt, match="attachment interrupted"):
                 case.run(result)
@@ -84,7 +85,8 @@ def test_class_capture_cleanup(module_name, class_name, stage, tmp_path, monkeyp
         if stage in {"normal", "body-error"}:
             assert (tmp_path / "owned.log").read_text().strip() == "owned message"
     finally:
-        case.doCleanups()
+        if case is not None:
+            case.doCleanups()
         logger.removeHandler(handler)
         handler.close()
         borrowed.close()
