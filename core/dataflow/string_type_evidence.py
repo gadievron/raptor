@@ -38,11 +38,12 @@ class DefaultCallFormEvidence:
 
 
 def _default_positional_call(tree: ast.AST, call_line: int, library_call: str) -> ast.Call | None:
-    from core.dataflow.source_identity import _parts
+    from core.dataflow.source_identity import canonical_python_call_spans, python_call_span
 
+    spans = canonical_python_call_spans(tree, call_line, frozenset({library_call}))
     calls = [node for node in ast.walk(tree)
              if isinstance(node, ast.Call) and node.lineno == call_line
-             and _parts(node.func) == tuple(library_call.split("."))]
+             and python_call_span(node) in spans]
     if (len(calls) != 1 or len(calls[0].args) != 1 or calls[0].keywords
             or isinstance(calls[0].args[0], ast.Starred)):
         return None
