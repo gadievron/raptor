@@ -23,7 +23,7 @@ import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from core.sarif.parser import get_run_execution_diagnostics, load_sarif
+from core.sarif.parser import _coerce_line, get_run_execution_diagnostics, load_sarif
 from core.source.lines import splitlines_prefix
 from core.config import RaptorConfig
 from packages.codeql.tunables import CodeQLTunables
@@ -866,7 +866,10 @@ def _parse_sarif(sarif_path: Path) -> list[dict] | None:
                 if locs and isinstance(locs[0], dict):
                     phys = locs[0].get("physicalLocation", {})
                     file = (phys.get("artifactLocation", {}) or {}).get("uri", "")
-                    line = int((phys.get("region", {}) or {}).get("startLine", 0))
+                    parsed_line = _coerce_line((phys.get("region", {}) or {}).get("startLine", 0))
+                    if parsed_line is None:
+                        raise ValueError("SARIF startLine must be an integer when present")
+                    line = parsed_line
                 if not isinstance(file, str):
                     raise ValueError("SARIF artifact URI must be a string when present")
                 matches.append({
