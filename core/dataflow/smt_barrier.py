@@ -1747,9 +1747,11 @@ def _python_match_dispatch(node: ast.AST) -> bool:
 def _python_possible_call(node: ast.AST) -> bool:
     """Negative effect boundary; this never certifies purity or a callee.
 
-    Deleting a last reference can run finalisation code that replaces an
-    externally owned slot, even when the deleted name is unrelated.
+    Deleting or overwriting a last reference can run finalisation code
+    that replaces an externally owned slot, even for an unrelated name.
     """
+    if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+        return True
     return (_python_operator_dispatch(node) or _python_iteration_dispatch(node)
             or _python_unpack_assignment(node) or _python_unpack_load(node)
             or _python_collection_key_dispatch(node) or _python_match_dispatch(node)) or isinstance(
@@ -2946,7 +2948,9 @@ def _python_chain_reaches_sink(
                         chain.discard(var)
         if class_decls is None and not _python_unpack_assignment(node) and (
             _python_suspension(node)
-            or (_python_possible_call(node) and validator_line < node.lineno < sink_line)
+            or (_python_possible_call(node)
+                and not isinstance(node, (ast.Assign, ast.AnnAssign))
+                and validator_line < node.lineno < sink_line)
             or (_python_evaluation_dispatch(node) and validator_line < node.lineno <= sink_line)
         ):
             # A call or suspension can preserve a captured local value,
@@ -3030,6 +3034,13 @@ def _python_chain_reaches_sink(
         external_slot_seen |= any(
             not _python_name_has_local_slot(scope_root, var) for var in chain
         )
+        # Assignment reads its RHS before releasing the previous target value.
+        # Preserve captured locals, then expire externally owned name slots
+        # that a finalizer could have replaced during the store.
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            for var in list(chain):
+                if not _python_name_has_local_slot(scope_root, var):
+                    chain.discard(var)
         if _python_unpack_assignment(node):
             # RHS fields were captured before target unpacking. Keep
             # their new local aliases, but expire shared slots that the
@@ -3054,6 +3065,7 @@ def _python_chain_reaches_sink(
         }
         if any(
             node.lineno == validator_line and node not in certified_nodes
+            and not isinstance(node, (ast.Assign, ast.AnnAssign))
             and _python_possible_call(node)
             for node in _walk_same_scope(scope_root)
             if hasattr(node, "lineno")
