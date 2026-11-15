@@ -111,3 +111,33 @@ def test_definition_name_release_external_slot(tmp_path):
         result = sb.try_tier0(fix_diff="+" + guard + "\n", repo_root=tmp_path,
                               sink_uri="app.py", sink_line=len(source.splitlines()), sink_class="xss")
         assert result.status is (sb.Tier0Status.NOT_APPLICABLE if shared else sb.Tier0Status.SOUND), (shared, seen, events, result)
+
+
+def test_exception_target_release_external_slot(tmp_path):
+    import platform
+
+    if platform.python_implementation() != "CPython":
+        pytest.skip("owned last-reference timing control requires CPython")
+    guard = '    if not re.fullmatch(r"[a-z]+", safe): return'
+    for shared, capture, grouped in (
+        (shared, capture, grouped) for shared in (False, True)
+        for capture in ("direct", "before", "after") for grouped in (False, True)
+    ):
+        handler = "except* NameError" if grouped else "except NameError"
+        source = ("import re\nsafe = 'abc'\nclass Trigger:\n    def __del__(self):\n        global safe\n        safe = '<raw marker>'\n        events.append('finalized')\ndef process():\n"
+                  + ("    global safe\n" if shared else "    safe = 'abc'\n")
+                  + "    trigger = Trigger()\n" + guard
+                  + ("\n    alias = safe" if capture == "before" else "")
+                  + "\n    try:\n        owned_missing_name\n    " + handler + " as trigger:\n        pass\n"
+                  + ("    alias = safe\n" if capture == "after" else "")
+                  + "    sink(" + ("safe" if capture == "direct" else "alias") + ")\n")
+        seen, events = [], []
+        namespace = {"sink": seen.append, "events": events}
+        exec(compile(source, "owned-exception-target.py", "exec"), namespace)
+        namespace["process"]()
+        assert events == ["finalized"]
+        assert seen == (["<raw marker>"] if shared and capture != "before" else ["abc"])
+        (tmp_path / "app.py").write_text(source)
+        result = sb.try_tier0(fix_diff="+" + guard + "\n", repo_root=tmp_path,
+                              sink_uri="app.py", sink_line=len(source.splitlines()), sink_class="xss")
+        assert result.status is (sb.Tier0Status.NOT_APPLICABLE if shared and capture != "before" else sb.Tier0Status.SOUND), (shared, seen, events, result)
