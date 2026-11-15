@@ -60,6 +60,8 @@ from numbers import Number
 from pathlib import Path
 from collections.abc import Iterable, Mapping, Sequence
 
+import yaml
+
 from core.evidence import EvidenceTier, TIER_RANK
 
 SCHEMA_VERSION = 1
@@ -573,6 +575,83 @@ def _cells(row: ModelRow, language: str) -> list:
 _DEFAULT_PACK_PREFIX = "raptor/learned-models"
 
 
+class _PackIdentityLoader(yaml.SafeLoader):
+    """Read manifest structure while refusing YAML alias graphs."""
+
+    def compose_node(self, parent, index):  # type: ignore[no-untyped-def]
+        if self.check_event(yaml.events.AliasEvent):
+            raise yaml.YAMLError("pack identity aliases are unsupported")
+        return super().compose_node(parent, index)
+
+
+def _require_pack_destination_identity(pack_dir: Path, name: str, language: str) -> None:
+    """Reuse only empty directories or manifests naming the same logical pack."""
+    if pack_dir.is_symlink():
+        raise ValueError(f"cannot reuse pack destination {pack_dir}: linked destination")
+    if not pack_dir.exists():
+        return
+    if not pack_dir.is_dir():
+        raise ValueError(f"cannot reuse pack destination {pack_dir}: not a directory")
+    models = pack_dir / "models"
+    if models.is_symlink():
+        raise ValueError(f"cannot reuse pack destination {pack_dir}: linked models directory")
+    if models.exists() and not models.is_dir():
+        raise ValueError(f"cannot reuse pack destination {pack_dir}: models is not a directory")
+    model = models / f"{language}.model.yml"
+    if model.is_symlink():
+        raise ValueError(f"cannot reuse pack destination {pack_dir}: linked model file")
+    if model.exists() and not model.is_file():
+        raise ValueError(f"cannot reuse pack destination {pack_dir}: model is not a file")
+    manifest = pack_dir / "codeql-pack.yml"
+    if manifest.is_symlink():
+        raise ValueError(f"cannot reuse pack destination {pack_dir}: linked manifest")
+    if manifest.exists() and not manifest.is_file():
+        raise ValueError(f"cannot reuse pack destination {pack_dir}: manifest is not a file")
+    try:
+        text = manifest.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        if any(pack_dir.iterdir()):
+            raise ValueError(
+                f"cannot reuse pack destination {pack_dir}: populated without a manifest"
+            ) from exc
+        return
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(
+            f"cannot reuse pack destination {pack_dir}: manifest unreadable"
+        ) from exc
+    try:
+        document = yaml.compose(text, Loader=_PackIdentityLoader)
+    except (yaml.YAMLError, RecursionError) as exc:
+        raise ValueError(
+            f"cannot reuse pack destination {pack_dir}: malformed manifest"
+        ) from exc
+    if not isinstance(document, yaml.nodes.MappingNode) or document.tag != "tag:yaml.org,2002:map":
+        raise ValueError(f"cannot reuse pack destination {pack_dir}: unsupported manifest")
+    fields = {}
+    for key, value in document.value:
+        if (
+            not isinstance(key, yaml.nodes.ScalarNode)
+            or key.tag != "tag:yaml.org,2002:str"
+            or key.value in fields
+        ):
+            raise ValueError(
+                f"cannot reuse pack destination {pack_dir}: ambiguous manifest keys"
+            )
+        fields[key.value] = value
+    identity = fields.get("name")
+    if (
+        not isinstance(identity, yaml.nodes.ScalarNode)
+        or identity.tag != "tag:yaml.org,2002:str"
+        or re.fullmatch(r"[a-z][\w-]*/[a-z][\w-]*", identity.value) is None
+    ):
+        raise ValueError(f"cannot reuse pack destination {pack_dir}: unsupported manifest name")
+    if identity.value != name:
+        raise ValueError(
+            f"cannot reuse pack destination {pack_dir}: "
+            f"manifest names {identity.value!r}, requested {name!r}"
+        )
+
+
 def write_extension_pack(
     rows: Iterable[ModelRow],
     *,
@@ -589,6 +668,14 @@ def write_extension_pack(
     row that fails the provenance gate or a cell grammar lands in
     ``rejected`` with a reason — check ``rows_written`` before running
     an augmented analysis.
+
+    Existing populated destinations must have a readable mapping manifest
+    with a single text name identifying this same logical pack. Conflicting
+    or unsupported manifests are refused before model files are written;
+    genuinely new destinations and existing empty directories are allowed.
+    Named pack-directory, manifest, models-directory and model-file symlinks
+    and YAML aliases are not supported for reuse. Operator-selected output-root aliases remain
+    supported; this identity check does not provide filesystem confinement.
 
     Raises :class:`ValueError` for unsupported languages (unverified
     row shapes are never emitted speculatively) and for a
@@ -623,6 +710,7 @@ def write_extension_pack(
         )
 
     pack_dir = Path(out_dir) / name.replace("/", "-")
+    _require_pack_destination_identity(pack_dir, name, language)
     models_dir = pack_dir / "models"
     models_dir.mkdir(parents=True, exist_ok=True)
 
