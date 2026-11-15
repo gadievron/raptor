@@ -1356,11 +1356,14 @@ def _validate_one_hypothesis(
       "prebuilt"               — Tier 1 produced a definitive verdict
       "prebuilt-inconclusive"  — Tier 1 inconclusive, deep_validate=False
                                  (no Tier 2 attempted)
+      "skipped-deep"           — no prebuilt answer, deeper tiers disabled
       "template"               — Tier 2 succeeded with LLM-filled template
       "retry"                  — Tier 3 succeeded after >=1 retry
+      "template-failed"        — template compilation retries exhausted
       "fallback"               — fell through to legacy generic validate()
 
-    The tier label is metric-only; the verdict is unchanged regardless.
+    The tier label identifies premise provenance for downstream authority
+    checks as well as telemetry. It does not alter the verdict returned here.
     """
     language = _finding_language(finding)
     cwe = (hypothesis.cwe or finding.get("cwe_id") or "").upper().strip()
