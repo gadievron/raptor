@@ -1,6 +1,7 @@
 """Initial source panels retain original live input bindings through publication."""
 from functools import wraps
 import json
+from threading import Barrier, Lock
 
 import pytest
 
@@ -31,6 +32,8 @@ def test_fresh_initial_source_panel_keeps_original_scopes_through_actual_publica
     checklist = {"files": [{"path": "unit.c", "items": [dict(gap)]}]}
     (out / "checklist.json").write_text(json.dumps(checklist))
     calls, samples, acknowledgements, proposed = [], [], [], []
+    captured = Barrier(2)
+    sample_lock = Lock()
 
     class Client:
         _attempt_admission_protocol = 1
@@ -42,6 +45,11 @@ def test_fresh_initial_source_panel_keeps_original_scopes_through_actual_publica
         def generate_structured(self, prompt, schema, **kwargs):
             assert kwargs.pop("accounting_attempt_admission")() is True
             calls.append(prompt)
+            # Both parallel samples must capture the original input before
+            # either observer rewrites it. Otherwise this tests capture during
+            # a write instead of retaining an already captured stale scope.
+            if change == "rewrite_restore":
+                captured.wait(timeout=10)
             return StructuredResponse(result={"status": "clean", "body": "Owned fresh proposal",
                 "reading_list": [], "language_reference_requests": []}, raw="", cost=.125, model="scripted")
 
@@ -54,11 +62,12 @@ def test_fresh_initial_source_panel_keeps_original_scopes_through_actual_publica
             @wraps(wrapped)
             def observed(*args, **kwargs):
                 outcome = wrapped(*args, **kwargs)
-                if not any(outcome is prior for prior in samples):
-                    samples.append(outcome)
-                    if len(samples) == 1 and change == "rewrite_restore":
-                        (target / "unit.c").write_text(source + "/* owned between-sample change */\n")
-                        (target / "unit.c").write_text(source)
+                with sample_lock:
+                    if not any(outcome is prior for prior in samples):
+                        samples.append(outcome)
+                        if len(samples) == 1 and change == "rewrite_restore":
+                            (target / "unit.c").write_text(source + "/* owned between-sample change */\n")
+                            (target / "unit.c").write_text(source)
                 return outcome
 
             observed._owned_panel_observer = self
@@ -119,6 +128,7 @@ def test_fresh_initial_source_panel_keeps_original_scopes_through_actual_publica
             assert result.outcomes == [final] and not reviewed
             assert result.clean == 0 and result.errors == 1 and len(result.publication_failures) == 1
     finally:
+        captured.abort()
         runtime.close("test_complete")
 
 
