@@ -1243,7 +1243,7 @@ def _validator_in_branch(
             elif isinstance(stmt, _TRY_NODES):
                 # Else is skipped when a body exception is handled. It
                 # cannot establish a validator for a sink outside else.
-                if _spans(stmt.orelse, target) and not _spans(stmt.orelse, sink_line):
+                if _spans(stmt.orelse, target) and not _spans(stmt.orelse, sink_line):  # type: ignore[attr-defined]
                     return True
                 for handler in stmt.handlers:  # type: ignore[attr-defined]
                     if _spans(handler.body, target):
