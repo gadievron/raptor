@@ -76,7 +76,9 @@ class CodeQLEvidenceValidator:
 
     def _get_dataflow_validator(self) -> DataflowValidator:
         if self._validator is None:
-            llm = self._injected_llm_client or _construct_default_llm_client()
+            llm = self._injected_llm_client
+            if llm is None:
+                llm = _construct_default_llm_client()
             collector = make_evidence_collector(llm, cache=self._cache)
             self._validator = DataflowValidator(
                 llm, evidence_collector=collector
