@@ -116,9 +116,10 @@ for _pu in p:
 import json, sys
 _seen = set()
 for _f, _l, _c, _le, _ce, _msg in _td_candidates:
-    if (_f, _l) in _td_suppress or (_f, _l) in _seen:
+    _span = (_f, _l, _c, _le, _ce)
+    if (_f, _l) in _td_suppress or _span in _seen:
         continue
-    _seen.add((_f, _l))
+    _seen.add(_span)
     _m = {"file": _f, "line": _l, "col": _c, "line_end": _le,
           "col_end": _ce, "rule": "teardown_lifetime", "message": _msg}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
