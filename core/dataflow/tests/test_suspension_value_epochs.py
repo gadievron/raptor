@@ -214,3 +214,37 @@ def test_raise_class_construction_external_slot(tmp_path):
         result = sb.try_tier0(fix_diff="+" + guard + "\n", repo_root=tmp_path,
                               sink_uri="app.py", sink_line=len(source.splitlines()), sink_class="xss")
         assert result.status is (sb.Tier0Status.NOT_APPLICABLE if unsafe else sb.Tier0Status.SOUND), (shared, capture, cause, result)
+
+
+def test_type_alias_release_external_slot(tmp_path):
+    import platform
+
+    if not hasattr(ast, "TypeAlias") or platform.python_implementation() != "CPython":
+        pytest.skip("owned type-alias last-reference control requires CPython 3.12+")
+    guard = '    if not re.fullmatch(r"[a-z]+", safe): return'
+    for shared, replaced, capture in (
+        (shared, replaced, capture) for shared in (False, True) for replaced in (False, True)
+        for capture in ("direct", "before", "after", "fresh")
+    ):
+        target = "alias" if capture in ("before", "after") else "safe"
+        source = ("import re\nsafe = 'abc'\nclass Trigger:\n    def __del__(self):\n        global safe\n        safe = '<raw marker>'\n        events.append('finalized')\ndef process():\n"
+                  + ("    global safe\n" if shared else "    safe = 'abc'\n")
+                  + ("    trigger = Trigger()\n" if replaced else "")
+                  + (guard + "\n" if capture != "fresh" else "")
+                  + ("    alias = safe\n" if capture == "before" else "")
+                  + "    type trigger = int\n"
+                  + (guard + "\n" if capture == "fresh" else "")
+                  + ("    alias = safe\n" if capture == "after" else "")
+                  + "    sink(" + target + ")\n")
+        seen, events = [], []
+        namespace = {"sink": seen.append, "events": events}
+        exec(compile(source, "owned-type-alias.py", "exec"), namespace)
+        namespace["process"]()
+        assert events == (["finalized"] if replaced else [])
+        unsafe = shared and replaced and capture in ("direct", "after")
+        expected = [] if shared and replaced and capture == "fresh" else (["<raw marker>"] if unsafe else ["abc"])
+        assert seen == expected
+        (tmp_path / "app.py").write_text(source)
+        result = sb.try_tier0(fix_diff="+" + guard + "\n", repo_root=tmp_path,
+                              sink_uri="app.py", sink_line=len(source.splitlines()), sink_class="xss")
+        assert result.status is (sb.Tier0Status.NOT_APPLICABLE if unsafe else sb.Tier0Status.SOUND), (shared, replaced, capture, result)
