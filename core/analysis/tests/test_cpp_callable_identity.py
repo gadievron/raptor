@@ -33,6 +33,7 @@ def test_conflicting_source_identity_cannot_suppress(language, prefix, before, p
     graph, result = _check(prefix, before, params, language=language)
     assert any(name == "g_shell_quote" for name, _line in graph.untrusted_call_sites)
     assert not result.suppress
+    assert not result.all_matched_bindings
     assert result.verdict != VERDICT_SUPPRESS
 
 
@@ -46,13 +47,13 @@ def test_conflicting_source_identity_cannot_suppress(language, prefix, before, p
 def test_unrelated_declarations_do_not_poison_library_identity(language, prefix, before):
     graph, result = _check(prefix, before, language=language)
     assert not any(name == "g_shell_quote" for name, _line in graph.untrusted_call_sites)
-    assert result.suppress and result.verdict == VERDICT_SUPPRESS
+    _assert_context_binding(result)
 
 
 def test_unrelated_namespace_body_does_not_shadow_global_library():
     prefix = "namespace other { char *g_shell_quote(const char *raw) { return (char *)raw; } }\n"
     _, result = _check(prefix, language="cpp")
-    assert result.suppress
+    _assert_context_binding(result)
 
 
 def test_qualified_call_retains_qualification_instead_of_library_leaf():
@@ -61,11 +62,13 @@ def test_qualified_call_retains_qualification_instead_of_library_leaf():
     calls = {site.name for node in graph.nodes() for site in node.call_sites}
     assert "other::g_shell_quote" in calls
     assert not result.suppress
+    assert not result.all_matched_bindings
 
 
 def test_namespaced_target_does_not_assume_unqualified_global_origin():
     _, result = _check(language="cpp", nested=True)
     assert not result.suppress
+    assert not result.all_matched_bindings
 
 
 @pytest.mark.parametrize("language", ["c", "cpp"])
@@ -73,7 +76,7 @@ def test_prototype_parameter_names_do_not_bind_in_target_scope(language):
     graph, result = _check(before="    extern void declaration_only(char *(*g_shell_quote)(const char *));\n",
                            language=language)
     assert not any(name == "g_shell_quote" for name, _line in graph.untrusted_call_sites)
-    assert result.suppress
+    _assert_context_binding(result)
 
 
 @pytest.mark.parametrize("language", ["c", "cpp"])
@@ -104,6 +107,7 @@ def test_global_imports_and_aliases_do_not_establish_library_identity(prefix):
     graph, result = _check(prefix, language="cpp", base=NO_LIBRARY_PROTOTYPE)
     assert any(name == "g_shell_quote" for name, _line in graph.untrusted_call_sites)
     assert not result.suppress
+    assert not result.all_matched_bindings
 
 
 @pytest.mark.parametrize("before", [
@@ -114,6 +118,7 @@ def test_local_imports_and_aliases_are_positionally_untrusted(before):
     graph, result = _check(OWN_NAMESPACE, before, language="cpp", base=NO_LIBRARY_PROTOTYPE)
     assert any(name == "g_shell_quote" for name, _line in graph.untrusted_call_sites)
     assert not result.suppress
+    assert not result.all_matched_bindings
 
 
 @pytest.mark.parametrize("before", [
@@ -123,19 +128,19 @@ def test_local_imports_and_aliases_are_positionally_untrusted(before):
 ], ids=["expired-namespace", "expired-using", "expired-type-alias", "expired-typedef", "global-qualification"])
 def test_expired_or_global_identity_aliases_preserve_library_control(before):
     _, result = _check(OWN_NAMESPACE, before, language="cpp")
-    assert result.suppress
+    _assert_context_binding(result)
 
 
 def test_unrelated_using_declaration_does_not_poison_library_call():
     prefix = "namespace own { void helper(void); } using own::helper;\n"
     _, result = _check(prefix, language="cpp")
-    assert result.suppress
+    _assert_context_binding(result)
 
 
 def test_sibling_namespace_import_does_not_escape_its_function():
     prefix = OWN_NAMESPACE + "void sibling(void) { using namespace own; }\n"
     _, result = _check(prefix, language="cpp")
-    assert result.suppress
+    _assert_context_binding(result)
 
 
 @pytest.mark.parametrize("before", [
@@ -146,22 +151,23 @@ def test_additional_local_alias_shapes_are_not_library_functions(before):
     graph, result = _check(before=before, language="cpp", base=NO_LIBRARY_PROTOTYPE)
     assert any(name == "g_shell_quote" for name, _line in graph.untrusted_call_sites)
     assert not result.suppress
+    assert not result.all_matched_bindings
 
 
 def test_later_global_namespace_import_does_not_rewrite_earlier_lookup():
     _, result = _check(OWN_NAMESPACE, language="cpp", after="using namespace own;\n")
-    assert result.suppress
+    _assert_context_binding(result)
 
 
 def test_later_local_namespace_import_does_not_rewrite_allocating_call():
     _, result = _check(OWN_NAMESPACE, language="cpp", between="    using namespace own;\n")
-    assert result.suppress
+    _assert_context_binding(result)
 
 
 def test_unrelated_class_method_name_does_not_shadow_global_function():
     prefix = "struct Other { char *g_shell_quote(const char *); };\n"
     _, result = _check(prefix, language="cpp")
-    assert result.suppress
+    _assert_context_binding(result)
 
 
 @pytest.mark.parametrize("nested,before", [
@@ -170,7 +176,7 @@ def test_unrelated_class_method_name_does_not_shadow_global_function():
 ], ids=["namespaced-target", "namespace-directive"])
 def test_explicit_block_global_selection_can_clear_lookup_uncertainty(nested, before):
     graph, result = _check(OWN_NAMESPACE, before, language="cpp", nested=nested)
-    assert result.suppress and result.verdict == VERDICT_SUPPRESS
+    _assert_context_binding(result)
     assert not any(name == "g_shell_quote" for name, _line in graph.untrusted_call_sites)
 
 
@@ -182,18 +188,21 @@ def test_explicit_global_selection_cannot_override_known_source_conflicts(prefix
     graph, result = _check(prefix, before="    using ::g_shell_quote;\n", language="cpp", nested=True)
     assert any(name == "g_shell_quote" for name, _line in graph.untrusted_call_sites)
     assert not result.suppress
+    assert not result.all_matched_bindings
 
 
 def test_expired_global_selection_cannot_clear_namespaced_lookup():
     _, result = _check(OWN_NAMESPACE, before="    { using ::g_shell_quote; }\n",
                        language="cpp", nested=True)
     assert not result.suppress
+    assert not result.all_matched_bindings
 
 
 def test_later_global_selection_cannot_rewrite_earlier_call():
     _, result = _check(OWN_NAMESPACE, between="    using ::g_shell_quote;\n",
                        language="cpp", nested=True)
     assert not result.suppress
+    assert not result.all_matched_bindings
 
 
 @pytest.mark.parametrize("nested,before,params", [
@@ -204,7 +213,7 @@ def test_later_global_selection_cannot_rewrite_earlier_call():
 def test_direct_global_selection_can_use_existing_structural_profile(nested, before, params):
     expression = "::g_shell_quote(raw)"
     graph, result = _check(OWN_NAMESPACE, before, params, expression=expression, language="cpp", nested=nested)
-    assert result.suppress and result.value_bound_bindings
+    _assert_context_binding(result)
     assert {binding.callable for binding in result.value_bound_bindings} == {"g_shell_quote"}
     assert not any(name == "g_shell_quote" for name, _line in graph.untrusted_call_sites)
 
@@ -219,6 +228,7 @@ def test_global_prefix_cannot_forge_library_identity(prefix):
     graph, result = _check(prefix, expression="::g_shell_quote(raw)", language="cpp", base=NO_LIBRARY_PROTOTYPE)
     assert any(name == "g_shell_quote" for name, _line in graph.untrusted_call_sites)
     assert not result.suppress
+    assert not result.all_matched_bindings
 
 
 @pytest.mark.parametrize("expression", [
@@ -228,6 +238,7 @@ def test_global_prefix_cannot_forge_library_identity(prefix):
 def test_cast_callees_do_not_inherit_the_direct_global_profile(expression):
     _, result = _check(expression=expression, language="cpp")
     assert not result.suppress
+    assert not result.all_matched_bindings
 
 
 @pytest.mark.parametrize("expression", ["g_shell_quote<char *>(raw)", "::g_shell_quote<char *>(raw)"])
@@ -237,6 +248,7 @@ def test_template_callees_keep_their_distinct_identity(expression):
     calls = {site.name for node in graph.nodes() for site in node.call_sites}
     assert "g_shell_quote" not in calls
     assert not result.suppress
+    assert not result.all_matched_bindings
 
 
 @pytest.mark.parametrize("nested,before,params", [
@@ -250,3 +262,13 @@ def test_parser_ambiguous_parenthesised_callee_does_not_earn_a_profile(nested, b
     _, result = _check(OWN_NAMESPACE, before, params, expression="(::g_shell_quote)(raw)",
                        language="cpp", nested=nested)
     assert not result.suppress
+    assert not result.all_matched_bindings
+
+
+def _assert_context_binding(result):
+    assert not result.suppress and result.verdict == "candidate_only"
+    binding, = result.value_bound_bindings
+    assert binding.callable == "g_shell_quote"
+    assert binding.input_symbols == frozenset({"raw"})
+    assert binding.output_symbols == frozenset({"safe"})
+    assert binding.unverified_source_contracts == frozenset({"posix_shell_argument_sink_context"})
