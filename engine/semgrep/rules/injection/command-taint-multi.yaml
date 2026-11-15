@@ -1,14 +1,16 @@
 rules:
   # ---------------------------------------------------------------------------
   # Go — taint: net/http handler params → command execution sinks
-  # exec.Command("ls", "-la") with separate args is safe. The real sink is
-  # exec.Command("sh", "-c", tainted) where the shell interprets the input.
+  # Distinguish shell command text from executable-name arguments.
+  # Separate arguments avoid implicit shell parsing; executable selection
+  # and program-specific argument semantics still require review.
   # ---------------------------------------------------------------------------
   - id: raptor.injection.command.taint.go
     message: >-
-      Untrusted data flows into command execution via a shell interpreter.
-      Avoid passing user input through sh -c. Use exec.Command() with
-      separate arguments instead.
+      Potentially untrusted data reaches shell command text or an executable-name
+      argument. Review the actual program, command construction and input validation.
+      Keep executable names fixed or allowlisted and avoid shell parsing where it
+      is not required.
     languages: [go]
     severity: CRITICAL
     mode: taint
