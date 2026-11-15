@@ -579,17 +579,14 @@ def register_web_target(url: str) -> None:
     """Admit a web target to the active transport proxy before preflight."""
     from urllib.parse import urlsplit
 
-    import idna
+    from core.http.hosts import canonical_transport_host
 
     parsed = urlsplit(url)
     if parsed.scheme not in ("http", "https") or not parsed.hostname or "*" in parsed.hostname:
         raise ValueError("web target must be an HTTP(S) URL with an exact host")
-    host = parsed.hostname.rstrip(".。．｡").lower()
-    if not host.isascii():
-        try:
-            host = idna.encode(host, uts46=True).decode("ascii")
-        except idna.IDNAError as exc:
-            raise ValueError("web target has an invalid host") from exc
+    host = canonical_transport_host(parsed.hostname)
+    if not host:
+        raise ValueError("web target has an invalid host")
     with _STATE_LOCK:
         if _enabled:
             from core.sandbox.proxy import get_proxy
