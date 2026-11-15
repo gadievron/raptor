@@ -281,15 +281,15 @@ def test_matches_networkx_on_random_dag():
     import random
     import networkx as nx
 
-    random.seed(0xC0FFEE)
+    rng = random.Random(0xC0FFEE)
     n = 30
     edges = {f"v{i}": [] for i in range(n)}
     edges["v0"] = []  # entry
     # Random DAG: each node points to a few later nodes
     for i in range(n):
-        n_succ = random.randint(0, 3)
+        n_succ = rng.randint(0, 3)
         for _ in range(n_succ):
-            j = random.randint(i + 1, n - 1) if i + 1 < n else None
+            j = rng.randint(i + 1, n - 1) if i + 1 < n else None
             if j is not None and f"v{j}" not in edges[f"v{i}"]:
                 edges[f"v{i}"].append(f"v{j}")
     # NetworkX reference
