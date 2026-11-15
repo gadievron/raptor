@@ -1,5 +1,6 @@
 """Delivery bookkeeping preserves first matches and acknowledges shadow work once."""
 
+from contextlib import closing
 from dataclasses import replace
 
 import pytest
@@ -174,14 +175,15 @@ def test_large_context_batch_uses_lookup_and_keeps_exact_receipts(tmp_path, monk
     assert len(contexts) == len(receipts) == 18
     assert len(indexed) == 1 and len(indexed[0]) == 18
     functions = load_json(out / 'cross-entry-index.json')['functions']
-    with sqlite3.connect(out / 'cross-entry-work.sqlite') as db:
-        db.row_factory = sqlite3.Row
-        for key, receipt in receipts.items():
-            job = db.execute('SELECT * FROM jobs WHERE namespace=? AND view_id=? AND id=?',
-                             (receipt['namespace'], receipt['view'], receipt['job'])).fetchone()
-            assert job is not None
-            assert functions[job['consumer']]['name'] == key.partition(':')[2]
-            assert indexed[0][job['id']]['evidence'] == receipt['evidence']
+    with closing(sqlite3.connect(out / 'cross-entry-work.sqlite')) as db:
+        with db:
+            db.row_factory = sqlite3.Row
+            for key, receipt in receipts.items():
+                job = db.execute('SELECT * FROM jobs WHERE namespace=? AND view_id=? AND id=?',
+                                 (receipt['namespace'], receipt['view'], receipt['job'])).fetchone()
+                assert job is not None
+                assert functions[job['consumer']]['name'] == key.partition(':')[2]
+                assert indexed[0][job['id']]['evidence'] == receipt['evidence']
 
 
 def test_nullable_legacy_job_ids_keep_original_shadow_passes(tmp_path, monkeypatch):
@@ -223,5 +225,6 @@ def test_nullable_legacy_job_ids_keep_original_shadow_passes(tmp_path, monkeypat
     # legacy behavior rather than silently treating these writes as no-ops.
     assert len(calls) == 9
     assert load_json(out / 'cross-entry-progress.json')['undelivered_results'] == 3
-    with sqlite3.connect(out / 'cross-entry-work.sqlite') as db:
-        assert db.execute('SELECT count(*) FROM acknowledgements WHERE job_id IS NULL').fetchone()[0] == 9
+    with closing(sqlite3.connect(out / 'cross-entry-work.sqlite')) as db:
+        with db:
+            assert db.execute('SELECT count(*) FROM acknowledgements WHERE job_id IS NULL').fetchone()[0] == 9
