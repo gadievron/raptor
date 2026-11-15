@@ -1,4 +1,6 @@
 """Owned signature annotation frames remain distinct from defaults and strings."""
+from typing import TypeVar
+
 import pytest
 
 from core.dataflow.source_identity import known_python_identity_conflict
@@ -14,16 +16,33 @@ SIGNATURES = [
 ]
 
 
+def _assert_annotation_receiver(source, filename, namespace, parameter_index):
+    # Python 3.13 evaluates at definition; 3.14 defers until annotation access.
+    with pytest.raises(AttributeError, match='escape') as failure:
+        exec(compile(source, filename, 'exec', dont_inherit=True), namespace)
+        _ = namespace['helper'].__annotations__
+    if 'helper' in namespace:
+        receiver = namespace['helper'].__type_params__[parameter_index]
+    else:
+        receivers = []
+        traceback = failure.value.__traceback__
+        while traceback is not None:
+            frame = traceback.tb_frame
+            value = frame.f_locals.get('html')
+            if frame.f_code.co_filename == filename and isinstance(value, TypeVar):
+                receivers.append(value)
+            traceback = traceback.tb_next
+        assert len(receivers) == 1
+        receiver = receivers[0]
+    assert failure.value.obj is receiver
+
+
 @pytest.mark.parametrize('prefix', ['def', 'async def'], ids=['function', 'async'])
 @pytest.mark.parametrize('signature', SIGNATURES, ids=['argument', 'posonly', 'kwonly', 'vararg', 'kwarg', 'return'])
 def test_signature_annotation_actual_parameter_requires_refusal(prefix, signature):
     source = f'import html\n{prefix} helper[html]{signature}:\n    pass\n'
     namespace = {'__name__': 'owned_signature_annotation'}
-    exec(compile(source, '<owned-signature-annotation>', 'exec', dont_inherit=True), namespace)
-    fn = namespace['helper']
-    with pytest.raises(AttributeError, match='escape') as failure:
-        _ = fn.__annotations__
-    assert failure.value.obj is fn.__type_params__[0]
+    _assert_annotation_receiver(source, '<owned-signature-annotation>', namespace, 0)
     assert known_python_identity_conflict(source, 2, ('html.escape',))
 
 
@@ -59,11 +78,7 @@ def test_local_variable_annotation_remains_nonexecuting():
 def test_cross_parameter_signature_receiver_requires_refusal(prefix):
     source = f'import html\n{prefix} helper[Other, html](value: html.escape("<owned>")):\n    pass\n'
     namespace = {'__name__': 'owned_cross_parameter_signature'}
-    exec(compile(source, '<owned-cross-parameter-signature>', 'exec', dont_inherit=True), namespace)
-    fn = namespace['helper']
-    with pytest.raises(AttributeError, match='escape') as failure:
-        _ = fn.__annotations__
-    assert failure.value.obj is fn.__type_params__[1]
+    _assert_annotation_receiver(source, '<owned-cross-parameter-signature>', namespace, 1)
     assert known_python_identity_conflict(source, 2, ('html.escape',))
 
 
@@ -86,3 +101,10 @@ def test_signature_parameter_does_not_leak_to_module_call():
     source = ('import html\ndef helper[html](value: html.escape("owned")):\n    pass\n'
               'value = html.escape("owned")\n')
     assert known_python_identity_conflict(source, 4, ('html.escape',)) is None
+
+
+def test_eager_definition_failure_preserves_type_parameter_identity():
+    source = 'import html\nclass helper[html](html.escape("<owned>")):\n    pass\n'
+    namespace = {'__name__': 'owned_eager_definition'}
+    _assert_annotation_receiver(source, '<owned-eager-definition>', namespace, 0)
+    assert 'helper' not in namespace
