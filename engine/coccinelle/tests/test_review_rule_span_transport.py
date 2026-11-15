@@ -18,6 +18,16 @@ _SCRIPTS = [
     ("sensitive_data_leak", 0),
     ("division_by_zero", 0), ("division_by_zero", 1),
     ("double_sizeof", 0), ("double_sizeof", 1), ("sizeof_container_of", 0),
+    ("double_close", 0),
+    ("double_close", 1),
+    ("double_close", 2),
+    ("double_close", 3),
+    ("double_close", 4),
+    ("double_close", 5),
+    ("fdopendir_double_close", 0),
+    ("fdopendir_double_close", 1),
+    ("fdopendir_double_close", 2),
+    ("fdopendir_double_close", 3),
 ]
 
 
@@ -54,6 +64,9 @@ def test_report_spans_survive_parser_and_deduplication(name, index):
         ("division_by_zero", 0): "division_by_zero_param",
         ("division_by_zero", 1): "modulo_by_zero_param",
         ("double_sizeof", 1): "pointer_scaling_double",
+        ("double_close", 3): "double_fclose",
+        ("double_close", 4): "double_fclose",
+        ("double_close", 5): "double_fclose",
     }.get((name, index), name)
     assert all(row.rule == expected_rule and row.message for row in rows)
     assert rows[0].message == rows[1].message

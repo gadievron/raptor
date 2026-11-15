@@ -107,6 +107,8 @@ msg = {
     "file": p[0].file,
     "line": int(p[0].line),
     "col": int(p[0].column),
+    "line_end": int(p[0].line_end),
+    "col_end": int(p[0].column_end),
     "message": "Candidate: close and closedir follow the same fdopendir ownership chain; review acquisition/release results, validity, aliases and descriptor reuse (CWE-675)",
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -192,6 +194,8 @@ msg = {
     "file": p[0].file,
     "line": int(p[0].line),
     "col": int(p[0].column),
+    "line_end": int(p[0].line_end),
+    "col_end": int(p[0].column_end),
     "message": "Candidate: close and closedir follow the same fdopendir ownership chain; review acquisition/release results, validity, aliases and descriptor reuse (CWE-675)",
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -258,6 +262,8 @@ msg = {
     "file": p[0].file,
     "line": int(p[0].line),
     "col": int(p[0].column),
+    "line_end": int(p[0].line_end),
+    "col_end": int(p[0].column_end),
     "message": "Candidate: close and closedir follow the same fdopendir ownership chain; review acquisition/release results, validity, aliases and descriptor reuse (CWE-675)",
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -330,6 +336,8 @@ msg = {
     "file": p[0].file,
     "line": int(p[0].line),
     "col": int(p[0].column),
+    "line_end": int(p[0].line_end),
+    "col_end": int(p[0].column_end),
     "message": "Candidate: close and closedir follow the same fdopendir ownership chain; review acquisition/release results, validity, aliases and descriptor reuse (CWE-675)",
 }
 print("COCCIRESULT:" + json.dumps(msg))
