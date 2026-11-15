@@ -310,6 +310,7 @@ def test_recognizer_works_on_callgraph(tmp_path):
         "org.apache.commons.lang3.StringEscapeUtils.escapeHtml4"
     }
     for b in matched:
+        assert b.unverified_source_contracts == frozenset({"html_text_or_quoted_attribute_sink_context_and_policy"})
         assert b.input_symbols == frozenset()
         assert b.output_symbols == frozenset()
 

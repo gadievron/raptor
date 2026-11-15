@@ -338,6 +338,7 @@ def test_callgraph_binding_has_empty_symbol_layer(tmp_path):
     assert b.callable == (
         "org.apache.commons.lang3.StringEscapeUtils.escapeHtml4"
     )
+    assert b.unverified_source_contracts == frozenset({"html_text_or_quoted_attribute_sink_context_and_policy"})
     assert b.input_symbols == frozenset()
     assert b.output_symbols == frozenset()
 
