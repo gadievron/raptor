@@ -1,5 +1,6 @@
 """Imported graph history must not become locally earned execution evidence."""
 
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -92,7 +93,7 @@ def test_graph_rebuild_uses_run_json_without_replaying_quarantined_outcomes(tmp_
     rebuilt = rebuild_graph(restored)
     assert rebuilt is not None
     assert replayed_outcomes == []
-    with open_graph(rebuilt) as conn:
+    with closing(open_graph(rebuilt)) as conn, conn:
         assert conn.execute("SELECT count(*) FROM nodes WHERE kind='entry_point'").fetchone()[0] > 0
         assert conn.execute("SELECT count(*) FROM nodes WHERE kind='verified_outcome'").fetchone()[0] == 0
 
@@ -104,5 +105,5 @@ def test_local_validation_inputs_remain_rebuildable(tmp_path):
     save_json(run / "validation-outcomes.json", [{"status": "inconclusive"}])
     rebuilt = rebuild_graph(source)
     assert rebuilt is not None
-    with open_graph(rebuilt) as conn:
+    with closing(open_graph(rebuilt)) as conn, conn:
         assert conn.execute("SELECT count(*) FROM nodes WHERE kind='verified_outcome'").fetchone()[0] == 1
