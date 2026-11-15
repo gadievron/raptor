@@ -57,6 +57,8 @@ msg = {
   "file": p[0].file,
   "line": int(p[0].line),
   "col": int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message": "Candidate: strlen-sized allocation reaches strcpy without a recognised source or pointer change; verify capacity, source length and API identity (CWE-131)."
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -112,6 +114,8 @@ msg = {
   "file": p[0].file,
   "line": int(p[0].line),
   "col": int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message": "Candidate: strlen-sized allocation reaches strcpy without a recognised source or pointer change; verify capacity, source length and API identity (CWE-131)."
 }
 print("COCCIRESULT:" + json.dumps(msg))
