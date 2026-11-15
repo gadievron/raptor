@@ -379,7 +379,7 @@ class TestAuditWiring:
         (rec,) = _read_records(run_dir)
         assert rec["verdict"] == "sanitizer_candidate"
         assert rec["bindings"]
-        assert rec["bindings"][0]["unverified_source_contracts"] == ["exact_builtin_str_default_call"]
+        assert rec["bindings"][0]["unverified_source_contracts"] == ["exact_builtin_str_default_call", "html_text_or_quoted_attribute_sink_context_and_policy"]
         assert rec["dropped"] is False
         assert rec["enforced"] is False
         assert rec["file_path"] == str(fixture)

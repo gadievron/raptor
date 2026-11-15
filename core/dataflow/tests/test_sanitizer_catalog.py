@@ -184,7 +184,7 @@ def test_recognizes_bare_call_sanitizer():
     assert len(matched) == 1
     binding = next(iter(matched))
     assert binding.callable == "html.escape"
-    assert binding.unverified_source_contracts == frozenset({"exact_builtin_str_default_call"})
+    assert binding.unverified_source_contracts == frozenset({"exact_builtin_str_default_call", "html_text_or_quoted_attribute_sink_context_and_policy"})
 
 
 def test_recognizes_dotted_attribute_call():
@@ -365,6 +365,7 @@ def test_conditional_requirements_preserve_candidate_census():
     assert "html.escape" in all_sanitizer_callables("python")
     assert source_contracts_for_callable("html.escape", "CWE-79", "python") == frozenset({
         "exact_builtin_str_default_call",
+        "html_text_or_quoted_attribute_sink_context_and_policy",
     })
     assert source_contracts_for_callable("html.escape", "CWE-89", "python") == frozenset()
     assert source_contracts_for_callable("html.escape", "CWE-79", "java") == frozenset()

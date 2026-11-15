@@ -88,7 +88,9 @@ def test_curated_import_origin_cannot_certify_source(tmp_path: Path, shadow):
     assert result.status is sb.Tier0Status.NOT_APPLICABLE
     assert "origin" in result.reasoning
     shadow_path.unlink()
-    assert adjudicate().status is sb.Tier0Status.SOUND
+    control = adjudicate()
+    assert control.status is sb.Tier0Status.NOT_APPLICABLE
+    assert control.extras["unverified_source_contracts"] == ["html_text_or_quoted_attribute_sink_context_and_policy"]
 
 
 def test_unrelated_sibling_module_is_not_a_known_origin_conflict(tmp_path: Path):

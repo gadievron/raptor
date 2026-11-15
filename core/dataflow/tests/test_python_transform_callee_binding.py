@@ -47,8 +47,12 @@ def test_mechanical_substitution_does_not_exempt_another_same_tail_call(tmp_path
 
 def test_canonical_tuple_element_retains_its_source_type_receipt(tmp_path):
     result = _run(tmp_path, "raw", first="safe", sink="safe")
-    assert result.status is Tier0Status.SOUND, result.reasoning
-    assert result.extras["input_type_evidence"]["origin"] == "adjacent-exact-type-guard"
+    assert result.status is Tier0Status.NOT_APPLICABLE
+    assert result.extras["unverified_source_contracts"] == ["html_text_or_quoted_attribute_sink_context_and_policy"]
+    from core.dataflow.string_type_evidence import exact_str_default_call_evidence
+
+    evidence = exact_str_default_call_evidence((tmp_path / "app.py").read_text(), 4, "value", "html.escape")
+    assert evidence is not None and evidence.origin == "adjacent-exact-type-guard"
 
 
 def test_whitelist_never_falls_back_to_a_same_tail_name():

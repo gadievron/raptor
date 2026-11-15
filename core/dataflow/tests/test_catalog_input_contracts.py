@@ -15,6 +15,7 @@ from core.dataflow.sanitizer_catalog import (
 
 HTML = "import html\ndef handle(raw):\n    safe = html.escape(raw)\n    return render(safe)\n"
 REQUIREMENT = "exact_builtin_str_default_call"
+REQUIREMENTS = frozenset({REQUIREMENT, "html_text_or_quoted_attribute_sink_context_and_policy"})
 
 
 def _graph(source, sink_name="render"):
@@ -38,7 +39,7 @@ def test_direct_conditional_candidate_cannot_prune_without_source_contract(legac
     assert result.cut_set == frozenset()
     binding, = result.all_matched_bindings
     assert binding.callable == "html.escape"
-    assert binding.unverified_source_contracts == frozenset({REQUIREMENT})
+    assert binding.unverified_source_contracts == REQUIREMENTS
     assert "html.escape" in result.candidate_callables
     assert "unverified source contracts" in result.reason
     if not legacy:
@@ -95,11 +96,11 @@ def test_candidate_audit_records_contract_loss_without_dropping(tmp_path: Path):
     record, = records
     assert record["dropped"] is False
     assert record["enforced"] is False
-    assert record["catalog_matches"][0]["unverified_source_contracts"] == [REQUIREMENT]
-    assert record["bindings"][0]["unverified_source_contracts"] == [REQUIREMENT]
+    assert record["catalog_matches"][0]["unverified_source_contracts"] == sorted(REQUIREMENTS)
+    assert record["bindings"][0]["unverified_source_contracts"] == sorted(REQUIREMENTS)
 
 
 def test_contract_query_is_cwe_and_language_scoped():
-    assert source_contracts_for_callable("html.escape", "CWE-79", "python") == frozenset({REQUIREMENT})
+    assert source_contracts_for_callable("html.escape", "CWE-79", "python") == REQUIREMENTS
     assert source_contracts_for_callable("html.escape", "CWE-22", "python") == frozenset()
     assert source_contracts_for_callable("html.escape", "CWE-79", "java") == frozenset()

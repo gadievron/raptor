@@ -965,7 +965,7 @@ class TestRepoShadowedModuleOrigin:
         assert isinstance(clean, ResolvedFinding)
         assert len(clean.inter_proc_bindings) == 1
         binding, = clean.inter_proc_bindings
-        assert binding.unverified_source_contracts == frozenset({"exact_builtin_str_default_call"})
+        assert binding.unverified_source_contracts == frozenset({"exact_builtin_str_default_call", "html_text_or_quoted_attribute_sink_context_and_policy"})
 
 
 class TestDefinitionHeaderCatalogRebinding:

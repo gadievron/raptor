@@ -82,7 +82,7 @@ class TestBindingGeneration:
         assert b.callable == "_sanitize"
         assert b.input_symbols == frozenset({"x"})
         assert b.output_symbols == frozenset({"y"})
-        assert b.unverified_source_contracts == frozenset({"exact_builtin_str_default_call"})
+        assert b.unverified_source_contracts == frozenset({"exact_builtin_str_default_call", "html_text_or_quoted_attribute_sink_context_and_policy"})
 
     def test_passthrough_helper_no_binding(self):
         # Helper returns its arg unchanged — no sanitization.
@@ -335,7 +335,7 @@ class TestVerdicts:
         assert result.verdict == VERDICT_CANDIDATE_ONLY, result.reason
         assert result.suppress is False
         assert result.value_bound_bindings  # original input/output role proof still holds
-        assert all(binding.unverified_source_contracts == frozenset({"exact_builtin_str_default_call"})
+        assert all(binding.unverified_source_contracts == frozenset({"exact_builtin_str_default_call", "html_text_or_quoted_attribute_sink_context_and_policy"})
                    for binding in result.value_bound_bindings)
 
     def test_bypass_via_passthrough_no_suppress(self):
@@ -378,7 +378,7 @@ class TestVerdicts:
         assert result.verdict == VERDICT_CANDIDATE_ONLY, result.reason
         assert result.suppress is False
         assert result.value_bound_bindings  # original input/output role proof still holds
-        assert all(binding.unverified_source_contracts == frozenset({"exact_builtin_str_default_call"})
+        assert all(binding.unverified_source_contracts == frozenset({"exact_builtin_str_default_call", "html_text_or_quoted_attribute_sink_context_and_policy"})
                    for binding in result.value_bound_bindings)
 
     def test_same_symbol_dual_position_not_suppressed(self):
@@ -448,7 +448,7 @@ class TestResolverIntegration:
         assert result.suppress is False
         assert result.value_bound_bindings
         assert {binding.callable for binding in result.value_bound_bindings} == {"_sanitize"}
-        assert all(binding.unverified_source_contracts == frozenset({"exact_builtin_str_default_call"})
+        assert all(binding.unverified_source_contracts == frozenset({"exact_builtin_str_default_call", "html_text_or_quoted_attribute_sink_context_and_policy"})
                    for binding in result.value_bound_bindings)
 
     def test_resolver_no_helper_empty_bindings(self, tmp_path):

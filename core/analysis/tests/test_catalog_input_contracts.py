@@ -3,7 +3,7 @@ from core.analysis.sanitizer_cut import VERDICT_CANDIDATE_ONLY, VERDICT_SUPPRESS
 from core.analysis.tests.test_interproc import _bindings_for, _evaluate
 
 
-_REQUIRED = frozenset({"exact_builtin_str_default_call"})
+_REQUIRED = frozenset({"exact_builtin_str_default_call", "html_text_or_quoted_attribute_sink_context_and_policy"})
 
 
 def test_helper_name_retains_underlying_primitive_requirement():

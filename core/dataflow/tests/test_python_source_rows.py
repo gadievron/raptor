@@ -58,7 +58,8 @@ def test_curated_call_requires_verified_source_rows(tmp_path, profile):
         assert "bare carriage returns" in result.reasoning
         assert result.artifact is None
     else:
-        assert result.status is sb.Tier0Status.SOUND, result.reasoning
+        assert result.status.value == "not_applicable"
+        assert result.extras["unverified_source_contracts"] == ["html_text_or_quoted_attribute_sink_context_and_policy"]
 
 
 @pytest.mark.parametrize("profile", PROFILES)

@@ -176,7 +176,8 @@ def test_curated_library_identity_conflict_retains_finding(tmp_path: Path, prefi
         sink_uri="app.py", sink_line=5, sink_class="xss",
         language="python", complete=lambda _system, _user: reply,
     )
-    assert control.status is sb.Tier0Status.SOUND
+    assert control.status.value == "not_applicable"
+    assert control.extras["unverified_source_contracts"] == ["html_text_or_quoted_attribute_sink_context_and_policy"]
 
 
 def test_identity_conflict_is_not_overridden_by_dominance(monkeypatch):

@@ -407,7 +407,7 @@ class TestSuppressionRecord:
         assert record["rule_id"] == "py/xss"
         assert record["verdict"] == VERDICT_SANITIZER_CANDIDATE
         assert record["dropped"] is False
-        assert record["catalog_matches"][0]["unverified_source_contracts"] == ["exact_builtin_str_default_call"]
+        assert record["catalog_matches"][0]["unverified_source_contracts"] == ["exact_builtin_str_default_call", "html_text_or_quoted_attribute_sink_context_and_policy"]
 
     def test_does_not_write_when_suppress_is_false(self, tmp_path: Path):
         """No candidate or suppression means there is no cut record."""
