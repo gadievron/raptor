@@ -26,4 +26,7 @@ def test_c_buffer_calls_need_an_integrity_receipt(tmp_path: Path, language, suff
                           language=language, complete=lambda _system, _user: reply)
     assert result.status is t1.Tier0Status.NOT_APPLICABLE
     assert result.artifact is None
-    assert result.extras["unverified_source_contracts"] == ["mutable_buffer_integrity_to_sink"]
+    required = ["mutable_buffer_integrity_to_sink"]
+    if library == "g_markup_escape_text":
+        required.append("html_text_or_quoted_attribute_sink_context_and_policy")
+    assert result.extras["unverified_source_contracts"] == sorted(required)
