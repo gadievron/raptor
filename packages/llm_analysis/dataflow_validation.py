@@ -378,7 +378,9 @@ def _effective_deep_validate(
         return False, False
     if deep_validate:
         return True, False
-    nested_dv = (analysis or {}).get("dataflow_validation") or {}
+    nested_dv = (analysis or {}).get("dataflow_validation")
+    if not isinstance(nested_dv, dict):
+        nested_dv = {}
     effective = bool(
         nested_dv.get("path_conditions")
         or (analysis or {}).get("path_conditions")
@@ -737,7 +739,9 @@ def validate_dataflow_claims(
             # always-init-then-conditional-increment pattern.
             metrics.setdefault("n_path_conditions_populated", 0)
             metrics.setdefault("path_conditions_by_cwe", {})
-            nested_dv = (analysis or {}).get("dataflow_validation") or {}
+            nested_dv = (analysis or {}).get("dataflow_validation")
+            if not isinstance(nested_dv, dict):
+                nested_dv = {}
             cond_present = bool(
                 nested_dv.get("path_conditions")
                 or (analysis or {}).get("path_conditions")
