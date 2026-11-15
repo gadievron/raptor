@@ -239,6 +239,10 @@ class DataflowValidation:
     def __post_init__(self) -> None:
         if self.is_exploitable is not None and not isinstance(self.is_exploitable, bool):
             raise ValueError("is_exploitable must be a boolean or None for abstention")
+        if (isinstance(self.confidence, bool)
+                or not isinstance(self.confidence, (int, float))
+                or not 0 <= self.confidence <= 1):
+            raise ValueError("confidence must be a finite number between 0 and 1")
 
 
 PATH_CONDITIONS_SCHEMA = {
