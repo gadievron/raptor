@@ -4,9 +4,10 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.injection.ssti.taint.python
     message: >-
-      Untrusted data flows into a template constructor or from_string API.
-      User-controlled template source is code execution via SSTI. Use
-      render_template with a file path and pass user data as context variables.
+      Template-source review candidate: data reaches a constructor or rendering
+      API. Confirm source control, actual rendering and engine sandbox
+      restrictions before assessing injection impact. Pass untrusted values
+      as context data.
     languages: [python]
     severity: CRITICAL
     mode: taint
@@ -71,9 +72,9 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.injection.ssti.taint.go
     message: >-
-      Untrusted data flows into template.Parse(). Both text/template and
-      html/template allow arbitrary actions when the template source is
-      attacker-controlled. Load templates from files, not user input.
+      Template-source review candidate: data reaches a Parse call. Confirm API
+      identity, template actions, actual execution and available functions
+      before assessing injection impact. Keep template sources trusted.
     languages: [go]
     severity: CRITICAL
     mode: taint
@@ -120,9 +121,10 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.injection.ssti.taint.java
     message: >-
-      Untrusted data flows into a template engine as template source.
-      User-controlled templates allow arbitrary code execution. Load
-      templates from files, not user input.
+      Template review candidate: data reaches a template source, name or
+      compilation API. Confirm source-versus-name handling, rendering and
+      resolver or sandbox restrictions before assessing injection impact.
+      Pass untrusted values as context data.
     languages: [java]
     severity: CRITICAL
     mode: taint
@@ -166,9 +168,9 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.injection.ssti.taint.javascript
     message: >-
-      Untrusted data flows into a template engine as template source.
-      User-controlled templates allow arbitrary code execution. Load
-      templates from files, not user input.
+      Template review candidate: data reaches a template source or compilation
+      API. Confirm actual rendering and resolver or sandbox restrictions before
+      assessing injection impact. Pass untrusted values as context data.
     languages: [javascript, typescript]
     severity: CRITICAL
     mode: taint
