@@ -29,4 +29,6 @@ def test_c_buffer_calls_need_an_integrity_receipt(tmp_path: Path, language, suff
     required = ["mutable_buffer_integrity_to_sink"]
     if library == "g_markup_escape_text":
         required.append("html_text_or_quoted_attribute_sink_context_and_policy")
+    else:
+        required.append("posix_shell_argument_sink_context")
     assert result.extras["unverified_source_contracts"] == sorted(required)

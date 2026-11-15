@@ -434,6 +434,7 @@ _TABLE: tuple[KnownSafeCall, ...] = (
         sink_class="cmdi",
         languages=("c", "cpp"),
         input_arg_kind="transform",
+        required_source_contracts=frozenset({POSIX_SHELL_ARGUMENT_CONTEXT}),
         soundness_note=(
             "GLib g_shell_quote (since GLib 2.0) returns a newly-allocated "
             "string wrapped in single quotes with any embedded single "

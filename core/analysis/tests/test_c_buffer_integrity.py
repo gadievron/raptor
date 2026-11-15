@@ -1,7 +1,7 @@
 """Unknown C helper effects cannot preserve a buffer certificate."""
 import pytest
 from core.analysis.cfg_builder_cpp import build_cpp_intraproc_cfg
-from core.analysis.sanitizer_cut import VERDICT_CANDIDATE_ONLY, VERDICT_SUPPRESS, evaluate_finding
+from core.analysis.sanitizer_cut import VERDICT_CANDIDATE_ONLY, evaluate_finding
 
 pytest.importorskip("tree_sitter_c")
 pytest.importorskip("tree_sitter_cpp")
@@ -37,9 +37,9 @@ def test_helper_effects_on_returned_buffers_are_unproven(language, middle):
 
 
 @pytest.mark.parametrize("language", ["c", "cpp"])
-def test_clean_structural_buffer_control_remains_admitted(language):
+def test_clean_structural_buffer_control_keeps_binding(language):
     result = _evaluate("", language)
-    assert result.verdict == VERDICT_SUPPRESS and result.suppress
+    _assert_context_binding(result)
 
 
 @pytest.mark.parametrize("language", ["c", "cpp"])
@@ -51,13 +51,13 @@ def test_existing_indirect_write_refusal_remains(language):
 @pytest.mark.parametrize("language", ["c", "cpp"])
 def test_helper_before_fresh_allocation_cannot_mutate_new_buffer(language):
     result = _evaluate("", language, before="    inspect_raw(raw);\n")
-    assert result.verdict == VERDICT_SUPPRESS and result.suppress
+    _assert_context_binding(result)
 
 
 @pytest.mark.parametrize("language", ["c", "cpp"])
 def test_unknown_call_outside_sink_paths_does_not_block_clean_path(language):
     result = _evaluate("    if (flag) { rewrite(safe); return; }\n", language)
-    assert result.verdict == VERDICT_SUPPRESS and result.suppress
+    _assert_context_binding(result)
 
 
 @pytest.mark.parametrize("language", ["c", "cpp"])
@@ -86,6 +86,7 @@ def test_buffer_effect_structure_is_independent_of_context_contracts(language, m
     graph, sink = _graph(middle, language, before, sink_expression)
     bindings = match_sanitizers_in_cfg(graph, "CWE-78", language)
     assert bindings
+    assert all(b.unverified_source_contracts == frozenset({"posix_shell_argument_sink_context"}) for b in bindings)
     # Preserve actual requirements. Supplying the matched definitions answers
     # only the conditional effect question, never whether they may certify.
     effects = _c_buffer_call_effect_nodes(graph, bindings, sink, {b.callable for b in bindings})
@@ -94,3 +95,12 @@ def test_buffer_effect_structure_is_independent_of_context_contracts(language, m
     if "return;" in middle:
         assert any("rewrite" in n.calls for n in effects)
         assert not on_path
+
+
+def _assert_context_binding(result):
+    assert not result.suppress and result.verdict == "candidate_only"
+    binding, = result.value_bound_bindings
+    assert binding.callable == "g_shell_quote"
+    assert binding.input_symbols == frozenset({"raw"})
+    assert binding.output_symbols == frozenset({"safe"})
+    assert binding.unverified_source_contracts == frozenset({"posix_shell_argument_sink_context"})
