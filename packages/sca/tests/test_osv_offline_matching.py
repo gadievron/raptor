@@ -10,6 +10,8 @@ never reach a version comparator.
 
 from __future__ import annotations
 
+from contextlib import closing
+
 import io
 import json
 import logging
@@ -81,16 +83,16 @@ def test_suffixed_debian_record_ingests_and_matches(tmp_path) -> None:
         introduced="0", fixed="1.1.1n-0+deb11u1",
     )
     http = _ZipServingHttp({"Debian": _make_zip([rec])})
-    db = OsvOfflineDB(tmp_path / "osv.sqlite", http=http)
-    stats = db.ensure_fresh(["Debian"])
+    with closing(OsvOfflineDB(tmp_path / "osv.sqlite", http=http)) as db:
+        stats = db.ensure_fresh(["Debian"])
 
-    assert len(stats) == 1
-    assert stats[0].advisories == 1
+        assert len(stats) == 1
+        assert stats[0].advisories == 1
 
-    vulnerable = db.query("Debian:11", "openssl", "1.1.1k-1+deb11u1")
-    assert [a.osv_id for a in vulnerable] == ["DSA-TEST-1"]
-    fixed = db.query("Debian:11", "openssl", "1.1.1n-0+deb11u1")
-    assert fixed == []
+        vulnerable = db.query("Debian:11", "openssl", "1.1.1k-1+deb11u1")
+        assert [a.osv_id for a in vulnerable] == ["DSA-TEST-1"]
+        fixed = db.query("Debian:11", "openssl", "1.1.1n-0+deb11u1")
+        assert fixed == []
 
 
 def test_wrong_ecosystem_record_still_rejected(tmp_path) -> None:
@@ -98,12 +100,12 @@ def test_wrong_ecosystem_record_still_rejected(tmp_path) -> None:
     Debian (base-identifier comparison stays an actual filter)."""
     rec = _record("GHSA-WRONG-1", "npm", "lodash", fixed="4.17.21")
     http = _ZipServingHttp({"Debian": _make_zip([rec])})
-    db = OsvOfflineDB(tmp_path / "osv.sqlite", http=http)
-    stats = db.ensure_fresh(["Debian"])
+    with closing(OsvOfflineDB(tmp_path / "osv.sqlite", http=http)) as db:
+        stats = db.ensure_fresh(["Debian"])
 
-    assert len(stats) == 1
-    assert stats[0].advisories == 0
-    assert db.query("Debian:11", "lodash", "4.17.20") == []
+        assert len(stats) == 1
+        assert stats[0].advisories == 0
+        assert db.query("Debian:11", "lodash", "4.17.20") == []
 
 
 def test_suffixed_query_ecosystem_reads_base_bucket(tmp_path) -> None:
@@ -117,13 +119,13 @@ def test_suffixed_query_ecosystem_reads_base_bucket(tmp_path) -> None:
     )
     http = _ZipServingHttp(
         {"Alpine": _make_zip([match_release, other_release])})
-    db = OsvOfflineDB(tmp_path / "osv.sqlite", http=http)
-    db.ensure_fresh(["Alpine:v3.18"])
+    with closing(OsvOfflineDB(tmp_path / "osv.sqlite", http=http)) as db:
+        db.ensure_fresh(["Alpine:v3.18"])
 
-    assert any("/Alpine/all.zip" in url for url in http.calls)
-    hits = db.query("Alpine:v3.18", "busybox", "1.36.0-r0")
-    # Same release stream matches; a different release stream does not.
-    assert [a.osv_id for a in hits] == ["ALPINE-1"]
+        assert any("/Alpine/all.zip" in url for url in http.calls)
+        hits = db.query("Alpine:v3.18", "busybox", "1.36.0-r0")
+        # Same release stream matches; a different release stream does not.
+        assert [a.osv_id for a in hits] == ["ALPINE-1"]
 
 
 def test_invalid_bare_alpine_block_does_not_claim_any_release() -> None:
@@ -167,14 +169,14 @@ def test_ubuntu_and_gha_ingest_from_their_buckets(tmp_path) -> None:
         "Ubuntu": _make_zip([rec_ubuntu]),
         "GitHub%20Actions": _make_zip([rec_gha]),
     })
-    db = OsvOfflineDB(tmp_path / "osv.sqlite", http=http)
-    stats = db.ensure_fresh(["Ubuntu:22.04:LTS", "GitHub Actions"])
+    with closing(OsvOfflineDB(tmp_path / "osv.sqlite", http=http)) as db:
+        stats = db.ensure_fresh(["Ubuntu:22.04:LTS", "GitHub Actions"])
 
-    assert sorted(s.ecosystem for s in stats) == ["GitHub Actions", "Ubuntu"]
-    assert all(s.advisories == 1 for s in stats)
-    assert db.query("Ubuntu:22.04:LTS", "curl", "7.81.0-1ubuntu1.4")
-    assert db.query("GitHub Actions", "actions/checkout", "v4.1.0")
-    assert not db.query("GitHub Actions", "actions/checkout", "v4.1.7")
+        assert sorted(s.ecosystem for s in stats) == ["GitHub Actions", "Ubuntu"]
+        assert all(s.advisories == 1 for s in stats)
+        assert db.query("Ubuntu:22.04:LTS", "curl", "7.81.0-1ubuntu1.4")
+        assert db.query("GitHub Actions", "actions/checkout", "v4.1.0")
+        assert not db.query("GitHub Actions", "actions/checkout", "v4.1.7")
 
 
 def test_unmapped_ecosystem_warns_visibly(tmp_path, caplog) -> None:
