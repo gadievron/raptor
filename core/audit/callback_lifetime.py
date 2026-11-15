@@ -190,9 +190,6 @@ class SafeTeardownResult:
         }
 
 
-_SELF_HANDLER_RE = re.compile(r"=\s*container_of\s*\(")
-
-
 def check_safe_teardown(
     source: str,
     vocab: Any = None,
@@ -216,6 +213,11 @@ def check_safe_teardown(
       lifetime ends here) → safe;
     * else → not safe (a bare free with no visible teardown ordering
       is exactly what the gate should keep flooring).
+
+    A container_of assignment does not establish the freed container,
+    executing member/facility or non-reentrancy of that item. This
+    source/vocabulary-only API has no independent execution contract, so
+    self-handler syntax cannot bypass the async refusal or certify safety.
 
     The scan runs on the sanitized view (comments/string literals
     blanked): an inline comment naming a waiting verb must not flip
@@ -269,21 +271,13 @@ def check_safe_teardown(
             rcu = True
             barrier_pos.append((i, rm.start()))
 
-    # Self-handler: the container was derived via container_of() — in
-    # the dominant kernel idiom the function IS the callback handler,
-    # and non-reentrancy of the executing item makes a plain
-    # cancel-then-free safe (same suppression the standing
-    # teardown_lifetime cocci rule applies).
-    self_handler = bool(async_pos and free_pos) and any(
-        _SELF_HANDLER_RE.search(line) for line in lines
-    )
     # Column-resolved like the barrier check below: a same-line
     # ``del_timer(&d->timer); kfree(d);`` is async-cancel-then-free
     # too — the line-only comparison certified it safe whenever a
     # waiting barrier also appeared earlier.
     # Both position lists are ordered. If the earliest async cancel
     # has no later free, no later async cancel can have one either.
-    if async_pos and free_pos and not self_handler:
+    if async_pos and free_pos:
         a = async_pos[0]
         next_free = bisect_right(free_pos, a)
         if next_free < len(free_pos):
@@ -295,14 +289,6 @@ def check_safe_teardown(
                     f"async-cancel-then-free race shape"
                 ),
             )
-    if self_handler:
-        return SafeTeardownResult(
-            safe=True,
-            reason=(
-                "self-handler teardown (container_of-derived container; "
-                "non-reentrancy of the executing item)"
-            ),
-        )
     if waiting or rcu:
         # Order-sensitive: every free must be PRECEDED by a waiting/
         # RCU barrier on the path above it. ``kfree(dev);
