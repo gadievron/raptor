@@ -1,6 +1,10 @@
 rules:
   - id: raptor.crypto.iv.literal.java
-    message: IV or nonce is a constant literal. Use SecureRandom or library-generated nonces. Verify randomness.
+    message: >-
+      Candidate: an IV or GCM parameter constructor receives an inline byte
+      array or string-derived bytes. Review initializer values, the consuming
+      cipher, encryption/decryption context and mode-specific IV or nonce
+      requirements before concluding misuse.
     languages: [java, kotlin]
     severity: HIGH
     pattern-either:
