@@ -161,10 +161,12 @@ _TABLE: tuple[KnownSafeCall, ...] = (
         languages=("python",),
         input_arg_kind="transform",
         requires_exact_str=True,
+        required_source_contracts=frozenset({HTML_OUTPUT_POLICY}),
         soundness_note=(
             "For an exact builtin str using defaults, "
             "Django's escape wraps stdlib html.escape "
-            "+ marks result as SafeString.  Output is HTML-safe."
+            "+ marks result as SafeString.  Output context and attribute policy "
+            "remain separate requirements."
         ),
     ),
     KnownSafeCall(
@@ -173,11 +175,12 @@ _TABLE: tuple[KnownSafeCall, ...] = (
         languages=("python",),
         input_arg_kind="transform",
         requires_exact_str=True,
+        required_source_contracts=frozenset({HTML_OUTPUT_POLICY}),
         soundness_note=(
             "For an exact builtin str using defaults, "
             "markupsafe.escape escapes &, <, >, \", ' and returns Markup "
-            "(SafeString equivalent).  Standard XSS-safe escaper used "
-            "across Jinja2 / Flask."
+            "(SafeString equivalent).  Output context and attribute policy "
+            "remain separate requirements."
         ),
     ),
     KnownSafeCall(

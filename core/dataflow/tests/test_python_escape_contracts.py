@@ -7,7 +7,7 @@ import pytest
 from core.analysis.cfg_builder import build_python_cfg
 from core.analysis.sanitizer_cut import VERDICT_CANDIDATE_ONLY, evaluate_finding
 from core.analysis.tests.test_interproc import _bindings_for
-from core.dataflow import tier1_llm as t1
+from core.dataflow import known_safe_calls as ksc, tier1_llm as t1
 from core.dataflow.smt_barrier import Tier0Status
 
 
@@ -27,13 +27,25 @@ def test_untyped_protocol_inputs_cannot_earn_library_certificates(tmp_path: Path
                             complete=lambda _system, _user: reply)
     result = review()
     assert result.status is Tier0Status.NOT_APPLICABLE
-    assert result.extras["unverified_source_contracts"] == ["exact_builtin_str_default_call"]
+    required = {ksc.EXACT_STR_DEFAULT_CALL}
+    if sink_class == "xss":
+        required.add(ksc.HTML_OUTPUT_POLICY)
+    assert result.extras["unverified_source_contracts"] == sorted(required)
     assert result.artifact is None
     source = source.replace(line, "    if type(raw) is not str: return\n" + line)
     (tmp_path / "app.py").write_text(source)
     result = review()
-    assert result.status is Tier0Status.SOUND
-    assert result.extras["input_type_evidence"]["origin"] == "adjacent-exact-type-guard"
+    if sink_class == "xss":
+        assert result.status is Tier0Status.NOT_APPLICABLE
+        assert result.artifact is None
+        assert result.extras["unverified_source_contracts"] == [ksc.HTML_OUTPUT_POLICY]
+        from core.dataflow.string_type_evidence import exact_str_default_call_evidence
+
+        receipt = exact_str_default_call_evidence(source, 4, "raw", library)
+        assert receipt is not None and receipt.origin == "adjacent-exact-type-guard"
+    else:
+        assert result.status is Tier0Status.SOUND
+        assert result.extras["input_type_evidence"]["origin"] == "adjacent-exact-type-guard"
 
 
 @pytest.mark.parametrize("library,cwe", [("markupsafe.escape", "CWE-79"), ("shlex.quote", "CWE-78"), ("django.utils.html.escape", "CWE-79")])
@@ -44,12 +56,17 @@ def test_graph_and_wrapper_candidates_keep_the_same_unverified_contract(library,
     graph, bindings = _bindings_for(source, "handle", cwe)
     binding, = bindings
     assert binding.callable == "clean"
-    assert binding.unverified_source_contracts == frozenset({"exact_builtin_str_default_call"})
+    required = {ksc.EXACT_STR_DEFAULT_CALL}
+    if cwe == "CWE-79":
+        required.add(ksc.HTML_OUTPUT_POLICY)
+    assert binding.unverified_source_contracts == frozenset(required)
     sink = next(node for node in graph.nodes() if "consume" in node.calls)
     result = evaluate_finding(graph, [graph.entry_node], sink, cwe=cwe, language="python",
                               source_symbols={"raw"}, sink_arg="safe", extra_bindings=bindings)
     assert result.verdict == VERDICT_CANDIDATE_ONLY and result.suppress is False
     assert result.value_bound_bindings
+    assert all(binding.unverified_source_contracts == frozenset(required)
+               for binding in result.value_bound_bindings)
     direct = f"import {module}\ndef handle(raw):\n    safe = {library}(raw)\n    consume(safe)\n"
     graph = build_python_cfg(direct, "handle")
     assert graph is not None
@@ -58,3 +75,5 @@ def test_graph_and_wrapper_candidates_keep_the_same_unverified_contract(library,
                               source_symbols={"raw"}, sink_arg="safe")
     assert result.verdict == VERDICT_CANDIDATE_ONLY and not result.suppress
     assert result.value_bound_bindings
+    assert all(binding.unverified_source_contracts == frozenset(required)
+               for binding in result.value_bound_bindings)
