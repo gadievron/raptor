@@ -36,6 +36,7 @@ these literals.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from heapq import nsmallest
 from pathlib import Path
 from typing import Any
 
@@ -378,17 +379,22 @@ def scan_tree(
     refusals: dict[str, int] = {}
     scanned = 0
     root_path = Path(root)
-    for path in sorted(root_path.rglob("*.java")):
-        # Skip decisions apply to the tree BELOW the root only: the
-        # root's own location (a checkout under a dir named out/,
-        # build/, ...) must not veto the whole scan.
-        try:
-            rel_parts = path.relative_to(root_path).parts
-        except ValueError:
-            rel_parts = path.parts
-        if any(part in skip_parts or part.startswith(".")
-               for part in rel_parts):
-            continue
+    def eligible_paths():
+        for path in root_path.rglob("*.java"):
+            # Skip names apply below the root, not to its own location.
+            try:
+                rel_parts = path.relative_to(root_path).parts
+            except ValueError:
+                rel_parts = path.parts
+            if not any(part in skip_parts or part.startswith(".")
+                       for part in rel_parts):
+                yield path
+
+    # Retain one extra eligible path to preserve the cap-hit diagnostic.
+    # Enumeration remains complete; only retained selection is bounded.
+    paths = (nsmallest(max(1, max_files + 1), eligible_paths())
+             if type(max_files) is int else sorted(eligible_paths()))
+    for path in paths:
         if scanned >= max_files:
             refusals["file_cap_hit"] = refusals.get("file_cap_hit", 0) + 1
             break
