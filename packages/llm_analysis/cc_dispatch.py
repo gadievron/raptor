@@ -23,6 +23,7 @@ from core.llm.cc_adapter import (
     parse_cc_structured,
     system_prompt_file_for,
 )
+from core.llm.cost import sanitize_cost
 from core.security.log_sanitisation import escape_nonprintable
 from core.security.redaction import redact_secrets
 from packages.llm_analysis.dispatch import DispatchResult
@@ -228,7 +229,11 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
                     proc.stderr, result)
         return DispatchResult(result=result)
 
-    cost = parsed.pop("cost_usd", 0)
+    try:
+        cost = sanitize_cost(parsed.pop("cost_usd", 0))
+    except OverflowError:
+        # Unrepresentable integer metadata follows the malformed-cost policy.
+        cost = 0.0
     tokens = parsed.pop("_tokens", 0)
     model = parsed.pop("analysed_by", "claude-code")
     duration = parsed.pop("duration_seconds", 0)
