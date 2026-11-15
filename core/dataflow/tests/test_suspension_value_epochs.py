@@ -141,3 +141,39 @@ def test_exception_target_release_external_slot(tmp_path):
         result = sb.try_tier0(fix_diff="+" + guard + "\n", repo_root=tmp_path,
                               sink_uri="app.py", sink_line=len(source.splitlines()), sink_class="xss")
         assert result.status is (sb.Tier0Status.NOT_APPLICABLE if shared and capture != "before" else sb.Tier0Status.SOUND), (shared, seen, events, result)
+
+
+def test_identity_capture_release_external_slot(tmp_path):
+    import platform
+
+    if platform.python_implementation() != "CPython":
+        pytest.skip("owned last-reference timing control requires CPython")
+    guard = '    if not re.fullmatch(r"[a-z]+", safe): return'
+    for shared, capture, inline in (
+        (shared, capture, inline) for shared in (False, True)
+        for capture in ("direct", "before", "after") for inline in (False, True)
+        if not (capture == "after" and inline)
+    ):
+        target = "safe" if capture == "direct" else "alias"
+        source = ("import re\nsafe = 'abc'\nclass Trigger:\n    def __del__(self):\n        global safe\n        safe = '<raw marker>'\n        events.append('finalized')\ndef process():\n"
+                  + ("    global safe\n" if shared else "    safe = 'abc'\n")
+                  + "    trigger = Trigger()\n" + guard + "\n"
+                  + ("    alias = safe\n" if capture == "before" else "")
+                  + "    match None:\n")
+        if inline:
+            source += "        case trigger: sink(" + target + ")\n"
+        else:
+            source += ("        case trigger:\n            pass\n"
+                       + ("    alias = safe\n" if capture == "after" else "")
+                       + "    sink(" + target + ")\n")
+        seen, events = [], []
+        namespace = {"sink": seen.append, "events": events}
+        exec(compile(source, "owned-capture-target.py", "exec"), namespace)
+        namespace["process"]()
+        assert events == ["finalized"]
+        unsafe = shared and capture != "before"
+        assert seen == (["<raw marker>"] if unsafe else ["abc"])
+        (tmp_path / "app.py").write_text(source)
+        result = sb.try_tier0(fix_diff="+" + guard + "\n", repo_root=tmp_path,
+                              sink_uri="app.py", sink_line=len(source.splitlines()), sink_class="xss")
+        assert result.status is (sb.Tier0Status.NOT_APPLICABLE if unsafe else sb.Tier0Status.SOUND), (shared, capture, inline, result)
