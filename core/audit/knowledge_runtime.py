@@ -13,6 +13,7 @@ from contextvars import ContextVar
 from dataclasses import asdict, dataclass, replace
 from functools import wraps
 import json
+import logging
 from pathlib import Path
 from threading import Event, Lock, RLock
 from time import monotonic
@@ -778,6 +779,15 @@ class AuditKnowledgeRuntime:
             if reservation is None and isinstance(outcome.review_input_scope, ReviewInputScope):
                 with self._lock:
                     self._source_review_scopes[(origin.pass_id, attempt_id)] = outcome.review_input_scope
+            # The run-private conditional grant exists only after a real review
+            # return. Persisted history/model fields cannot recreate this grant.
+            from .prepared_claim_pipeline import PreparedClaimPipeline
+            conditional_pipeline = getattr(config, "prepared_claim_pipeline", None)
+            if type(conditional_pipeline) is PreparedClaimPipeline:
+                try:
+                    conditional_pipeline.bind_conditional_live_review(outcome, origin)
+                except Exception:
+                    logging.getLogger(__name__).warning("conditional live review binding unavailable", exc_info=True)
             self.notify()
             return outcome
 

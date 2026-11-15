@@ -226,6 +226,9 @@
     "core/audit/mechanical_gates.py::format_constant_dangerous_calls::unsanitised_llm_value::line": {
       "note": "prompt/context construction — integer line-number field rendered into an LLM prompt block; the string fields on the same line route through defend_prompt_field"
     },
+    "core/audit/member_copy_observation.py::_text::sanitiser_shadow::_text": {
+      "note": "Parser-span decoding helper, not a report writer or sanitiser: _text only slices the owned source bytes at the parsed node byte bounds and decodes UTF-8 (or returns an empty string for no node). Its three internal consumers tokenize syntax, compare an include path, or inspect a numeric literal for a fixed observation contract; none emits this return value to terminal/report output. The name collides with the audit sanitiser-name heuristic; it does not implement or promise output sanitisation. No writer registration or sanitiser exemption is granted."
+    },
     "core/audit/negative_space.py::format_negative_space_prose::unsanitised_llm_value::evidence": {
       "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },

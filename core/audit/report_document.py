@@ -123,6 +123,13 @@ def build_audit_document(report, out_dir: Path, *, target_path=None, model="", d
         ]))
     from .analysis_observation_reporting import analysis_observation_blocks
     blocks.extend(analysis_observation_blocks(report))
+    from .source_observation_sidecar import source_syntax_blocks
+    try:
+        blocks.extend(source_syntax_blocks(report))
+    except Exception:  # Optional descriptive rendering cannot replace the report.
+        blocks.append(Block("paragraph", title="Saved source syntax unavailable", text=(
+            "The optional saved source-syntax projection could not be rendered. "
+            "No verification or coverage conclusion follows.")))
     from .binary_inventory_reporting import binary_inventory_blocks
     blocks.extend(binary_inventory_blocks(report))
     gaps = report.get("analysis_gaps")

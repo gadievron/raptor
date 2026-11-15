@@ -444,6 +444,14 @@ def write_check_results(export: dict, out_dir: Path, *, prepared_claim_pipeline=
             from .prepared_claim_pipeline import PreparedClaimPipeline
             prepared_inputs = (prepared_claim_pipeline.shadow_inputs()
                                if isinstance(prepared_claim_pipeline, PreparedClaimPipeline) else None)
+            if type(prepared_claim_pipeline) is PreparedClaimPipeline:
+                conditional = prepared_claim_pipeline.conditional_shadow_inputs(claim_index)
+                if any(conditional):
+                    c, e, k, a = prepared_inputs or ([], [], {}, [])
+                    cc, ce, ck, ca = conditional
+                    if set(k) & set(ck):
+                        raise ValueError("conditional contract namespace collision")
+                    prepared_inputs = ([*c, *cc], [*e, *ce], {**k, **ck}, [*a, *ca])
             shadow = publication_shadow(claim_index, export.get("findings", []),
                                         prepared_inputs=prepared_inputs)
             save_json(out_dir / SHADOW_FILENAME, shadow)

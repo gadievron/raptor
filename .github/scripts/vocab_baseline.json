@@ -698,15 +698,15 @@
     "kind": "literal"
   },
   "core/audit/evidence_grade.py::MODEL_AUTHORED_REVIEW_KEYS": {
-    "count": 39,
+    "count": 40,
     "kind": "literal",
-    "note": "closed schema-key manifest: the review_result keys the review model authors (the review JSON schema fields plus legacy / other-mode fields pipeline code reads as model claims); a closure test (core/audit/tests/test_model_body_markers.py::TestReviewKeyClosure) fails when pipeline code reads a review_result key in neither this set nor PIPELINE_OWNED_REVIEW_KEYS \u2014 persistence/schema keys, not a learned name vocabulary Current role review (previous baseline count 36; reviewed count 39): Closed model-response field classification, including caller-context requests and guarded model-withdrawal proposals. It is not target/API vocabulary or checker evidence. The supplied comparator already contains language_reference_requests; no three-new-fields or proof-promotion claim is made.",
+    "note": "closed schema-key manifest: the review_result keys the review model authors (the review JSON schema fields plus legacy / other-mode fields pipeline code reads as model claims); a closure test (core/audit/tests/test_model_body_markers.py::TestReviewKeyClosure) fails when pipeline code reads a review_result key in neither this set nor PIPELINE_OWNED_REVIEW_KEYS \u2014 persistence/schema keys, not a learned name vocabulary Current role review (previous baseline count 36; reviewed count 39): Closed model-response field classification, including caller-context requests and guarded model-withdrawal proposals. It is not target/API vocabulary or checker evidence. The supplied comparator already contains language_reference_requests; no three-new-fields or proof-promotion claim is made. Reviewed conditional_verification_requests is an untrusted model-authored request, not evidence or authority.",
     "reviewed": "2026-10-31"
   },
   "core/audit/evidence_grade.py::PIPELINE_OWNED_REVIEW_KEYS": {
-    "count": 90,
+    "count": 91,
     "kind": "literal",
-    "note": "closed schema-key manifest: the review_result keys only pipeline code may set (machine flags, receipts, stage records, panel identity/accounting); the review and edge-review parse boundaries drop them from model output so a model cannot mint a machine signal by emitting the key; kept in lockstep with the code by the same closure test \u2014 persistence/schema keys, not a learned name vocabulary Reviewed addition: ondemand_synth_hypothesis is pipeline-owned late-synthesis diagnostic state, not a model-authored key or a learned identifier. Current role review (previous baseline count 71; reviewed count 77): Closed trusted-field exclusion schema: drop_pipeline_owned removes model attempts to supply pipeline delivery/history/deferral fields before owned values are inserted. These keys do not match target APIs and do not confer evidence through model text. Reviewed current producer/consumer contract: Closed trusted pipeline-output exclusion schema; drop_pipeline_owned removes model attempts to supply machine-owned keys before owned delivery/history/evidence fields are inserted. Existing review note must be preserved verbatim and extended, not replaced. Reviewed additions: external_context_delivery is an invocation-owned post-fit delivery receipt; publication_failure and review_recovery are pipeline-owned publication/recovery processing diagnostics. Model-supplied copies of these three fields are dropped before pipeline-owned values are inserted; novel semantic concerns remain model-authored and unverified. Reviewed final1259 extension: Closed pipeline-owned review-field authority boundary: drop_pipeline_owned strips these keys from model-authored dictionaries before pipeline publication. Added delivery/binary-binding/context fields remain pipeline-owned; no arbitrary field or model claim gains authority. This is a fixed protocol-key taxonomy, not target function-name vocabulary.",
+    "note": "closed schema-key manifest: the review_result keys only pipeline code may set (machine flags, receipts, stage records, panel identity/accounting); the review and edge-review parse boundaries drop them from model output so a model cannot mint a machine signal by emitting the key; kept in lockstep with the code by the same closure test \u2014 persistence/schema keys, not a learned name vocabulary Reviewed addition: ondemand_synth_hypothesis is pipeline-owned late-synthesis diagnostic state, not a model-authored key or a learned identifier. Current role review (previous baseline count 71; reviewed count 77): Closed trusted-field exclusion schema: drop_pipeline_owned removes model attempts to supply pipeline delivery/history/deferral fields before owned values are inserted. These keys do not match target APIs and do not confer evidence through model text. Reviewed current producer/consumer contract: Closed trusted pipeline-output exclusion schema; drop_pipeline_owned removes model attempts to supply machine-owned keys before owned delivery/history/evidence fields are inserted. Existing review note must be preserved verbatim and extended, not replaced. Reviewed additions: external_context_delivery is an invocation-owned post-fit delivery receipt; publication_failure and review_recovery are pipeline-owned publication/recovery processing diagnostics. Model-supplied copies of these three fields are dropped before pipeline-owned values are inserted; novel semantic concerns remain model-authored and unverified. Reviewed final1259 extension: Closed pipeline-owned review-field authority boundary: drop_pipeline_owned strips these keys from model-authored dictionaries before pipeline publication. Added delivery/binary-binding/context fields remain pipeline-owned; no arbitrary field or model claim gains authority. This is a fixed protocol-key taxonomy, not target function-name vocabulary. Reviewed conditional_request_delivery is pipeline-owned availability diagnostic metadata; model-supplied copies are dropped and this field confers no evidence authority.",
     "reviewed": "2026-11-09"
   },
   "core/audit/evidence_grade.py::_CLASSIFIER_FALLBACK_VERIFICATION": {
@@ -937,6 +937,11 @@
   "core/audit/mechanical_gates.py::_UNTRUSTED_TYPES": {
     "count": 12,
     "kind": "literal"
+  },
+  "core/audit/member_copy_observation.py::_observe_syntax": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Closed ordered tree-sitter C statement-kind pattern for the fixed member-copy observation contract: declaration/if/expression/return nodes, including repeated positions. Compares node.type sequence and refuses changed guard or mutation structure; not target API/function-name discovery or a learned domain vocabulary."
   },
   "core/audit/narrowing_bindings.py::scopes": {
     "count": 10,
@@ -1240,6 +1245,26 @@
   "core/audit/sink_heuristics.py::_SIDE_EFFECT_TARGETS": {
     "count": 34,
     "kind": "literal"
+  },
+  "core/audit/source_observation_sidecar.py::ROLES": {
+    "count": 13,
+    "kind": "literal",
+    "note": "Closed thirteen-span role schema for the fixed conditional source-syntax sidecar contract. Validates each saved role exactly once, its expected file, containment and ordering; labels are structural projection fields, not target API/function names or a learned domain vocabulary."
+  },
+  "core/audit/source_observation_sidecar.py::expected": {
+    "count": 12,
+    "kind": "literal",
+    "note": "Exact twelve-key saved observation record schema in _saved_shape. Rejects missing or extra fields and validates typed bounded values; mirrors the typed writer row, not a target API/function-name vocabulary."
+  },
+  "core/audit/source_observation_sidecar.py::load_saved_source_syntax": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Fixed ten-key descriptive saved-summary result schema consumed by source_syntax_blocks: includes authority/freshness/history disclaimers and fixed file/span counts. No target function names or learned domain vocabulary; no saved field grants verification authority."
+  },
+  "core/audit/source_observation_sidecar.py::row": {
+    "count": 12,
+    "kind": "literal",
+    "note": "Exact twelve-field typed observation serializer projection in _project_typed, validated by _saved_shape before publication. Persistence schema keys mirror expected; not target API/function names or a learned domain vocabulary."
   },
   "core/audit/source_view.py::_C_FAMILY_SPECS": {
     "count": 13,

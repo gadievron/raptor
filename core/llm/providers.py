@@ -1517,7 +1517,7 @@ def _dict_schema_to_pydantic(schema: dict[str, Any] | type['BaseModel'], _model_
     Raises:
         ValueError: If schema is invalid or empty
     """
-    from pydantic import BaseModel, create_model
+    from pydantic import BaseModel, Field, create_model
 
     # Check if already a Pydantic model class
     if isclass(schema) and issubclass(schema, BaseModel):
@@ -1611,11 +1611,12 @@ def _dict_schema_to_pydantic(schema: dict[str, Any] | type['BaseModel'], _model_
         if nullable and default_value is ... and not is_required:
             default_value = None
 
-        # Create field definition
-        if default_value is ...:
-            field_definitions[field_name] = (python_type, ...)
-        else:
-            field_definitions[field_name] = (python_type, default_value)
+        # Instructor derives its wire schema from this model. Retain the
+        # caller's field instructions without changing presence/default rules.
+        description = field_spec.get("description")
+        if isinstance(description, str):
+            default_value = Field(default=default_value, description=description)
+        field_definitions[field_name] = (python_type, default_value)
 
     # Create and return Pydantic model
     return create_model(_model_name, **field_definitions)  # type: ignore[call-overload]

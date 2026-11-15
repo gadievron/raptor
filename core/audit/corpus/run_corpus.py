@@ -1892,9 +1892,18 @@ def _parse_audit_log_outcomes(
         key = entry.get("key", "")
         head, _, tail = key.rpartition(":")
         bare = head if (head and tail.isdigit()) else key
-        _accumulated_cost[bare] = (
-            _accumulated_cost.get(bare, 0.0) + entry.get("cost_usd", 0.0)
-        )
+        cost = entry.get("cost_usd", 0.0)
+        accumulated = _accumulated_cost.get(bare, 0.0)
+        if (
+            entry.get("action") == "orchestrator_review"
+            and entry.get("final_status_correction") is True
+        ):
+            # Final-status corrections repeat the outcome's existing cost;
+            # they do not represent another paid review. Retain the snapshot
+            # if earlier review rows are unavailable, without adding it twice.
+            _accumulated_cost[bare] = max(accumulated, cost)
+        else:
+            _accumulated_cost[bare] = accumulated + cost
         entry["cost_usd"] = _accumulated_cost[bare]
         outcomes_by_id[key] = entry
         if bare in floored_bases:

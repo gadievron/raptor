@@ -52,6 +52,73 @@ class PreparedClaimPipeline:
         self._lock = RLock()
         self._staged: dict[tuple, _Staged] = {}
         self._observed: list[tuple] = []
+        self._conditional_run = None
+
+    def _record_conditional_phase(self, outcome, phase, *, origin=None, enabled=None):
+        """Sanitised phase metadata, outside owner locks; never checker input."""
+        from .conditional_claim_pipeline import DELIVERY_FIELD, request_field_diagnostic
+        from .knowledge_requests import KnowledgeOrigin
+        if (self.out_dir is None or (outcome.file, outcome.function)
+                != ("protocol/parser.c", "parse_header")):
+            return
+        review = outcome.review_result
+        delivery = review.get(DELIVERY_FIELD) if type(review) is dict else None
+        if (self._conditional_run is None and not (type(delivery) is dict
+                and delivery.get("schema_offered") is True)
+                and not (type(review) is dict and "conditional_verification_requests" in review)):
+            return
+        snapshot = self._conditional_run.phase_diagnostic(outcome) if self._conditional_run else {
+            "grant_current": False, "active_count": 0, "pending_count": 0,
+            "availability_reason": None, "entry_reasons": [], "pass_id": None}
+        if type(origin) is KnowledgeOrigin:
+            snapshot["pass_id"] = origin.pass_id
+        from .record import append_audit_log
+        import logging
+        try:
+            append_audit_log(self.out_dir, {"action": "conditional_phase_diagnostic",
+                "role": "availability-only-not-authority", "phase": phase,
+                "file": "protocol/parser.c", "function": "parse_header",
+                "line": outcome.line if type(outcome.line) is int else None,
+                "schema_offered": type(delivery) is dict and delivery.get("schema_offered") is True,
+                "enabled": enabled if type(enabled) is bool else None,
+                **request_field_diagnostic(review), **snapshot})
+        except (OSError, ValueError):
+            logging.getLogger(__name__).warning("conditional phase diagnostic unavailable")
+
+    def bind_conditional_live_review(self, outcome, origin):
+        """Bind only at the owned real review-return seam, before IHV issuance."""
+        review = outcome.review_result
+        requested = type(review) is dict and "conditional_verification_requests" in review
+        if self._conditional_run is None and not requested:
+            self._record_conditional_phase(outcome, "review-return", origin=origin)
+            return
+        if self._conditional_run is None:
+            from .conditional_claim_pipeline import ConditionalClaimRun
+            with self._lock:
+                if self._conditional_run is None:
+                    self._conditional_run = ConditionalClaimRun(self.target_path, self.out_dir)
+        self._conditional_run.bind_live_review(outcome, origin)
+        self._record_conditional_phase(outcome, "review-return", origin=origin)
+
+    def intake_conditional_live(self, outcome, *, enabled):
+        """Separate explicit live request schema; no legacy material adaptation."""
+        review = outcome.review_result
+        requested = type(review) is dict and "conditional_verification_requests" in review
+        if self._conditional_run is None and (not requested or enabled is not True):
+            self._record_conditional_phase(outcome, "intake", enabled=enabled)
+            return
+        if self._conditional_run is None:
+            from .conditional_claim_pipeline import ConditionalClaimRun
+            with self._lock:
+                if self._conditional_run is None:
+                    self._conditional_run = ConditionalClaimRun(self.target_path, self.out_dir)
+        self._conditional_run.intake_live(outcome, enabled=enabled)
+        self._record_conditional_phase(outcome, "intake", enabled=enabled)
+
+    def conditional_shadow_inputs(self, claim_index):
+        """Only privately executed conditional run state, never supplied facts."""
+        run = self._conditional_run
+        return run.shadow_inputs(claim_index) if run is not None else ([], [], {}, [])
 
     @staticmethod
     def _key(record):

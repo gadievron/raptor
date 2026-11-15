@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from core.audit.corpus.attribution import build_signal_index
 from core.audit.corpus.run_corpus import _parse_audit_log_outcomes
 
@@ -28,6 +30,69 @@ def _write_log(path: Path, entries: list[dict[str, Any]]) -> Path:
 
 
 class TestParseAuditLogOutcomes:
+    @pytest.mark.parametrize(("entries", "expected_cost", "expected_status"), [
+        pytest.param([
+            {"cost_usd": 0.1430995, "status": "suspicious"},
+            {"cost_usd": 0.1430995, "status": "dark", "final_status_correction": True},
+        ], 0.1430995, "dark", id="observed-correction"),
+        pytest.param([
+            {"cost_usd": 0.125, "status": "suspicious"},
+            {"cost_usd": 0.25, "status": "suspicious"},
+            {"cost_usd": 0.25, "status": "dark", "final_status_correction": True},
+        ], 0.375, "dark", id="distinct-paid-reviews"),
+        pytest.param([
+            {"cost_usd": 0.125, "status": "suspicious"},
+            {"cost_usd": 0.125, "status": "dark", "final_status_correction": True},
+            {"cost_usd": 0.125, "status": "clean", "final_status_correction": True},
+        ], 0.125, "clean", id="repeated-corrections"),
+        pytest.param([
+            {"cost_usd": 0.125, "status": "dark", "final_status_correction": True},
+        ], 0.125, "dark", id="orphan-snapshot"),
+        pytest.param([
+            {"cost_usd": 0.125, "status": "suspicious"},
+            {"cost_usd": 0.25, "status": "dark", "final_status_correction": True},
+        ], 0.25, "dark", id="cumulative-snapshot"),
+        pytest.param([
+            {"cost_usd": 0.125, "status": "suspicious"},
+            {"cost_usd": 0.125, "status": "dark", "final_status_correction": 1},
+        ], 0.25, "dark", id="integer-flag"),
+        pytest.param([
+            {"cost_usd": 0.125, "status": "suspicious"},
+            {"cost_usd": 0.125, "status": "dark", "final_status_correction": "true"},
+        ], 0.25, "dark", id="string-flag"),
+        pytest.param([
+            {"cost_usd": 0.125, "status": "suspicious"},
+            {"cost_usd": 0.125, "status": "dark", "final_status_correction": False},
+        ], 0.25, "dark", id="false-flag"),
+        pytest.param([
+            {"cost_usd": 0.125, "status": "suspicious"},
+            {"cost_usd": 0.125, "status": "dark"},
+        ], 0.25, "dark", id="equal-cost-paid-reviews"),
+        pytest.param([
+            {"cost_usd": 0.125, "status": "suspicious"},
+            {"cost_usd": 0.25, "status": "dark", "action": "sweep_promotion",
+             "final_status_correction": True},
+        ], 0.375, "dark", id="other-action"),
+        pytest.param([
+            {"cost_usd": 0.125, "status": "suspicious"},
+            {"cost_usd": 0.125, "status": "dark", "final_status_correction": True},
+            {"cost_usd": 0.25, "status": "suspicious"},
+            {"cost_usd": 0.375, "status": "dark", "final_status_correction": True},
+        ], 0.375, "dark", id="review-after-correction"),
+    ])
+    def test_status_corrections_preserve_cost_without_another_charge(
+        self, tmp_path, entries, expected_cost, expected_status,
+    ):
+        log = _write_log(tmp_path / ".audit-log.jsonl", [
+            {"action": "orchestrator_review", "key": "unit.c:f:10",
+             "function_qualified": "Scope.f", **entry}
+            for entry in entries
+        ])
+        outcomes, _ = _parse_audit_log_outcomes(log)
+        for key in ("unit.c:f:10", "unit.c:f", "unit.c:Scope.f:10", "unit.c:Scope.f"):
+            assert outcomes[key]["cost_usd"] == expected_cost
+            assert outcomes[key]["status"] == expected_status
+
     def test_qualified_alias_resolves_label_id(self, tmp_path):
         log = _write_log(tmp_path / ".audit-log.jsonl", [
             {"action": "orchestrator_review",

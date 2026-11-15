@@ -35,6 +35,8 @@ from __future__ import annotations
 import gc
 import re
 import time
+
+import pytest
 from typing import Callable, TypeVar
 
 from core.audit.sanwit._extract import (
@@ -54,6 +56,9 @@ _T = TypeVar("_T")
 
 
 def _timed(fn: Callable[[], _T]) -> tuple[_T, float]:
+    # Prior tests' unreachable cycles are outside this workload. Keep GC
+    # enabled: collections caused by fn still count in the measured CPU.
+    gc.collect()
     gc_cpu = 0.0
     gc_started = 0.0
 
@@ -351,3 +356,57 @@ class TestAssemblyLoopLinear:
         result = extract_chain(src, ("htmlspecialchars",))
         assert isinstance(result, ExtractionRefusal)
         assert "copies can diverge" in result.reason
+
+
+class TestTimingHeapScope:
+    def test_preexisting_unreachable_cycle_is_collected_before_work(self):
+        import weakref
+
+        class Cycle:
+            pass
+
+        gc.collect()
+        cycle = Cycle()
+        cycle.self = cycle
+        reference = weakref.ref(cycle)
+        del cycle
+        assert reference() is not None
+        try:
+            result, _ = _timed(lambda: reference() is None)
+            assert result is True
+            assert gc.isenabled()
+        finally:
+            gc.collect()
+
+    @pytest.mark.slow
+    def test_workload_collections_keep_the_full_cpu_bill(self):
+        import weakref
+
+        class Cycle:
+            pass
+
+        gc.collect()
+        reference = None
+        collections = 0
+
+        def workload():
+            nonlocal reference, collections
+            start = time.process_time()
+            while time.process_time() - start <= _CPU_BOUND_S + 0.05:
+                cycle = Cycle()
+                cycle.self = cycle
+                reference = weakref.ref(cycle)
+                del cycle
+                collections += gc.collect()
+            return time.process_time() - start
+
+        try:
+            workload_cpu, elapsed = _timed(workload)
+            assert reference is not None and reference() is None
+            assert collections > 0
+            assert gc.isenabled()
+            # This is the same rejection boundary used by the adversarial
+            # extraction callers: owned collections cannot disappear.
+            assert elapsed >= workload_cpu > _CPU_BOUND_S
+        finally:
+            gc.collect()

@@ -1488,6 +1488,14 @@ def make_review_fn(
             active_schema = {**active_schema, "properties": {
                 **active_schema.get("properties", {}), "claim_withdrawals": _CLAIM_WITHDRAWALS_SCHEMA}}
 
+        # Optional explicit request vocabulary; never infer a declaration from
+        # a headline class or convert it into checker authority here.
+        from .conditional_claim_pipeline import REQUEST_FIELD, request_schema_for_context
+        conditional_schema = request_schema_for_context(ctx)
+        if conditional_schema is not None:
+            active_schema = {**active_schema, "properties": {
+                **active_schema.get("properties", {}), REQUEST_FIELD: conditional_schema}}
+
         try:
             result, cost, resolved_model, usage = _single_pass(
                 prompt, active_schema, kwargs,
@@ -1516,6 +1524,9 @@ def make_review_fn(
                 drop_pipeline_owned,
             )
             result = defang_model_fields(drop_pipeline_owned(result))
+            from .conditional_claim_pipeline import DELIVERY_FIELD, request_field_diagnostic
+            if conditional_schema is not None:
+                result[DELIVERY_FIELD] = {"schema_offered": True, **request_field_diagnostic(result)}
             result.pop("external_context_delivery", None)
             if delivered_external_context and ctx.get("continuation_context_inputs"):
                 result["external_context_delivery"] = delivered_external_context[0]

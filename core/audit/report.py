@@ -498,6 +498,14 @@ def generate_report(
     from .analysis_observation_reporting import load_analysis_observations
     report["analysis_observations"] = load_analysis_observations(out_dir)
 
+    from .source_observation_sidecar import load_saved_source_syntax
+    try:
+        source_syntax = load_saved_source_syntax(out_dir)
+    except Exception:  # Optional saved data cannot replace the audit; cancellation propagates.
+        source_syntax = {"mode": "unavailable", "authority": False, "source_verified": False}
+    if source_syntax is not None:
+        report["source_syntax_observations"] = source_syntax
+
     from .binary_inventory_reporting import load_binary_inventory
     binary_inventory = load_binary_inventory(out_dir)
     if binary_inventory is not None:

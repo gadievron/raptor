@@ -25713,6 +25713,16 @@ def _verify_hypotheses_immediate(
 
     Architecture: Extract → Route → Verify → Aggregate
     """
+    # A separate, explicit source-model request is issued before checking.
+    # Do not adapt legacy ranked hypotheses or add conditional records to the
+    # verdict-aggregation list. Empty/disabled intake withdraws prior handles.
+    from .prepared_claim_pipeline import PreparedClaimPipeline
+    _conditional_pipeline = getattr(config, "prepared_claim_pipeline", None)
+    if type(_conditional_pipeline) is PreparedClaimPipeline:
+        try:
+            _conditional_pipeline.intake_conditional_live(outcome, enabled=config.immediate_verify)
+        except Exception:
+            logger.warning("conditional shadow intake unavailable", exc_info=True)
     if not config.immediate_verify:
         return outcome
 
