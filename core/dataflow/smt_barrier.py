@@ -1,60 +1,32 @@
-"""Tier 0 of the trust-witness sound tier: free SMT-backed barrier verdict.
+"""Mechanical validator extraction and bounded character-exclusion proofs.
 
-Cost-asymmetric routing. The Tier 2 backend (LLM proposes a CodeQL barrier-
-guard, CodeQL adjudicates) is correct but expensive — every attempt burns
-LLM tokens and a CodeQL compile+run cycle. SMT over Z3's regex/string
-theory is single-digit-ms of CPU and uses no LLM, so it's worth trying
-FIRST on any case where the fix adds a charset/regex-shaped validator.
-The whoogle archetype is::
+Tier 0 recognises supported charset guards and stripping substitutions
+from added source lines. The prover checks regex-intersection emptiness
+or finite-set inclusion against the selected danger-character model.
+A mathematical result describes the characters in the validated value;
+it does not establish safety in every sink interpretation context.
 
-    name = request.args.get('name')
-    if not re.match(r'^[A-Za-z0-9_+-]+$', name):
-        return error()
-    open(os.path.join(CONFIG_PATH, name))            # CWE-22 sink
+Source adjudication separately checks validator identity, control flow,
+value identity and the supported source profile. Python checks use AST
+scope and dominance analysis; other supported languages use their source
+binding and epoch checks. A validator's presence in a reported flow is
+not sufficient to establish those properties.
 
-(The historical whoogle charset also admitted '.'; the pathtrav danger
-model now includes '.' — '..' segments escape via multi-component
-joins the charset model cannot see — so a dot-admitting charset is
-DECLINED, not SOUND.)
+Results use these statuses:
 
-The Tier 2 LLM keeps failing to express that as a CodeQL barrier-guard;
-Z3 dispatches it directly by proving the validator's language and the
-sink's danger language don't intersect.
+* SOUND: the character proof and implemented source obligations passed
+  for the selected model.
+* DECLINED: the character model did not establish exclusion; a concrete
+  counterexample is included when available.
+* NOT_APPLICABLE: extraction or a required source obligation is missing.
+* Z3_UNAVAILABLE: the optional solver substrate is unavailable.
 
-Verdict structure (sound by construction):
-
-    SOUND    -- validator's regex language INTERSECT danger language is
-                empty (proven by Z3) AND validator dominates the sink
-                (its location appears as a step in the SARIF codeFlow).
-                Both checks are mechanical; no LLM involved.
-
-    DECLINED -- intersection is non-empty (validator insufficient, with a
-                concrete counterexample input); or validator location is
-                not on the codeFlow (no dominance evidence we can prove
-                from the SARIF alone). Tier 2 takes over with the full
-                LLM+CodeQL machinery.
-
-    NOT_APPLICABLE
-             -- no validator-shape pattern recognised in the fix diff,
-                or sink_class has no danger model. Tier 2 takes over.
-
-    Z3_UNAVAILABLE
-             -- substrate has no z3-solver installed. Tier 2 takes over.
-                Substrate gate matches core.smt_solver's degradation
-                pattern.
-
-Soundness rests on two pillars: the regex-intersection proof (decidable
-+ sound by Z3's automata procedure) and the dominance check (the
-validator's source line is on the value's actual dataflow path, as
-reported by CodeQL's own engine — we just trust CodeQL's path tracking).
-The LLM never asserts safety: extraction is mechanical, adjudication
-is mechanical.
-
-The validator extractor is deliberately conservative (Python `re.match`
-charset patterns only, for the first cut) — false NOT_APPLICABLE just
-falls through to Tier 2, but a wrong extraction could synthesise an
-unsound suppression. Widening the extractor is a follow-on once Tier 0
-has been validated on the corpus.
+Successful XSS and command character proofs remain conditional diagnostics
+with NOT_APPLICABLE status and no barrier artifact: HTML interpretation,
+output composition and command identity/position are not verified by
+these character sets. They cannot authorize suppression of those findings.
+Unsupported source shapes and missing obligations fall through to later
+adjudication. No LLM assertion supplies a missing proof obligation.
 
 Formulation note: `Contains(name, ...)` + `InRe(name, Plus(...))` hangs
 the Z3 string solver. The working query is regex-intersection emptiness
