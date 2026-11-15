@@ -240,10 +240,15 @@ def _sweep_semgrep_rule(
     is recorded on ``report.errors``.
     """
     result = semgrep_runner.run_rule(target, str(rule_path), name=rule_id)
-    errored = bool(result.errors)
+    existing_errors = set(result.errors)
+    errors = [*result.errors, *(
+        notice for notice in getattr(result, "skipped_rules", ())
+        if notice not in existing_errors
+    )]
+    errored = bool(errors)
     if errored:
         report.errors.extend(
-            f"semgrep {rule_id} @ {target}: {e}" for e in result.errors
+            f"semgrep {rule_id} @ {target}: {e}" for e in errors
         )
         if result.findings:
             report.partial.append(f"{rule_id}@{target}")
