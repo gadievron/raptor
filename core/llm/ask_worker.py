@@ -17,7 +17,7 @@ _MAX_BYTES = 8 * 1024 * 1024
 
 
 def execute_request(catalog, raw: bytes):
-    from core.llm.client import LLMClient
+    from core.llm.transcript import build_llm_client
 
     if not os.environ.get("RAPTOR_LLM_SOCKET") or not os.environ.get("RAPTOR_LLM_TOKEN_FD"):
         raise ValueError("Missing keyless ask proxy capability")
@@ -35,7 +35,7 @@ def execute_request(catalog, raw: bytes):
                              or not math.isfinite(temp)):
         raise ValueError("Invalid keyless ask temperature")
     config = llm_config_from_catalog(catalog, catalog.routes[0].route_id)
-    client = LLMClient(config, catalog=catalog)
+    client = build_llm_client(config, catalog=catalog)
     kwargs = {"model_config": config.primary_model, "max_tokens": request["max_tokens"]}
     if temp is not None:
         kwargs["temperature"] = temp

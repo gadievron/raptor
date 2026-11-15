@@ -1,6 +1,7 @@
 """Catalog construction and generation must never rediscover operator setup."""
 
 from dataclasses import replace
+import json
 
 import pytest
 
@@ -81,3 +82,37 @@ def test_catalog_requires_explicit_configuration_and_native_sdk(monkeypatch):
     monkeypatch.setattr(detection, "_sdk_available", lambda name: False)
     with pytest.raises(ValueError, match="native"):
         LLMClient(config, catalog=public)
+
+
+def test_ask_worker_records_and_replays_without_provider_dispatch(catalog_client, monkeypatch, tmp_path):
+    from core.llm import client, transcript
+    from core.llm.ask_worker import execute_request
+    from core.testing.module_state import isolated_module_state
+
+    _, public = catalog_client()
+    raw = json.dumps({"prompt": "test prompt", "system_prompt": None,
+                      "max_tokens": 32, "temperature": None}).encode()
+    path = tmp_path / "worker.jsonl"
+    monkeypatch.setenv("RAPTOR_LLM_TRANSCRIPT", f"record:{path}")
+    with isolated_module_state(transcript, {"_active": None, "_active_resolved": False},
+                               lock=transcript._active_lock):
+        recorded = execute_request(public, raw)
+    assert recorded.content == "worker-ok"
+    assert recorded.tokens_used == 1
+    assert path.is_file()
+    assert "parent-only" not in path.read_text()
+
+    def no_provider(*args, **kwargs):
+        pytest.fail("replaying the keyless worker dispatched a provider")
+
+    monkeypatch.setattr(client, "create_provider", no_provider)
+    monkeypatch.setenv("RAPTOR_LLM_TRANSCRIPT", f"replay:{path}")
+    with isolated_module_state(transcript, {"_active": None, "_active_resolved": False},
+                               lock=transcript._active_lock):
+        replayed = execute_request(public, raw)
+    assert replayed.content == recorded.content
+    assert replayed.model == recorded.model
+    assert replayed.provider == recorded.provider
+    # Replay preserves the answer but reports no new provider usage or cost.
+    assert replayed.tokens_used == 0
+    assert replayed.cost == 0
