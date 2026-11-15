@@ -311,7 +311,7 @@ def _parse_conditions(rule: str) -> list[PathCondition]:
         <blank>          — ignored
     """
     conditions: list[PathCondition] = []
-    for idx, raw_line in enumerate(rule.splitlines()):
+    for idx, raw_line in enumerate(str.splitlines(rule)):
         line = raw_line.strip()
         if not line:
             continue
