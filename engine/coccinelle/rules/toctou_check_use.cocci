@@ -2,9 +2,10 @@
 // time-of-use) patterns beyond filesystem races.
 //
 // Matches:
-// 1. Permission check (inode_permission) followed by operation on the
-//    same object without holding a lock.
-// 2. refcount_read() followed by a free assuming the refcount holds.
+// 1. inode_permission followed by access through the same object spelling.
+// 2. refcount/atomic field read followed by a free-family call.
+// Neither shape proves check reliance, object stability, relevant lock state,
+// ownership or concurrent mutation.
 //
 // Under-lock suppression is expressed IN-PATTERN (`when !=` guards
 // on lock acquisitions between check and use) — there are no safe
@@ -27,7 +28,7 @@
 // @role: detection
 // raptor: confirm-only
 
-// Permission check followed by privileged operation without lock.
+// Permission-check/object-access candidate with selected lock-call exclusions.
 // Only checks that BIND the object qualify (inode_permission): the
 // bare capable()/ns_capable() forms carry no object, which left
 // `obj` unconstrained — any dereference of anything in the function
@@ -66,10 +67,10 @@ for _p in p_use:
     _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
           "line_end": int(_p.line_end), "col_end": int(_p.column_end),
           "rule": "toctou_check_use",
-          "message": "TOCTOU: '%s->%s' used after permission check without intervening lock" % (obj, op)}
+          "message": "Candidate: '%s->%s' accessed after inode_permission without a recognised intervening lock call. Review check reliance, object identity, caller-held synchronisation and concurrent mutation." % (obj, op)}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
 
-// refcount_read() followed by a free assuming the refcount holds
+// Refcount/atomic field-read and free-family candidate; ownership needs review.
 @refcount_toctou exists@
 expression obj;
 identifier F;
@@ -97,5 +98,5 @@ for _p in p_use:
     _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
           "line_end": int(_p.line_end), "col_end": int(_p.column_end),
           "rule": "toctou_check_use",
-          "message": "TOCTOU: free of '%s' after refcount_read without lock — refcount may have changed" % obj}
+          "message": "Candidate: '%s' passed to a free-family call after a refcount/atomic field read without a recognised intervening lock call. Review field/API semantics, object identity, synchronisation and ownership before confirming a race." % obj}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
