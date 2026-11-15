@@ -25,6 +25,7 @@ from core.atomic_fs import write_text_atomically
 from core.llm.context_window import DATAFLOW_STEP_CONTEXT_LINES
 from core.logging import get_logger
 from core.source import read_text_capped
+from core.source.lines import split_lines
 from packages.codeql.dataflow_validator import DataflowPath
 
 logger = get_logger()
@@ -183,14 +184,14 @@ class DataflowVisualizer:
                     # located in a repo's multi-hundred-MB
                     # generated/blob file was pulled into memory
                     # each time.
-                    got = read_text_capped(file_path)
+                    got = read_text_capped(file_path, newline="")
                     if got is None:
                         node['code_context'] = (
                             f"Error reading file: {node['file']}"
                         )
                         continue
                     content, truncated = got
-                    lines = content.splitlines(keepends=True)
+                    lines = split_lines(content)
                     # SARIF regions are external input: startLine is
                     # copied verbatim from the result JSON, so a
                     # malformed document can carry a non-integer
