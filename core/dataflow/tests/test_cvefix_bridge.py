@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -493,14 +494,15 @@ def test_synthesize_from_results_aggregates_persists_resumes(monkeypatch, tmp_pa
     assert sorted(calls) == ["f1", "f2", "f3"]                 # f4 excluded (after==0)
     assert report.total == 2 and report.sound == 1 and report.not_sound == 1
     assert report.suppression_rate == 0.5                      # f3 excluded from rate
-    with sqlite3.connect(str(synth)) as con:
-        # barrier query persisted for sound AND not_sound; reason persisted too;
-        # backend column distinguishes Tier 0 (smt) from Tier 2 (codeql)
-        assert con.execute("SELECT barrier_query FROM synth_results WHERE fix_hash='f1'").fetchone()[0] == "smt:charset:[a-z]+@x:1"
-        assert con.execute("SELECT backend FROM synth_results WHERE fix_hash='f1'").fetchone()[0] == "smt"
-        assert con.execute("SELECT barrier_query FROM synth_results WHERE fix_hash='f2'").fetchone()[0] == "QL2"
-        assert con.execute("SELECT backend FROM synth_results WHERE fix_hash='f2'").fetchone()[0] == "codeql"
-        assert con.execute("SELECT detail FROM synth_results WHERE fix_hash='f2'").fetchone()[0] == "suppress_fp_failed(after=2)"
+    with closing(sqlite3.connect(str(synth))) as con:
+        with con:
+            # barrier query persisted for sound AND not_sound; reason persisted too;
+            # backend column distinguishes Tier 0 (smt) from Tier 2 (codeql)
+            assert con.execute("SELECT barrier_query FROM synth_results WHERE fix_hash='f1'").fetchone()[0] == "smt:charset:[a-z]+@x:1"
+            assert con.execute("SELECT backend FROM synth_results WHERE fix_hash='f1'").fetchone()[0] == "smt"
+            assert con.execute("SELECT barrier_query FROM synth_results WHERE fix_hash='f2'").fetchone()[0] == "QL2"
+            assert con.execute("SELECT backend FROM synth_results WHERE fix_hash='f2'").fetchone()[0] == "codeql"
+            assert con.execute("SELECT detail FROM synth_results WHERE fix_hash='f2'").fetchone()[0] == "suppress_fp_failed(after=2)"
 
     # resume: re-run reprocesses nothing
     calls.clear()
@@ -523,9 +525,10 @@ def test_synthesize_from_results_crash_isolation(monkeypatch, tmp_path: Path):
         results, synth_db=synth, work_dir=tmp_path / "w", proposer=lambda *a: "", log=lambda *a: None)
     # f2 crashed -> recorded as error (excluded), f1+f3 still synthesized
     assert report.sound == 2
-    with sqlite3.connect(str(synth)) as con:
-        assert con.execute("SELECT status FROM synth_results WHERE fix_hash='f2'").fetchone()[0] == "error"
-        assert con.execute("SELECT backend FROM synth_results WHERE fix_hash='f2'").fetchone()[0] == ""
+    with closing(sqlite3.connect(str(synth))) as con:
+        with con:
+            assert con.execute("SELECT status FROM synth_results WHERE fix_hash='f2'").fetchone()[0] == "error"
+            assert con.execute("SELECT backend FROM synth_results WHERE fix_hash='f2'").fetchone()[0] == ""
 
 
 def test_synthesize_from_results_newest_first_order(monkeypatch, tmp_path: Path):

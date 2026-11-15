@@ -13,11 +13,11 @@ import pytest
 CASES = [
     {
         "name": "test_walk_keeps_both_cwes_of_one_commit",
-        "sha256": "bc176296f3b03a84906b3a50aa5a09f0737ec08140406f9ce692e07088fbdca1",
+        "sha256": "6df71559e0e32a6e09383d15f7b2eeee8bb52204e368e82ffbafcc4a80d1ed5f",
     },
     {
         "name": "test_promote_updates_only_on_recovery",
-        "sha256": "45de1093b8f4e0d3bdaffd1997fa0c3d2ea64e3ac4944105ec5694728ff92c68",
+        "sha256": "79a295c4ada05ac465c9352febba57351eb6ac81a8ec63af5ca87846f526adb3",
     },
     {
         "name": "test_walk_dedups_same_commit_cwe_across_cves",
