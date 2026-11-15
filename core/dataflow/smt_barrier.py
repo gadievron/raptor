@@ -3865,7 +3865,7 @@ def try_tier0(
         )
     verdict = prove_neutralizes(spec, sink_class)
     if verdict.sound:
-        if sink_class in {"xss", "cmdi"}:
+        if sink_class in {"xss", "cmdi", "cmdi_argv"}:
             context = "HTML" if sink_class == "xss" else "command"
             return Tier0Result(
                 Tier0Status.NOT_APPLICABLE,

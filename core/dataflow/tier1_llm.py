@@ -935,7 +935,7 @@ def try_tier1b(
                     f"not dominate sink (advisory or reassigned)",
                     spec=mech,
                 )
-        if sink_class in {"xss", "cmdi"}:
+        if sink_class in {"xss", "cmdi", "cmdi_argv"}:
             context = "HTML" if sink_class == "xss" else "command"
             return Tier0Result(
                 Tier0Status.NOT_APPLICABLE,
