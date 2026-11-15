@@ -113,15 +113,19 @@ class ImageBackingOwner:
     """
 
     def __init__(self, *, max_images, max_artifact_bytes, max_retained_bytes,
-                 lifetime_seconds):
+                 lifetime_seconds, max_read_bytes=0):
         for value in (max_images, max_artifact_bytes, max_retained_bytes):
             if type(value) is not int or value <= 0:
                 raise ValueError("positive integer backing budgets required")
         if (type(lifetime_seconds) not in (int, float)
                 or not math.isfinite(lifetime_seconds) or lifetime_seconds <= 0):
             raise ValueError("finite positive backing lifetime required")
+        if type(max_read_bytes) is not int or max_read_bytes < 0:
+            raise ValueError("nonnegative integer backing read budget required")
         self._limits = max_images, max_artifact_bytes, max_retained_bytes
         self._lifetime = lifetime_seconds
+        # Explicit opt-in for a future private image interpreter; no FD handoff.
+        self._read_bytes_remaining = max_read_bytes
         self._entries = {}
         self._closed = False
         self._poisoned = False
@@ -141,6 +145,8 @@ class ImageBackingOwner:
             raise
 
     def _drop(self, reference):
+        if type(reference) is not ImageBackingReference:
+            return
         entry = self._entries.pop(reference, None)
         if entry is not None:
             backend, fd, _, _ = entry
@@ -261,7 +267,8 @@ class ImageBackingOwner:
             self._busy = True
             try:
                 self._reap()
-                entry = self._entries.get(reference)
+                entry = (self._entries.get(reference)
+                         if type(reference) is ImageBackingReference else None)
                 if entry is None:
                     raise _Unavailable("foreign or retired backing")
                 backend, fd, identity, deadline = entry
@@ -277,6 +284,59 @@ class ImageBackingOwner:
                 if not isinstance(exc, Exception):
                     raise
                 return ImageBackingUnavailable("backing observation unavailable")
+            finally:
+                self._busy = False
+
+    def _read(self, reference, offset, size):
+        """Private bounded byte access, not a filesystem or child-use receipt.
+
+        Disabled unless the owner has an explicit read budget. Each request is
+        at most 64 KiB and charged before backend calls, including failed reads.
+        No budget refund, descriptor exposure or retention-lifetime extension.
+        """
+        with self._lock:
+            if self._busy or self._closed or self._poisoned:
+                return ImageBackingUnavailable("backing owner unavailable")
+            self._busy = True
+            touched = False
+            try:
+                self._reap()
+                entry = (self._entries.get(reference)
+                         if type(reference) is ImageBackingReference else None)
+                if entry is None:
+                    raise _Unavailable("foreign or retired backing")
+                backend, fd, identity, deadline = entry
+                if (type(offset) is not int or offset < 0 or type(size) is not int
+                        or not 0 < size <= 65536 or offset + size > identity.byte_count):
+                    raise _Unavailable("invalid backing read range")
+                if size > self._read_bytes_remaining:
+                    raise _Unavailable("backing read budget exceeded")
+                self._read_bytes_remaining -= size
+                touched = True
+                backend.verify(fd)
+                self._deadline_check(deadline)
+                content = bytearray()
+                while len(content) < size:
+                    self._deadline_check(deadline)
+                    remaining = size - len(content)
+                    data = backend.read(fd, remaining, offset + len(content))
+                    if type(data) is not bytes or not 0 < len(data) <= remaining:
+                        raise _Unavailable("incomplete backing read")
+                    content.extend(data)
+                result = bytes(content)
+                backend.verify(fd)
+                self._deadline_check(deadline)
+                return result
+            except BaseException as exc:
+                if touched:
+                    try:
+                        self._drop(reference)
+                    except BaseException as cleanup:
+                        if isinstance(exc, Exception) and not isinstance(cleanup, Exception):
+                            raise
+                if not isinstance(exc, Exception):
+                    raise
+                return ImageBackingUnavailable("backing read unavailable")
             finally:
                 self._busy = False
 

@@ -393,3 +393,161 @@ def test_publication_aftereffect_rolls_back_before_single_close(setup, error):
     assert list(kernel.data) == [9]
     owner.close()
     assert [e for e in kernel.events if e[0] == "close"] == [("close", 100)]
+
+
+def test_private_reader_is_disabled_without_explicit_budget(setup):
+    kernel, _, make_owner, identity = setup
+    owner = make_owner()
+    reference = owner.acquire(9, identity)
+    before = len(kernel.events)
+    assert isinstance(owner._read(reference, 0, 1), module.ImageBackingUnavailable)
+    assert len(kernel.events) == before
+    assert owner.describe(reference).identity == identity
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_private_reader_returns_exact_sealed_slice_with_finite_debit(setup, partial):
+    kernel, _, make_owner, identity = setup
+    owner = make_owner(max_read_bytes=9)
+    reference = owner.acquire(9, identity)
+    kernel.partial = partial
+    assert owner._read(reference, 2, 6) == bytes(kernel.data[9][2:8])
+    assert owner._read_bytes_remaining == 3
+    before = len(kernel.events)
+    assert isinstance(owner._read(reference, 0, 4), module.ImageBackingUnavailable)
+    assert len(kernel.events) == before
+    assert owner._read(reference, 0, 3) == bytes(kernel.data[9][:3])
+    assert owner._read_bytes_remaining == 0
+    assert owner.describe(reference).state == "retained_backing_bytes_only"
+
+
+@pytest.mark.parametrize("offset,size", [(-1, 1), (True, 1), (0, True), (0, 0),
+                                        (0, -1), (0, 65537), (23, 1), (22, 2)])
+def test_private_reader_invalid_range_does_not_reach_backend_or_spend(setup, offset, size):
+    kernel, _, make_owner, identity = setup
+    owner = make_owner(max_read_bytes=10)
+    reference = owner.acquire(9, identity)
+    before = len(kernel.events)
+    assert isinstance(owner._read(reference, offset, size), module.ImageBackingUnavailable)
+    assert len(kernel.events) == before and owner._read_bytes_remaining == 10
+    assert owner.describe(reference).identity == identity
+
+
+@pytest.mark.parametrize("error", [OSError, MemoryError, KeyboardInterrupt])
+@pytest.mark.parametrize("seam", ["read", "read_seals"])
+def test_private_reader_failure_spends_budget_revokes_and_closes_once(setup, error, seam):
+    kernel, _, make_owner, identity = setup
+    owner = make_owner(max_read_bytes=20)
+    reference = owner.acquire(9, identity)
+    def fail(name, *args):
+        if name == seam:
+            raise error("private reader failure")
+    kernel.fault = fail
+    if error is KeyboardInterrupt:
+        with pytest.raises(KeyboardInterrupt):
+            owner._read(reference, 0, 10)
+    else:
+        assert isinstance(owner._read(reference, 0, 10), module.ImageBackingUnavailable)
+    assert owner._read_bytes_remaining == 10 and not owner._entries
+    kernel.fault = None
+    owner.close()
+    assert list(kernel.data) == [9]
+    assert [e for e in kernel.events if e[0] == "close"] == [("close", 100)]
+
+
+@pytest.mark.parametrize("data", [None, "foreign", b"", b"longer than requested"])
+def test_private_reader_invalid_bytes_revoke_without_returning_partial_content(setup, monkeypatch, data):
+    kernel, _, make_owner, identity = setup
+    owner = make_owner(max_read_bytes=10)
+    reference = owner.acquire(9, identity)
+    monkeypatch.setattr(kernel, "pread", lambda *args: data)
+    assert isinstance(owner._read(reference, 0, 5), module.ImageBackingUnavailable)
+    assert owner._read_bytes_remaining == 5 and not owner._entries
+    assert list(kernel.data) == [9]
+
+
+def test_private_reader_expiry_after_readback_discards_bytes(setup):
+    kernel, clock, make_owner, identity = setup
+    owner = make_owner(max_read_bytes=10)
+    reference = owner.acquire(9, identity)
+    seen = []
+    def expire(name, *args):
+        if name == "read_seals":
+            seen.append(name)
+            if len(seen) == 2:
+                clock[0] = 120
+    kernel.fault = expire
+    assert isinstance(owner._read(reference, 0, 5), module.ImageBackingUnavailable)
+    assert len(seen) == 2 and owner._read_bytes_remaining == 5
+    assert not owner._entries and list(kernel.data) == [9]
+
+
+def test_private_reader_does_not_accept_foreign_or_retired_reference(setup):
+    kernel, _, make_owner, identity = setup
+    first, second = make_owner(max_read_bytes=10), make_owner(max_read_bytes=10)
+    reference = first.acquire(9, identity)
+    before = len(kernel.events)
+    assert isinstance(second._read(reference, 0, 1), module.ImageBackingUnavailable)
+    assert len(kernel.events) == before and second._read_bytes_remaining == 10
+    first.retire(reference)
+    assert isinstance(first._read(reference, 0, 1), module.ImageBackingUnavailable)
+    assert first._read_bytes_remaining == 10
+
+
+def test_private_reader_reentry_cannot_spend_more_or_retire_handle(setup):
+    kernel, _, make_owner, identity = setup
+    owner = make_owner(max_read_bytes=10)
+    reference = owner.acquire(9, identity)
+    def reenter(name, *args):
+        if name == "read":
+            assert isinstance(owner._read(reference, 0, 1), module.ImageBackingUnavailable)
+            with pytest.raises(RuntimeError):
+                owner.retire(reference)
+    kernel.fault = reenter
+    assert owner._read(reference, 0, 5) == bytes(kernel.data[9][:5])
+    assert owner._read_bytes_remaining == 5
+
+
+def test_private_reader_cleanup_cancellation_overrides_ordinary_read_error(setup):
+    kernel, _, make_owner, identity = setup
+    owner = make_owner(max_read_bytes=10)
+    reference = owner.acquire(9, identity)
+    def fail(name, *args):
+        if name == "read":
+            raise OSError("read failure")
+        if name == "close":
+            del kernel.data[args[0]]
+            raise KeyboardInterrupt()
+    kernel.fault = fail
+    with pytest.raises(KeyboardInterrupt):
+        owner._read(reference, 0, 5)
+    assert owner._poisoned and not owner._entries and owner._read_bytes_remaining == 5
+    kernel.fault = None
+    owner.close()
+    assert list(kernel.data) == [9]
+
+
+@pytest.mark.parametrize("budget", [False, -1, 1.5, float("nan"), float("inf")])
+def test_private_reader_invalid_budget_is_rejected(budget):
+    with pytest.raises(ValueError):
+        module.ImageBackingOwner(max_images=1, max_artifact_bytes=1,
+                                 max_retained_bytes=1, lifetime_seconds=1, max_read_bytes=budget)
+
+
+def test_private_reader_refuses_hash_equality_alias_without_spend_or_retirement(setup):
+    kernel, _, make_owner, identity = setup
+    owner = make_owner(max_read_bytes=10)
+    reference = owner.acquire(9, identity)
+    class ForgedReference:
+        def __hash__(self):
+            return hash(reference)
+        def __eq__(self, other):
+            return True
+    forged = ForgedReference()
+    before = len(kernel.events)
+    assert isinstance(owner._read(forged, 0, 5), module.ImageBackingUnavailable)
+    assert isinstance(owner.describe(forged), module.ImageBackingUnavailable)
+    owner.retire(forged)
+    assert len(kernel.events) == before and owner._read_bytes_remaining == 10
+    assert reference in owner._entries
+    assert owner._read(reference, 0, 5) == bytes(kernel.data[9][:5])
