@@ -529,19 +529,21 @@ class TestStaleAuditConfigSweep:
 
         from core.sandbox._spawn import _sweep_stale_audit_configs
         stale_paths = []
-        for _ in range(3):
-            fd, p = tempfile.mkstemp(
-                prefix="raptor-audit-cfg-test-", suffix=".json",
-                dir=tempfile.gettempdir(),
-            )
-            os.write(fd, b"{}")
-            os.close(fd)
-            # Age past the sweep's floor — fresh files are presumed to
-            # belong to a live concurrent spawn and must survive.
-            old = time.time() - 2 * 3600
-            os.utime(p, (old, old))
-            stale_paths.append(p)
         try:
+            for _ in range(3):
+                fd, p = tempfile.mkstemp(
+                    prefix="raptor-audit-cfg-test-", suffix=".json",
+                    dir=tempfile.gettempdir(),
+                )
+                stale_paths.append(p)
+                try:
+                    os.write(fd, b"{}")
+                finally:
+                    os.close(fd)
+                # Age past the sweep's floor — fresh files are presumed to
+                # belong to a live concurrent spawn and must survive.
+                old = time.time() - 2 * 3600
+                os.utime(p, (old, old))
             # Now sweep — same-UID files matching the glob should go.
             _sweep_stale_audit_configs()
             for p in stale_paths:

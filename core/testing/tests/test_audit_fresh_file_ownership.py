@@ -24,7 +24,7 @@ def test_audit_fresh_file_is_owned_before_write(tmp_path, scenario):
             runtime.mkdir(mode=0o700)
             env["XDG_RUNTIME_DIR"] = str(runtime)
             result = run_in_process_group(
-                [sys.executable, "-I", str(helper), str(root),
+                [sys.executable, "-I", "-B", str(helper), str(root),
                  scenario, "candidate", str(result_path)],
                 timeout=20, env=env, cwd=root, stdin=subprocess.DEVNULL,
                 stdout=stdout, stderr=stderr,
