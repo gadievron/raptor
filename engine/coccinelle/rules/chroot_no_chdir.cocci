@@ -76,6 +76,8 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message":   "chroot() without a subsequent chdir(\"/\") — review prior working directory, path identity and error handling for a possible jail escape (CWE-243)"
 }
 print("COCCIRESULT:" + json.dumps(msg))

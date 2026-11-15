@@ -44,6 +44,8 @@ if usercopy_size_spelling(TD) != usercopy_size_spelling(TL):
     "file":  p[0].file,
     "line":  int(p[0].line),
     "col":   int(p[0].column),
+    "line_end": int(p[0].line_end),
+    "col_end": int(p[0].column_end),
     "message":   "Candidate: copy_to_user sizes source '%s' (%s) using the userspace pointee type %s; review target sizes and the intended copy extent (CWE-805)" % (LOCAL, TL, TD)
   }
   print("COCCIRESULT:" + json.dumps(msg))
@@ -75,6 +77,8 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message":   "Candidate: copy_from_user uses sizeof(source pointer) for the destination object; review target sizes and whether a partial copy is intended (CWE-805)"
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -123,6 +127,8 @@ if source_pointer != destination_type:
     "file": p[0].file,
     "line": int(p[0].line),
     "col": int(p[0].column),
+    "line_end": int(p[0].line_end),
+    "col_end": int(p[0].column_end),
     "message": "Candidate: copy_from_user uses sizeof(array parameter), which is pointer-sized; review target sizes and the intended copy extent (CWE-805)"
   }
   print("COCCIRESULT:" + json.dumps(msg))

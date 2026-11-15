@@ -28,7 +28,18 @@ _SCRIPTS = [
     ("fdopendir_double_close", 1),
     ("fdopendir_double_close", 2),
     ("fdopendir_double_close", 3),
+    ("chroot_no_chdir", 0), ("dead_memset_free", 0),
+    ("copy_user_size_mismatch", 0), ("copy_user_size_mismatch", 1),
+    ("copy_user_size_mismatch", 2),
 ]
+
+
+def _python_statements(script):
+    lines = script.splitlines()
+    # SmPL separator comments may follow a Python reporting block.
+    while lines and (not lines[-1].strip() or lines[-1].lstrip().startswith("//")):
+        lines.pop()
+    return "\n".join(lines)
 
 
 def _report(name, index, position, **bindings):
@@ -36,10 +47,10 @@ def _report(name, index, position, **bindings):
     scripts = re.findall(
         r"@script:python[^\n]*\n.*?\n@@\n(.*?)(?=\n@|\Z)", rule.read_text(), re.S,
     )
-    tree = ast.parse(scripts[index])
+    tree = ast.parse(_python_statements(scripts[index]))
     tree.body = [node for node in tree.body if not isinstance(node, (ast.Import, ast.ImportFrom))]
     output = io.StringIO()
-    namespace = {"json": json, "p": [position], "p2": [position], "PARAM": "count", "swap1": "htons", "swap2": "ntohs", "V": "secret"}
+    namespace = {"json": json, "p": [position], "p2": [position], "PARAM": "count", "TD": "struct payload", "TL": "int", "T": "char", "LOCAL": "owned", "swap1": "htons", "swap2": "ntohs", "V": "secret"}
     namespace.update(bindings)
     with redirect_stdout(output):
         exec(compile(tree, str(rule), "exec"), namespace)
@@ -67,6 +78,8 @@ def test_report_spans_survive_parser_and_deduplication(name, index):
         ("double_close", 3): "double_fclose",
         ("double_close", 4): "double_fclose",
         ("double_close", 5): "double_fclose",
+        ("copy_user_size_mismatch", 1): "copy_from_user_sizeof_ptr",
+        ("copy_user_size_mismatch", 2): "copy_from_user_sizeof_ptr",
     }.get((name, index), name)
     assert all(row.rule == expected_rule and row.message for row in rows)
     assert rows[0].message == rows[1].message
@@ -84,3 +97,20 @@ def test_conversion_filter_stays_quiet(bindings):
 def test_benign_sensitive_name_stays_quiet():
     position = SimpleNamespace(file="owned.c", line=4, column=2, line_end=5, column_end=18)
     assert _report("sensitive_data_leak", 0, position, V="usb_keyboard") == ""
+
+
+def test_script_extraction_preserves_python_strings_and_floor_division():
+    script = 'text = """first\n// inside Python string\nlast"""\nvalue = 7 // 2\n\n// SmPL separator\n'
+    namespace = {}
+    exec(compile(_python_statements(script), "owned-script", "exec"), namespace)
+    assert namespace["text"] == "first\n// inside Python string\nlast"
+    assert namespace["value"] == 3
+
+
+@pytest.mark.parametrize("index,bindings", [
+    (0, {"TD": "const unsigned int", "TL": "signed int"}),
+    (2, {"T": "char", "TL": "char *"}),
+], ids=["equivalent-scalar-width", "same-pointer-destination"])
+def test_usercopy_type_filters_stay_quiet(index, bindings):
+    position = SimpleNamespace(file="owned.c", line=4, column=2, line_end=5, column_end=18)
+    assert _report("copy_user_size_mismatch", index, position, **bindings) == ""
