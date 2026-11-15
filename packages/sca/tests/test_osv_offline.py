@@ -233,11 +233,11 @@ def test_query_without_version_returns_all(tmp_path: Path) -> None:
 
 
 def test_close_releases_connection(tmp_path: Path) -> None:
-    db = OsvOfflineDB(tmp_path / "osv.sqlite", http=_ZipServingHttp({}))
-    db.ensure_fresh(["Homebrew"])
-    db.close()
-    # Subsequent operations must still work (lazy reconnect).
-    assert db.query("PyPI", "x", "1.0") == []
+    with closing(OsvOfflineDB(tmp_path / "osv.sqlite", http=_ZipServingHttp({}))) as db:
+        db.ensure_fresh(["Homebrew"])
+        db.close()
+        # Subsequent operations must still work (lazy reconnect).
+        assert db.query("PyPI", "x", "1.0") == []
 
 
 # ---------------------------------------------------------------------------
