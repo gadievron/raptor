@@ -156,7 +156,7 @@ class TestSuppressRecord:
         assert len(r["bindings"]) == 1
         b = r["bindings"][0]
         assert b["callable"] == "html.escape"
-        assert b["unverified_source_contracts"] == ["exact_builtin_str_default_call"]
+        assert b["unverified_source_contracts"] == ["exact_builtin_str_default_call", "html_text_or_quoted_attribute_sink_context_and_policy"]
         assert b["input_symbols"] == ["x"]
         assert b["output_symbols"] == ["y"]
         assert b["lineno"] == 3
@@ -365,7 +365,7 @@ class TestLegacyPath:
         assert r["bindings"] == []
         # The unresolved contract remains visible despite absent value context.
         assert len(r["catalog_matches"]) == 1
-        assert r["catalog_matches"][0]["unverified_source_contracts"] == ["exact_builtin_str_default_call"]
+        assert r["catalog_matches"][0]["unverified_source_contracts"] == ["exact_builtin_str_default_call", "html_text_or_quoted_attribute_sink_context_and_policy"]
         assert r["witness_lines"] == [3]
 
 

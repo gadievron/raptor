@@ -76,7 +76,7 @@ def test_bare_call_has_empty_output_symbols():
     )
     b = _single(_bindings(src))
     assert b.callable == "html.escape"
-    assert b.unverified_source_contracts == frozenset({"exact_builtin_str_default_call"})
+    assert b.unverified_source_contracts == frozenset({"exact_builtin_str_default_call", "html_text_or_quoted_attribute_sink_context_and_policy"})
     assert b.input_symbols == frozenset({"x"})
     assert b.output_symbols == frozenset()
 

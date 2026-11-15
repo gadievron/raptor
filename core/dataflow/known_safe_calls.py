@@ -147,11 +147,12 @@ _TABLE: tuple[KnownSafeCall, ...] = (
         languages=("python",),
         input_arg_kind="transform",
         requires_exact_str=True,
+        required_source_contracts=frozenset({HTML_OUTPUT_POLICY}),
         soundness_note=(
             "For an exact builtin str input using library defaults, "
             "stdlib html.escape converts &, <, >, and (with default "
-            "quote=True) \", ' to HTML entities.  Output cannot break "
-            "out of an HTML attribute or tag context."
+            "quote=True) \", ' to HTML entities.  Source-bound output context "
+            "and attribute policy remain separate requirements."
         ),
     ),
     KnownSafeCall(

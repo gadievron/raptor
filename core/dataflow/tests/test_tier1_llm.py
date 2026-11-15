@@ -959,9 +959,9 @@ def test_transform_result_misbound_declines(tmp_path: Path):
     assert "does not reach the sink" in r.reasoning
 
 
-def test_transform_bound_output_reaching_sink_is_sound(tmp_path: Path):
+def test_transform_bound_output_reaches_context_gate(tmp_path: Path):
     """Two-direction: the correctly-bound transform whose output
-    reaches the sink still certifies — even when the LLM names the
+    reaches the sink still reaches the output-context gate — even when the LLM names the
     INPUT variable (the natural reading of the prompt)."""
     (tmp_path / "app.py").write_text(
         "import html\n"
@@ -982,7 +982,8 @@ def test_transform_bound_output_reaching_sink_is_sound(tmp_path: Path):
         sink_uri="app.py", sink_line=5, sink_class="xss",
         language="python", complete=_fake_complete(reply),
     )
-    assert r.status is t1.Tier0Status.SOUND
+    assert r.status.value == "not_applicable"
+    assert r.extras["unverified_source_contracts"] == ["html_text_or_quoted_attribute_sink_context_and_policy"]
 
 
 def test_transform_walrus_conditional_value_declines(tmp_path: Path):
@@ -1020,9 +1021,9 @@ def test_transform_walrus_conditional_value_declines(tmp_path: Path):
             or "does not dominate" in r.reasoning)
 
 
-def test_transform_walrus_unconditional_value_still_sound(tmp_path: Path):
+def test_transform_walrus_unconditional_value_reaches_context_gate(tmp_path: Path):
     """Two-direction: an UNconditional walrus binding of the transform
-    result keeps certifying."""
+    result reaches the output-context gate."""
     (tmp_path / "app.py").write_text(
         "import html\n"
         "def f(name):\n"
@@ -1042,7 +1043,8 @@ def test_transform_walrus_unconditional_value_still_sound(tmp_path: Path):
         sink_uri="app.py", sink_line=5, sink_class="xss",
         language="python", complete=_fake_complete(reply),
     )
-    assert r.status is t1.Tier0Status.SOUND
+    assert r.status.value == "not_applicable"
+    assert r.extras["unverified_source_contracts"] == ["html_text_or_quoted_attribute_sink_context_and_policy"]
 
 
 def test_transform_tuple_coassignment_raw_cotarget_declines(tmp_path: Path):
@@ -1074,11 +1076,11 @@ def test_transform_tuple_coassignment_raw_cotarget_declines(tmp_path: Path):
     assert "does not reach the sink" in r.reasoning
 
 
-def test_transform_tuple_coassignment_escaped_element_still_sound(
+def test_transform_tuple_coassignment_escaped_element_reaches_context_gate(
     tmp_path: Path,
 ):
-    """Two-direction: the element PAIRED with the transform call keeps
-    certifying when the sink consumes it."""
+    """Two-direction: the element PAIRED with the transform call reaches
+    the output-context gate when the sink consumes it."""
     (tmp_path / "app.py").write_text(
         "import html\n"
         "def f(name):\n"
@@ -1099,7 +1101,8 @@ def test_transform_tuple_coassignment_escaped_element_still_sound(
         sink_uri="app.py", sink_line=5, sink_class="xss",
         language="python", complete=_fake_complete(reply),
     )
-    assert r.status is t1.Tier0Status.SOUND
+    assert r.status.value == "not_applicable"
+    assert r.extras["unverified_source_contracts"] == ["html_text_or_quoted_attribute_sink_context_and_policy"]
 
 
 def test_transform_starred_target_refuses(tmp_path: Path):
@@ -1173,7 +1176,8 @@ def test_transform_chained_assign_both_targets_join(tmp_path: Path):
         sink_uri="app.py", sink_line=5, sink_class="xss",
         language="python", complete=_fake_complete(reply),
     )
-    assert r.status is t1.Tier0Status.SOUND
+    assert r.status.value == "not_applicable"
+    assert r.extras["unverified_source_contracts"] == ["html_text_or_quoted_attribute_sink_context_and_policy"]
 
 
 def test_safe_join_raw_input_at_sink_declines(tmp_path: Path):
@@ -1392,9 +1396,9 @@ def test_tuple_co_assignment_growth_raw_target_declines(tmp_path: Path):
     assert r.status is t1.Tier0Status.NOT_APPLICABLE
 
 
-def test_tuple_co_assignment_growth_safe_target_sound(tmp_path: Path):
+def test_tuple_co_assignment_growth_safe_target_reaches_context_gate(tmp_path: Path):
     """Two-direction: the co-assigned element paired WITH the chain
-    member keeps certifying."""
+    member reaches the output-context gate."""
     (tmp_path / "app.py").write_text(
         "import html\n"                                       # line 1
         "def f(x):\n"                                         # line 2
@@ -1415,7 +1419,8 @@ def test_tuple_co_assignment_growth_safe_target_sound(tmp_path: Path):
         sink_uri="app.py", sink_line=6, sink_class="xss",
         language="python", complete=_fake_complete(reply),
     )
-    assert r.status is t1.Tier0Status.SOUND
+    assert r.status.value == "not_applicable"
+    assert r.extras["unverified_source_contracts"] == ["html_text_or_quoted_attribute_sink_context_and_policy"]
 
 
 def test_swap_idiom_after_sanitizer_declines(tmp_path: Path):
@@ -1501,7 +1506,8 @@ def test_chained_targets_tuple_value_name_target_declines(tmp_path: Path):
         sink_uri="app.py", sink_line=5, sink_class="xss",
         language="python", complete=_fake_complete(reply),
     )
-    assert r2.status is t1.Tier0Status.SOUND
+    assert r2.status.value == "not_applicable"
+    assert r2.extras["unverified_source_contracts"] == ["html_text_or_quoted_attribute_sink_context_and_policy"]
 
 
 def test_dict_select_binding_declines(tmp_path: Path):
@@ -1827,7 +1833,8 @@ def test_curated_call_error_cannot_preserve_raw_binding(tmp_path: Path, exit_sta
         sink_uri="app.py", sink_line=9, sink_class="xss",
         language="python", complete=_fake_complete(reply),
     )
-    assert control.status is t1.Tier0Status.SOUND
+    assert control.status.value == "not_applicable"
+    assert control.extras["unverified_source_contracts"] == ["html_text_or_quoted_attribute_sink_context_and_policy"]
 
 
 def test_global_slot_validator_row_call_and_local_control(tmp_path):
@@ -1857,10 +1864,12 @@ def test_global_slot_validator_row_call_and_local_control(tmp_path):
         observations.append({"shared": shared, "observed": seen, "status": result.status.name,
                              "reason": result.reasoning})
         if not shared:
-            assert result.status is sb.Tier0Status.SOUND
+            assert result.status.value == "not_applicable"
+            assert result.extras["unverified_source_contracts"] == ["html_text_or_quoted_attribute_sink_context_and_policy"]
         else:
             print(json.dumps(observations))
             assert result.status is sb.Tier0Status.NOT_APPLICABLE, observations
+            assert "unverified_source_contracts" not in result.extras
 
 
 def test_validator_row_descriptor_external_slot(tmp_path):
@@ -1882,7 +1891,11 @@ def test_validator_row_descriptor_external_slot(tmp_path):
         result = t1.try_tier1b(fix_diff="+" + line + "\n", repo_root=tmp_path,
                               sink_uri="app.py", sink_line=len(source.splitlines()),
                               sink_class="xss", language="python", complete=lambda *_: reply)
-        assert result.status is (Tier0Status.NOT_APPLICABLE if shared else Tier0Status.SOUND), (shared, seen, result)
+        assert result.status is Tier0Status.NOT_APPLICABLE
+        if not shared:
+            assert result.extras["unverified_source_contracts"] == ["html_text_or_quoted_attribute_sink_context_and_policy"]
+        else:
+            assert "unverified_source_contracts" not in result.extras
 
 
 def test_owned_last_reference_deletion_external_slot(tmp_path):
@@ -1909,7 +1922,11 @@ def test_owned_last_reference_deletion_external_slot(tmp_path):
         result = t1.try_tier1b(fix_diff="+" + line + "\n", repo_root=tmp_path,
                               sink_uri="app.py", sink_line=len(source.splitlines()),
                               sink_class="xss", language="python", complete=lambda *_: reply)
-        assert result.status is (Tier0Status.NOT_APPLICABLE if shared else Tier0Status.SOUND), (shared, seen, events, result)
+        assert result.status is Tier0Status.NOT_APPLICABLE
+        if not shared:
+            assert result.extras["unverified_source_contracts"] == ["html_text_or_quoted_attribute_sink_context_and_policy"]
+        else:
+            assert "unverified_source_contracts" not in result.extras
 
 
 def test_owned_last_reference_overwrite_external_slot(tmp_path):
@@ -1937,4 +1954,8 @@ def test_owned_last_reference_overwrite_external_slot(tmp_path):
         result = t1.try_tier1b(fix_diff="+" + line + "\n", repo_root=tmp_path,
                               sink_uri="app.py", sink_line=len(source.splitlines()),
                               sink_class="xss", language="python", complete=lambda *_: reply)
-        assert result.status is (Tier0Status.NOT_APPLICABLE if shared else Tier0Status.SOUND), (shared, seen, events, result)
+        assert result.status is Tier0Status.NOT_APPLICABLE
+        if not shared:
+            assert result.extras["unverified_source_contracts"] == ["html_text_or_quoted_attribute_sink_context_and_policy"]
+        else:
+            assert "unverified_source_contracts" not in result.extras

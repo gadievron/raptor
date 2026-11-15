@@ -27,7 +27,7 @@ def _review(tmp_path: Path, prefix="", argument="raw", parameters="raw", claimed
 def test_untyped_input_cannot_certify_an_overridable_escaper(tmp_path: Path):
     result = _review(tmp_path)
     assert result.status is sb.Tier0Status.NOT_APPLICABLE
-    assert result.extras["unverified_source_contracts"] == ["exact_builtin_str_default_call"]
+    assert result.extras["unverified_source_contracts"] == ["exact_builtin_str_default_call", "html_text_or_quoted_attribute_sink_context_and_policy"]
 
 
 @pytest.mark.parametrize("prefix,argument,claim", [
@@ -35,10 +35,18 @@ def test_untyped_input_cannot_certify_an_overridable_escaper(tmp_path: Path):
     ("    raw = '<literal>'\n", "raw", "raw"),
     ("", "'<literal>'", "safe"),
 ], ids=["guard", "literal-binding", "literal-argument"])
-def test_exact_primitive_inputs_keep_real_curated_certificates(tmp_path: Path, prefix, argument, claim):
+def test_exact_primitive_inputs_retain_type_evidence_before_context_gate(tmp_path: Path, prefix, argument, claim):
     result = _review(tmp_path, prefix=prefix, argument=argument, claimed_variable=claim)
-    assert result.status is sb.Tier0Status.SOUND
-    evidence = result.extras["input_type_evidence"]
+    assert result.status is sb.Tier0Status.NOT_APPLICABLE
+    assert result.extras["unverified_source_contracts"] == ["html_text_or_quoted_attribute_sink_context_and_policy"]
+    from dataclasses import asdict
+    from core.dataflow.string_type_evidence import exact_str_default_call_evidence
+
+    source = (tmp_path / "app.py").read_text()
+    line = next(i for i, text in enumerate(source.splitlines(), 1) if "safe = html.escape" in text)
+    primitive = exact_str_default_call_evidence(source, line, claim, "html.escape")
+    assert primitive is not None
+    evidence = asdict(primitive)
     assert evidence["source_digest"]
     assert evidence["scope"] == "primitive-input-type-and-default-call-form"
     assert evidence["call_span"][0] > 0
