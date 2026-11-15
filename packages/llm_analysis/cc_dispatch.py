@@ -243,14 +243,21 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
                     proc.stderr, result)
         return DispatchResult(result=result)
 
+    # Analysis fields cannot supply transport usage or model attribution.
+    for key in ("cost_usd", "_tokens", "analysed_by", "duration_seconds"):
+        parsed.pop(key, None)
     try:
-        cost = sanitize_cost(parsed.pop("cost_usd", 0))
+        metadata = parse_cc_freeform(proc.stdout, proc.stderr)
+    except (ValueError, KeyError, TypeError, OverflowError, RecursionError):
+        metadata = {}
+    try:
+        cost = sanitize_cost(metadata.get("cost_usd", 0))
     except OverflowError:
         # Unrepresentable integer metadata follows the malformed-cost policy.
         cost = 0.0
-    tokens = parsed.pop("_tokens", 0)
-    model = parsed.pop("analysed_by", "claude-code")
-    duration = parsed.pop("duration_seconds", 0)
+    tokens = metadata.get("_tokens", 0)
+    model = metadata.get("analysed_by", "claude-code")
+    duration = metadata.get("duration_seconds", 0)
 
     quality = 1.0
     if schema and isinstance(parsed, dict) and "error" not in parsed:
