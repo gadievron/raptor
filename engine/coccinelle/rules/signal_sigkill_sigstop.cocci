@@ -25,6 +25,8 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message": "Candidate: signal(SIGKILL, ...) attempts an uncatchable signal disposition; review intent and SIG_ERR/EINVAL handling (CWE-252)."
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -45,6 +47,8 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message": "Candidate: signal(SIGSTOP, ...) attempts an uncatchable signal disposition; review intent and SIG_ERR/EINVAL handling (CWE-252)."
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -66,6 +70,8 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message": "Candidate: sigaction(SIGKILL, ...) uses an uncatchable signal; review whether the action argument requests a change and check error handling (CWE-252)."
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -87,6 +93,8 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message": "Candidate: sigaction(SIGSTOP, ...) uses an uncatchable signal; review whether the action argument requests a change and check error handling (CWE-252)."
 }
 print("COCCIRESULT:" + json.dumps(msg))

@@ -39,6 +39,8 @@ msg = {
   "file": p[0].file,
   "line": int(p[0].line),
   "col": int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message": "va_arg with an unpromoted character type \u2014 request its promoted integer type (int, or unsigned int where required by the target ABI) (CWE-686)."
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -83,6 +85,8 @@ msg = {
   "file": p[0].file,
   "line": int(p[0].line),
   "col": int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message": "va_arg with an unpromoted short type \u2014 request its promoted integer type (int, or unsigned int where required by the target ABI) (CWE-686)."
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -107,6 +111,8 @@ msg = {
   "file": p[0].file,
   "line": int(p[0].line),
   "col": int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message": "va_arg with float \u2014 float is promoted to double in variadic calls; request double (CWE-686)."
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -139,6 +145,8 @@ msg = {
   "file": p[0].file,
   "line": int(p[0].line),
   "col": int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message": "va_arg with _Bool \u2014 _Bool is promoted to int in variadic calls; request int (CWE-686)."
 }
 print("COCCIRESULT:" + json.dumps(msg))

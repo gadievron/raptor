@@ -64,6 +64,8 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message":   "Candidate: signed char converted to unsigned type (CWE-194). Review whether negative values can reach this conversion and how the result is used. Mask with & 0xFF only if byte value is intended."
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -77,6 +79,8 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message":   "Candidate: signed char cast to unsigned wide type (CWE-194). Review whether negative values can reach this conversion and how the result is used. Mask with & 0xFF only if byte value is intended."
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -124,6 +128,8 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message":   "Candidate: signed short converted to unsigned type (CWE-194). Review whether negative values can reach this conversion and how the result is used. Mask with & 0xFFFF only if a 16-bit value is intended."
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -137,6 +143,8 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message":   "Candidate: signed short cast to unsigned wide type (CWE-194). Review whether negative values can reach this conversion and how the result is used. Mask with & 0xFFFF only if a 16-bit value is intended."
 }
 print("COCCIRESULT:" + json.dumps(msg))

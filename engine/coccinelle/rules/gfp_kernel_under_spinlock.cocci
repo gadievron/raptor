@@ -43,6 +43,8 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message":   "Allocation with a potentially sleeping GFP flag in spinlock scope; review lock lifetime, execution context and API-supported flags (CWE-764)"
 }
 print("COCCIRESULT:" + json.dumps(msg))

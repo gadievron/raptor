@@ -44,6 +44,8 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message":   "strtol-family result without recognised endptr/errno checks — review input provenance, accepted prefixes and required range validation (CWE-20)"
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -85,6 +87,8 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message":   "strtol-family call with NULL endptr — review whether trusted input or intentional prefix parsing justifies discarding the stopping position (CWE-20)"
 }
 print("COCCIRESULT:" + json.dumps(msg))
