@@ -10,32 +10,34 @@ from core.dataflow.cvefix_loader import _single_parent, load_pairs
 
 def _make_db(path: Path) -> None:
     con = sqlite3.connect(str(path))
-    con.executescript(
-        "CREATE TABLE cwe_classification (cve_id TEXT, cwe_id TEXT);"
-        "CREATE TABLE fixes (cve_id TEXT, hash TEXT, repo_url TEXT);"
-        "CREATE TABLE commits (hash TEXT, repo_url TEXT, parents TEXT);"
-        "CREATE TABLE repository (repo_url TEXT, repo_name TEXT, repo_language TEXT);"
-    )
+    try:
+        con.executescript(
+            "CREATE TABLE cwe_classification (cve_id TEXT, cwe_id TEXT);"
+            "CREATE TABLE fixes (cve_id TEXT, hash TEXT, repo_url TEXT);"
+            "CREATE TABLE commits (hash TEXT, repo_url TEXT, parents TEXT);"
+            "CREATE TABLE repository (repo_url TEXT, repo_name TEXT, repo_language TEXT);"
+        )
 
-    def add(cve, cwe, repo, h, parents, lang):
-        con.execute("INSERT INTO cwe_classification VALUES(?,?)", (cve, cwe))
-        con.execute("INSERT INTO fixes VALUES(?,?,?)", (cve, h, repo))
-        con.execute("INSERT INTO commits VALUES(?,?,?)", (h, repo, parents))
-        con.execute("INSERT INTO repository VALUES(?,?,?)", (repo, repo.split("/")[-1], lang))
+        def add(cve, cwe, repo, h, parents, lang):
+            con.execute("INSERT INTO cwe_classification VALUES(?,?)", (cve, cwe))
+            con.execute("INSERT INTO fixes VALUES(?,?,?)", (cve, h, repo))
+            con.execute("INSERT INTO commits VALUES(?,?,?)", (h, repo, parents))
+            con.execute("INSERT INTO repository VALUES(?,?,?)", (repo, repo.split("/")[-1], lang))
 
-    G = "https://github.com/org/"
-    # good: Python SQLi, single parent, github  -> loads
-    add("CVE-GOOD", "CWE-89", G + "py-app", "fix1", "['par1']", "Python")
-    # PHP -> filtered by language
-    add("CVE-PHP", "CWE-89", G + "php-app", "fix2", "['par2']", "PHP")
-    # merge commit (2 parents) -> filtered (ambiguous before-state)
-    add("CVE-MERGE", "CWE-78", G + "go-app", "fix3", "['pa', 'pb']", "Go")
-    # non-github -> filtered
-    add("CVE-GL", "CWE-79", "https://gitlab.com/org/x", "fix4", "['par4']", "Java")
-    # non-injection CWE -> filtered by cwe set
-    add("CVE-OTHER", "CWE-476", G + "java-app", "fix5", "['par5']", "Java")
-    con.commit()
-    con.close()
+        G = "https://github.com/org/"
+        # good: Python SQLi, single parent, github  -> loads
+        add("CVE-GOOD", "CWE-89", G + "py-app", "fix1", "['par1']", "Python")
+        # PHP -> filtered by language
+        add("CVE-PHP", "CWE-89", G + "php-app", "fix2", "['par2']", "PHP")
+        # merge commit (2 parents) -> filtered (ambiguous before-state)
+        add("CVE-MERGE", "CWE-78", G + "go-app", "fix3", "['pa', 'pb']", "Go")
+        # non-github -> filtered
+        add("CVE-GL", "CWE-79", "https://gitlab.com/org/x", "fix4", "['par4']", "Java")
+        # non-injection CWE -> filtered by cwe set
+        add("CVE-OTHER", "CWE-476", G + "java-app", "fix5", "['par5']", "Java")
+        con.commit()
+    finally:
+        con.close()
 
 
 def test_loads_only_codeql_lang_single_parent_github_injection(tmp_path: Path):

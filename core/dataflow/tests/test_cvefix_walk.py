@@ -92,21 +92,23 @@ def test_process_pair_no_query(tmp_path: Path):
 
 def _make_meta_db(path: Path):
     con = sqlite3.connect(str(path))
-    con.executescript(
-        "CREATE TABLE cwe_classification (cve_id TEXT, cwe_id TEXT);"
-        "CREATE TABLE fixes (cve_id TEXT, hash TEXT, repo_url TEXT);"
-        "CREATE TABLE commits (hash TEXT, repo_url TEXT, parents TEXT);"
-        "CREATE TABLE repository (repo_url TEXT, repo_name TEXT, repo_language TEXT);"
-    )
-    G = "https://github.com/org/"
-    for i in (1, 2):
-        repo, h = f"{G}app{i}", f"fix{i}"
-        con.execute("INSERT INTO cwe_classification VALUES(?,?)", (f"CVE-{i}", "CWE-89"))
-        con.execute("INSERT INTO fixes VALUES(?,?,?)", (f"CVE-{i}", h, repo))
-        con.execute("INSERT INTO commits VALUES(?,?,?)", (h, repo, f"['par{i}']"))
-        con.execute("INSERT INTO repository VALUES(?,?,?)", (repo, f"app{i}", "Python"))
-    con.commit()
-    con.close()
+    try:
+        con.executescript(
+            "CREATE TABLE cwe_classification (cve_id TEXT, cwe_id TEXT);"
+            "CREATE TABLE fixes (cve_id TEXT, hash TEXT, repo_url TEXT);"
+            "CREATE TABLE commits (hash TEXT, repo_url TEXT, parents TEXT);"
+            "CREATE TABLE repository (repo_url TEXT, repo_name TEXT, repo_language TEXT);"
+        )
+        G = "https://github.com/org/"
+        for i in (1, 2):
+            repo, h = f"{G}app{i}", f"fix{i}"
+            con.execute("INSERT INTO cwe_classification VALUES(?,?)", (f"CVE-{i}", "CWE-89"))
+            con.execute("INSERT INTO fixes VALUES(?,?,?)", (f"CVE-{i}", h, repo))
+            con.execute("INSERT INTO commits VALUES(?,?,?)", (h, repo, f"['par{i}']"))
+            con.execute("INSERT INTO repository VALUES(?,?,?)", (repo, f"app{i}", "Python"))
+        con.commit()
+    finally:
+        con.close()
 
 
 def test_walk_records_and_resumes(monkeypatch, tmp_path: Path):
