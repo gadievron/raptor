@@ -93,6 +93,8 @@ if _f1 is not None and (_f1, _w1) == (_f2, _w2):
       "file":  p[0].file,
       "line":  int(p[0].line),
       "col":   int(p[0].column),
+      "line_end": int(p[0].line_end),
+      "col_end": int(p[0].column_end),
       "message": "%s(%s(x)) — review input width and conversion intent for a possible redundant byte-order conversion (CWE-683)" % (swap1, swap2)
     }
     print("COCCIRESULT:" + json.dumps(msg))

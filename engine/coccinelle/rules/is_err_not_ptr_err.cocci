@@ -46,6 +46,8 @@ msg = {
   "file": p[0].file,
   "line": int(p[0].line),
   "col": int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message": "Candidate: an IS_ERR-derived boolean is returned on an error path. Verify that the return contract expects an errno before using PTR_ERR (CWE-253)."
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -75,6 +77,8 @@ msg = {
   "file": p[0].file,
   "line": int(p[0].line),
   "col": int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message": "Candidate: an IS_ERR-derived boolean is returned on an error path. Verify that the return contract expects an errno before using PTR_ERR (CWE-253)."
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -122,6 +126,8 @@ msg = {
   "file": p[0].file,
   "line": int(p[0].line),
   "col": int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message": "Candidate: an IS_ERR-derived local reaches the return. Verify whether the caller expects an errno rather than a boolean (CWE-253)."
 }
 print("COCCIRESULT:" + json.dumps(msg))
