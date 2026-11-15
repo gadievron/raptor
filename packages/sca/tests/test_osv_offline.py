@@ -286,10 +286,10 @@ def test_connection_waits_out_a_concurrent_ingest(tmp_path: Path) -> None:
     refresh holds one long write transaction; the 5s default busy
     timeout crashed the losing scan with \"database is locked\". The
     connection must be configured to wait out a full ingest."""
-    db = OsvOfflineDB(tmp_path / "osv.sqlite", http=_ZipServingHttp({}))
-    db._init_db()
-    (timeout_ms,) = db._conn.execute("PRAGMA busy_timeout").fetchone()
-    assert timeout_ms >= 30_000
+    with closing(OsvOfflineDB(tmp_path / "osv.sqlite", http=_ZipServingHttp({}))) as db:
+        db._init_db()
+        (timeout_ms,) = db._conn.execute("PRAGMA busy_timeout").fetchone()
+        assert timeout_ms >= 30_000
 
 
 def test_ingest_rechecks_freshness_after_taking_the_write_lock(
