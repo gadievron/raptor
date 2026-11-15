@@ -28,6 +28,8 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message": "Candidate: two inet_ntoa() calls in %s() arguments may share output storage; review address equality and use of the returned strings (CWE-676). Prefer inet_ntop() with caller-owned buffers." % fn
 }
 print("COCCIRESULT:" + json.dumps(msg))

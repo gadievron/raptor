@@ -51,6 +51,9 @@ _SCRIPTS = [
     ("popen_fclose", 3),
     ("popen_fclose", 4),
     ("open_creat_no_mode", 0),
+    ("inet_ntoa_double_call", 0), ("kfree_not_rcu", 0),
+    ("rcu_no_lock", 0),
+    ("rcu_dereference_outside_rcu", 0), ("rcu_dereference_outside_rcu", 1),
 ]
 
 
@@ -70,7 +73,7 @@ def _report(name, index, position, **bindings):
     tree = ast.parse(_python_statements(scripts[index]))
     tree.body = [node for node in tree.body if not isinstance(node, (ast.Import, ast.ImportFrom))]
     output = io.StringIO()
-    namespace = {"json": json, "islice": islice, "p_use": [position], "p_copy": [SimpleNamespace(file="owned.c", line=1, column=1, line_end=1, column_end=8)], "fmt": '"%s"', "count": "8", "before": (), "after": (), "dst": "owned", "sys": SimpleNamespace(stderr=output), "buf": "owned", "n": "count", "ast": ast, "re": re, "ARR": "buffer", "offset": "1", "COMMAND": "F_SETFD", "FLAGS": "O_NONBLOCK", "p": [position], "p2": [position], "PARAM": "count", "TD": "struct payload", "TL": "int", "T": "char", "LOCAL": "owned", "swap1": "htons", "swap2": "ntohs", "V": "secret"}
+    namespace = {"json": json, "islice": islice, "p_use": [position], "p_copy": [SimpleNamespace(file="owned.c", line=1, column=1, line_end=1, column_end=8)], "fmt": '"%s"', "count": "8", "before": (), "after": (), "dst": "owned", "sys": SimpleNamespace(stderr=output, stdout=output), "buf": "owned", "n": "count", "ast": ast, "re": re, "ARR": "buffer", "offset": "1", "COMMAND": "F_SETFD", "FLAGS": "O_NONBLOCK", "p": [position], "p1": [position], "p2": [position], "fn": "consume", "E": "owned_pointer", "PARAM": "count", "TD": "struct payload", "TL": "int", "T": "char", "LOCAL": "owned", "swap1": "htons", "swap2": "ntohs", "V": "secret"}
     namespace.update(bindings)
     with redirect_stdout(output):
         exec(compile(tree, str(rule), "exec"), namespace)
@@ -82,6 +85,8 @@ def test_report_spans_survive_parser_and_deduplication(name, index):
     first = SimpleNamespace(file="owned.c", line="4", column="2", line_end="5", column_end="18")
     second = SimpleNamespace(file="owned.c", line="4", column="2", line_end="6", column_end="23")
     bindings = {"FLAGS": "O_CREAT"} if name == "open_creat_no_mode" else {}
+    if name == "kfree_not_rcu":
+        bindings["p1"] = [SimpleNamespace(file="owned.c", line=1, column=7, line_end=1, column_end=15)]
     first_output = _report(name, index, first, **bindings)
     second_output = _report(name, index, second, **bindings)
     # Plain-prefix parsing is an owned transport control, not a nonce-authentication test.
