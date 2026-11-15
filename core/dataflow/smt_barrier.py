@@ -2937,7 +2937,13 @@ def _python_chain_reaches_sink(
                           getattr(pair[0], "col_offset", 0)),
     )
     local_slots: dict[str, bool] = {}
-    external_slot_seen = not _python_name_has_local_slot(scope_root, start_var)
+
+    def has_local_slot(name: str) -> bool:
+        if name not in local_slots:
+            local_slots[name] = _python_name_has_local_slot(scope_root, name)
+        return local_slots[name]
+
+    external_slot_seen = not has_local_slot(start_var)
     for node, class_decls in window:
         # Header bindings are kill-only: defaults/decorators can execute
         # here, whereas a nested function's body is still deferred.
@@ -2957,9 +2963,7 @@ def _python_chain_reaches_sink(
             # but cannot freeze externally owned name slots. Kill here,
             # before any later alias could borrow the stale certificate.
             for var in list(chain):
-                if var not in local_slots:
-                    local_slots[var] = _python_name_has_local_slot(scope_root, var)
-                if not local_slots[var]:
+                if not has_local_slot(var):
                     chain.discard(var)
         if class_decls is not None:
             # Kill-only: a class-body binding of a declared name
@@ -3008,9 +3012,7 @@ def _python_chain_reaches_sink(
             for part in _walk_same_scope(ast.Expr(value=node.value))
         ):
             for var in list(chain):
-                if var not in local_slots:
-                    local_slots[var] = _python_name_has_local_slot(scope_root, var)
-                if not local_slots[var]:
+                if not has_local_slot(var):
                     chain.discard(var)
         targets = (list(node.targets) if isinstance(node, ast.Assign)
                    else [node.target])
@@ -3032,23 +3034,21 @@ def _python_chain_reaches_sink(
         # name lands in both sets (conservative).
         chain = (chain | grows) - kills
         external_slot_seen |= any(
-            not _python_name_has_local_slot(scope_root, var) for var in chain
+            not has_local_slot(var) for var in chain
         )
         # Assignment reads its RHS before releasing the previous target value.
         # Preserve captured locals, then expire externally owned name slots
         # that a finalizer could have replaced during the store.
         if isinstance(node, (ast.Assign, ast.AnnAssign)):
             for var in list(chain):
-                if not _python_name_has_local_slot(scope_root, var):
+                if not has_local_slot(var):
                     chain.discard(var)
         if _python_unpack_assignment(node):
             # RHS fields were captured before target unpacking. Keep
             # their new local aliases, but expire shared slots that the
             # opaque iterator can rebind during target assignment.
             for var in list(chain):
-                if var not in local_slots:
-                    local_slots[var] = _python_name_has_local_slot(scope_root, var)
-                if not local_slots[var]:
+                if not has_local_slot(var):
                     chain.discard(var)
     # Opaque evaluation beside the validator can replace an external slot.
     # The certified call and its syntax have their existing exemption;
