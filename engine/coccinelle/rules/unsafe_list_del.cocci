@@ -18,6 +18,7 @@
 // Reassignment of the cursor can repair the next iteration; this pattern
 // does not establish the value used by the iterator update.
 // @role: detection
+// raptor: confirm-only
 
 // `exists`: the deletion only needs to happen on SOME path through the
 // loop body (the common shape is a conditional delete); forall-path

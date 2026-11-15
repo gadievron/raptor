@@ -8,6 +8,7 @@
 //
 // Covers CWE-833 (deadlock) and CWE-667 (improper locking).
 // @role: detection
+// raptor: confirm-only
 
 // spin_lock ABBA — normal path locks A then B, alternate path locks B then A
 @spin_abba@

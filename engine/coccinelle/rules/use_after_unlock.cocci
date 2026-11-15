@@ -19,6 +19,7 @@
 //
 // Covers CWE-416 / CWE-362: use-after-free via race condition.
 // @role: detection
+// raptor: confirm-only
 
 // ipc_unlock variant (kernel IPC-specific)
 @ipc_use_after@
