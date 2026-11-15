@@ -935,10 +935,11 @@ def try_tier1b(
                     f"not dominate sink (advisory or reassigned)",
                     spec=mech,
                 )
-        if sink_class == "xss":
+        if sink_class in {"xss", "cmdi"}:
+            context = "HTML" if sink_class == "xss" else "command"
             return Tier0Result(
                 Tier0Status.NOT_APPLICABLE,
-                "character exclusion proved, but HTML sink interpretation "
+                f"character exclusion proved, but {context} sink interpretation "
                 "and output composition are unverified",
                 spec=mech,
                 extras={"validator_line": validator_line, "var_name": mech.var_name,

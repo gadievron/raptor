@@ -93,20 +93,12 @@ from core.smt_solver.session import check_solver, new_solver, solver_reason_unkn
 from core.source import DEFAULT_MAX_SOURCE_CHARS, read_contained_bytes, read_text_capped
 
 # --------------------------------------------------------------------------
-# Sink danger model.  Each sink_class maps to the set of characters whose
-# presence in the value makes the sink exploitable.  Conservative by
-# construction: the validator must exclude EVERY listed danger char for the
-# verdict to come out SOUND.  Picking these is a soundness call — too narrow
-# (missing danger chars) is unsound; too wide just defers more cases to
-# Tier 2.
+# Sink danger-character model. Exclusion proves a property of the value,
+# not the sink's interpretation or composition with surrounding output.
+# A missing character can make even that value-level model incomplete;
+# widening a set cannot establish command identity or HTML context.
+# Source-bound adjudication must retain those separate requirements.
 # --------------------------------------------------------------------------
-# Per-class derivation rule: a danger set must name every character
-# that is load-bearing in ANY interpolation context the sink class can
-# put the value in — the charset model cannot see which context a
-# given finding actually uses, so the union of the class's contexts is
-# the sound set.  Each entry's comment enumerates the contexts it
-# covers; a new attack context for a class means new chars here, never
-# a caveat elsewhere.
 _DANGER_CHARS = {
     # Contexts: POSIX path segments, downstream joins.
     # Path separators are the load-bearing chars for traversal, and '.'
@@ -3873,10 +3865,11 @@ def try_tier0(
         )
     verdict = prove_neutralizes(spec, sink_class)
     if verdict.sound:
-        if sink_class == "xss":
+        if sink_class in {"xss", "cmdi"}:
+            context = "HTML" if sink_class == "xss" else "command"
             return Tier0Result(
                 Tier0Status.NOT_APPLICABLE,
-                "character exclusion proved, but HTML sink interpretation "
+                f"character exclusion proved, but {context} sink interpretation "
                 "and output composition are unverified",
                 spec=spec,
                 extras={"validator_line": line, "var_name": spec.var_name,
