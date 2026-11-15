@@ -128,6 +128,38 @@ def test_constructor_accepts_injected_llm_client():
     assert v._injected_llm_client is mock_llm
 
 
+
+def test_falsey_injected_client_is_used_for_lazy_initialization(monkeypatch):
+    client = MagicMock()
+    client.__bool__.return_value = False
+    default_factory = MagicMock(side_effect=AssertionError("unexpected default client"))
+    collector = MagicMock(return_value=object())
+    validator_factory = MagicMock(return_value=object())
+    monkeypatch.setattr(
+        "packages.codeql.evidence_validator._construct_default_llm_client",
+        default_factory,
+    )
+    monkeypatch.setattr(
+        "packages.codeql.evidence_validator.make_evidence_collector", collector
+    )
+    monkeypatch.setattr(
+        "packages.codeql.evidence_validator.DataflowValidator", validator_factory
+    )
+    cache = {}
+    adapter = CodeQLEvidenceValidator(llm_client=client, cache=cache)
+
+    result = adapter._get_dataflow_validator()
+
+    default_factory.assert_not_called()
+    collector.assert_called_once_with(client, cache=cache)
+    validator_factory.assert_called_once_with(
+        client, evidence_collector=collector.return_value
+    )
+    assert result is validator_factory.return_value
+    assert adapter._get_dataflow_validator() is result
+    validator_factory.assert_called_once()
+
+
 def test_constructor_accepts_injected_repo_root(tmp_path: Path):
     v = CodeQLEvidenceValidator(repo_root=tmp_path)
     assert v._repo_root == tmp_path
