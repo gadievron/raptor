@@ -17,9 +17,9 @@ def execution(request, tmp_path, monkeypatch):
     rules = tmp_path / "rules"
     rules.mkdir()
     good = rules / "good.cocci"
-    good.write_text("@good@\n@@\nfoo()\n")
+    good.write_text("@good@\nposition p;\n@@\nfoo@p()\n")
     bad = rules / "bad.cocci"
-    bad.write_text("@bad@\n@@\nfoo()\n")
+    bad.write_text("@bad@\nposition p;\n@@\nfoo@p()\n")
     monkeypatch.setattr(runner, "is_available", lambda: True)
     monkeypatch.setattr(runner, "_spatch_path", lambda: "/unused/spatch")
     executed = []

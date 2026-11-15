@@ -1030,7 +1030,7 @@
     "packages/binary_analysis/tests/test_stage_hints_cli.py": "a9658c18f673100dcce77e6c1a89397a06eac33a4aa143ce1fe8904f151e2c91",
     "packages/checker_synthesis/tests/conftest.py": "d6ad14e46c60f44b726bfc5762ff3f2975e8b7338cbda6cfa9d0f976cf0fe39c",
     "packages/checker_synthesis/tests/test_synthesise_checker_outdir.py": "8d17acd76dcc264f0dfbdad1876974b400b47150790c306fd02f99de5a95e58f",
-    "packages/coccinelle/tests/test_runner.py": "2bf8913a56e6e7e62b08bd424a6a5965893b207f086c3c7c9e67c59f0d94537b",
+    "packages/coccinelle/tests/test_runner.py": "3927651e62050a66e728906d670d274bf03ddaa22fd9abe5d89b1e990e41d697",
     "packages/code_understanding/tests/test_context_map_sites.py": "854bafd980debe8ef7541cb3af0fe174d89169b157fc1c1d2eb7e2048d6b837b",
     "packages/code_understanding/tests/test_graph_seed_envelope.py": "9e3a8eab0edd651231f2f59303f38a3681b2898005859d630c2db6dd6119dff1",
     "packages/code_understanding/tests/test_hunt_rank.py": "0794cbbfe671fcd34af3877f5aeb0c521d634f7cf8c27f7beae00c7ad01810b0",

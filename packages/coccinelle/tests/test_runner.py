@@ -2434,7 +2434,7 @@ class TestFilesExaminedNoIncludes:
         (target / "a.c").write_text("int f(void) { return 0; }\n")
         (target / "never_included.h").write_text("#define X 1\n")
         rule = tmp_path / "r.cocci"
-        rule.write_text("@r@\n@@\n- return 0;\n+ return 1;\n",
+        rule.write_text("@r@\nposition p;\n@@\n- return@p 0;\n+ return 1;\n",
                         encoding="utf-8")
         result = run_rule(target, rule, no_includes=True)
         assert result.returncode == 0
@@ -3467,7 +3467,7 @@ class TestPerRuleVersions:
         future = rules / "future.cocci"
         future.write_text("// raptor-min-version: 1.3.0\n@r@\n@@\nfuture_call()\n")
         legacy = rules / "legacy.cocci"
-        legacy.write_text("@r@\n@@\nlegacy_call()\n")
+        legacy.write_text("@r@\nposition p;\n@@\nlegacy_call@p()\n")
         executed = []
 
         def fake_run(cmd, **kwargs):

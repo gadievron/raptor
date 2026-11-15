@@ -118,8 +118,10 @@ def test_rule_sweeps_share_one_successful_probe_through_fallbacks(binary, tmp_pa
     rules = tmp_path / 'rules'
     rules.mkdir()
     for name, minimum in [('first', '1.3.0'), ('second', '1.3.0'), ('future', '1.4.0')]:
-        (rules / f'{name}.cocci').write_text(
-            f'// raptor-min-version: {minimum}\n@{name}@\nposition p;\n@@\nfoo@p(...)\n')
+        # Pre-instrumented, trusted fixtures exercise the actual batch/retry
+        # lane; plain rules deliberately run in isolated processes.
+        text = f'// raptor-min-version: {minimum}\n@{name}@\nposition p;\n@@\nfoo@p(...)\n'
+        (rules / f'{name}.cocci').write_text(runner._inject_harness(text, name))
     monkeypatch.setattr(runner, 'is_available', lambda: True)
     version = Mock(return_value='1.3')
     monkeypatch.setattr(runner, 'version', version)
@@ -129,9 +131,9 @@ def test_rule_sweeps_share_one_successful_probe_through_fallbacks(binary, tmp_pa
         status = 1 if mode == 'batch-retry' and len(calls) == 1 else 0
         return subprocess.CompletedProcess(cmd, status, stdout='', stderr='')
     if mode == 'sequential':
-        results = {result.rule: result for result in runner.run_rules(source, rules, subprocess_runner=execute)}
+        results = {result.rule: result for result in runner.run_rules(source, rules, subprocess_runner=execute, allow_scripting=True)}
     else:
-        results = runner.run_rules_batched(source, sorted(rules.glob('*.cocci')), subprocess_runner=execute)
+        results = runner.run_rules_batched(source, sorted(rules.glob('*.cocci')), subprocess_runner=execute, allow_scripting=True)
     assert results['first'].ok and results['second'].ok
     assert not results['future'].ok and 'requires tool >= 1.4.0' in results['future'].errors[0]
     assert len(calls) == (3 if mode == 'batch-retry' else 1 if mode == 'batch' else 2)
