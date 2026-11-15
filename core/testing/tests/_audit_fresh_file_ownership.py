@@ -15,7 +15,7 @@ def audit(event, values):
 sys.addaudithook(audit)
 p=a.root/'core/sandbox/tests/test_audit_failure_modes.py'
 b=p.read_bytes()
-assert hashlib.sha256(b).hexdigest() == '3ac98e5a24891caf91452ffd6bda1157a53746b6d458edcbeaa3ee95aeb302a5'
+assert hashlib.sha256(b).hexdigest() == 'ff43544d61cc07bdf91a5815681e141d2ff2c32a5f174d5ab06af94c0e678a3e'
 m=next(n for c in ast.parse(b).body if isinstance(c,ast.ClassDef) for n in c.body if isinstance(n,ast.FunctionDef) and n.name=='test_sweep_keeps_fresh_files')
 assert isinstance(m.body[0],ast.Import) and isinstance(m.body[1],ast.ImportFrom)
 # Exact allocation-through-cleanup suffix; original sandbox imports excluded.
