@@ -17,6 +17,7 @@ from collections.abc import Callable
 from typing import Any
 
 from core.llm.coerce import structured_result
+from core.llm.cost import sanitize_iterations
 
 logger = logging.getLogger(__name__)
 
@@ -57,8 +58,8 @@ class DispatchClient:
             call this adapter makes. The orchestrator selects this once
             per /agentic run; we don't need per-call model selection.
         cost_tracker: Optional CostTracker. When provided, each call's
-            cost is added so the budget guard sees dataflow validation
-            work.
+            cost and token usage are added so budget and telemetry totals
+            include dataflow validation work.
         temperature: Sampling temperature, default 0.0 (deterministic).
             hypothesis_validation generates rules and evaluates evidence;
             both want low entropy.
@@ -105,9 +106,14 @@ class DispatchClient:
             return None
 
         cost = getattr(response, "cost", 0.0) or 0.0
-        if cost and self._cost_tracker is not None:
+        tokens = sanitize_iterations(getattr(response, "tokens", 0))
+        thinking_tokens = sanitize_iterations(getattr(response, "thinking_tokens", 0))
+        if (cost or tokens or thinking_tokens) and self._cost_tracker is not None:
             try:
-                self._cost_tracker.add_cost(_cost_model_key(self._model), cost)
+                self._cost_tracker.add_cost(
+                    _cost_model_key(self._model), cost,
+                    tokens=tokens, thinking_tokens=thinking_tokens,
+                )
             except Exception as e:  # noqa: BLE001 — cost accounting must never sink the validation
                 logger.debug(
                     "cost_tracker.add_cost failed: %s", e,
