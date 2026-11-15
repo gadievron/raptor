@@ -308,6 +308,7 @@ for pos in p_use:
     print("COCCIRESULT:" + json.dumps({
         "rule": "strncpy_no_nul", "file": pos.file,
         "line": int(pos.line), "col": int(pos.column),
+        "line_end": int(pos.line_end), "col_end": int(pos.column_end),
         "message": "Candidate: buffer from strncpy (line %s) reaches a string or format argument; review source length, termination, conversion and read bounds (CWE-170)" % p_copy[0].line,
     }))
 
@@ -476,5 +477,6 @@ if len(arguments) > 128 or needs_termination(str(fmt), str(count), arguments, le
         print("COCCIRESULT:" + json.dumps({
             "rule": "strncpy_no_nul", "file": pos.file,
             "line": int(pos.line), "col": int(pos.column),
+            "line_end": int(pos.line_end), "col_end": int(pos.column_end),
             "message": "Candidate: buffer from strncpy (line %s) reaches a string conversion or unknown format; review termination and read bounds (CWE-170)" % p_copy[0].line,
         }))

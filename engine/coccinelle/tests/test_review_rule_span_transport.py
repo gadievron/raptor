@@ -2,6 +2,7 @@
 import ast
 from contextlib import redirect_stdout
 import io
+from itertools import islice
 import json
 from pathlib import Path
 import re
@@ -43,6 +44,7 @@ _SCRIPTS = [
     ("use_after_fclose", 2),
     ("snprintf_truncation_boundary", 0), ("snprintf_truncation_boundary", 1),
     ("snprintf_advance", 0), ("snprintf_advance", 1), ("snprintf_advance", 2),
+    ("strncpy_no_nul", 0), ("strncpy_no_nul", 1),
 ]
 
 
@@ -62,7 +64,7 @@ def _report(name, index, position, **bindings):
     tree = ast.parse(_python_statements(scripts[index]))
     tree.body = [node for node in tree.body if not isinstance(node, (ast.Import, ast.ImportFrom))]
     output = io.StringIO()
-    namespace = {"json": json, "sys": SimpleNamespace(stderr=output), "buf": "owned", "n": "count", "ast": ast, "re": re, "ARR": "buffer", "offset": "1", "COMMAND": "F_SETFD", "FLAGS": "O_NONBLOCK", "p": [position], "p2": [position], "PARAM": "count", "TD": "struct payload", "TL": "int", "T": "char", "LOCAL": "owned", "swap1": "htons", "swap2": "ntohs", "V": "secret"}
+    namespace = {"json": json, "islice": islice, "p_use": [position], "p_copy": [SimpleNamespace(file="owned.c", line=1, column=1, line_end=1, column_end=8)], "fmt": '"%s"', "count": "8", "before": (), "after": (), "dst": "owned", "sys": SimpleNamespace(stderr=output), "buf": "owned", "n": "count", "ast": ast, "re": re, "ARR": "buffer", "offset": "1", "COMMAND": "F_SETFD", "FLAGS": "O_NONBLOCK", "p": [position], "p2": [position], "PARAM": "count", "TD": "struct payload", "TL": "int", "T": "char", "LOCAL": "owned", "swap1": "htons", "swap2": "ntohs", "V": "secret"}
     namespace.update(bindings)
     with redirect_stdout(output):
         exec(compile(tree, str(rule), "exec"), namespace)
@@ -143,3 +145,20 @@ def test_correct_fcntl_domain_stays_quiet(command, flags):
 def test_zero_pointer_offset_stays_quiet(offset):
     position = SimpleNamespace(file="owned.c", line=4, column=2, line_end=5, column_end=18)
     assert _report("free_nonbase_ptr", 0, position, offset=offset) == ""
+
+
+@pytest.mark.parametrize("bindings", [
+    {"fmt": '"%.4s"'}, {"fmt": '"%p"'},
+    {"fmt": '"%.*s"', "before": ("4",)},
+], ids=["bounded-string", "pointer-value", "bounded-star-string"])
+def test_strncpy_format_filters_stay_quiet(bindings):
+    position = SimpleNamespace(file="owned.c", line=4, column=2, line_end=5, column_end=18)
+    assert _report("strncpy_no_nul", 1, position, **bindings) == ""
+
+
+def test_unknown_strncpy_format_remains_candidate():
+    position = SimpleNamespace(file="owned.c", line=4, column=2, line_end=5, column_end=18)
+    rows = _parse_results(_report("strncpy_no_nul", 1, position, fmt="FMT"), "strncpy_no_nul")
+    assert len(rows) == 1
+    assert (rows[0].line_end, rows[0].column_end) == (5, 18)
+    assert "unknown format" in rows[0].message
