@@ -246,40 +246,41 @@ for _pu in p:
 @@
 import json, sys
 _seen = set()
-for _cf, _cfn, _cl, _cskb, _cvar in _sfu_counts:
-    if (_cf, _cfn) in _sfu_guarded:
-        continue
-    if _cvar.startswith("<inline:"):
-        _tables = {_cvar[len("<inline:"):-1]}
-    else:
-        # The count variable must feed a table; collect the tables it
-        # sizes in this function.
-        _tables = {_lsg for _lf, _lfn, _lsg, _lnsg in _sfu_links
-                   if (_lf, _lfn) == (_cf, _cfn) and _lnsg == _cvar}
-    if not _tables:
-        continue
-    for _mf, _mfn, _ml, _mskb, _msg_ in _sfu_maps:
-        if (_mf, _mfn) != (_cf, _cfn) or _mskb != _cskb or _ml < _cl:
+if _sfu_maps and _sfu_crypts:
+    for _cf, _cfn, _cl, _cskb, _cvar in _sfu_counts:
+        if (_cf, _cfn) in _sfu_guarded:
             continue
-        if _msg_ not in _tables:
+        if _cvar.startswith("<inline:"):
+            _tables = {_cvar[len("<inline:"):-1]}
+        else:
+            # The count variable must feed a table; collect the tables it
+            # sizes in this function.
+            _tables = {_lsg for _lf, _lfn, _lsg, _lnsg in _sfu_links
+                       if (_lf, _lfn) == (_cf, _cfn) and _lnsg == _cvar}
+        if not _tables:
             continue
-        if not any(_rf == _cf and _rfn == _cfn and _rsg == _msg_
-                   for _rf, _rfn, _rsg in _sfu_crypts):
-            continue
-        if (_cf, _cl) in _seen:
-            continue
-        _seen.add((_cf, _cl))
-        _m = {"file": _cf, "line": _cl, "col": 0,
-              "line_end": _cl, "col_end": 0,
-              "rule": "scatterlist_frag_undersize",
-              "message": "scatterlist sized from bare fragment count "
-                         "'skb_shinfo(%s)->nr_frags' at line %s but "
-                         "'%s' is mapped via skb_to_sgvec at line %s: "
-                         "possible missing frag_list accounting; check "
-                         "reachable skb geometry, spare table capacity "
-                         "and the map result before concluding that "
-                         "the table is undersized. Size for every "
-                         "mapped segment, for example using "
-                         "skb_cow_data() where appropriate"
-                         % (_cskb, _cl, _mskb, _ml)}
-        sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
+        for _mf, _mfn, _ml, _mskb, _msg_ in _sfu_maps:
+            if (_mf, _mfn) != (_cf, _cfn) or _mskb != _cskb or _ml < _cl:
+                continue
+            if _msg_ not in _tables:
+                continue
+            if not any(_rf == _cf and _rfn == _cfn and _rsg == _msg_
+                       for _rf, _rfn, _rsg in _sfu_crypts):
+                continue
+            if (_cf, _cl) in _seen:
+                continue
+            _seen.add((_cf, _cl))
+            _m = {"file": _cf, "line": _cl, "col": 0,
+                  "line_end": _cl, "col_end": 0,
+                  "rule": "scatterlist_frag_undersize",
+                  "message": "scatterlist sized from bare fragment count "
+                             "'skb_shinfo(%s)->nr_frags' at line %s but "
+                             "'%s' is mapped via skb_to_sgvec at line %s: "
+                             "possible missing frag_list accounting; check "
+                             "reachable skb geometry, spare table capacity "
+                             "and the map result before concluding that "
+                             "the table is undersized. Size for every "
+                             "mapped segment, for example using "
+                             "skb_cow_data() where appropriate"
+                             % (_cskb, _cl, _mskb, _ml)}
+            sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
