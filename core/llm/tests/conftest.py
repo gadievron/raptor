@@ -40,19 +40,24 @@ def _private_fixture_files():
 
 
 @pytest.fixture(autouse=True)
-def _isolate_scorecard(monkeypatch):
-    """Prevent tests from writing to the production scorecard.
-
-    Tests that construct LLMClient with bare model names (``"pro"``,
-    ``"haiku"``) register an atexit flush that writes mock data into
-    ``out/llm_scorecard.json``. Disabling here keeps the scorecard
-    clean without touching every test's LLMConfig constructor.
-    """
+def _isolate_scorecard():
+    """Suppress direct usage flushes until this fixture's owner exits."""
     from core.llm.client import LLMClient
-    monkeypatch.setattr(
-        LLMClient, "flush_usage_to_scorecard",
-        lambda self, **kwargs: None,
-    )
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(
+            LLMClient, "flush_usage_to_scorecard",
+            lambda self, **kwargs: None,
+        )
+        yield
+
+
+@pytest.fixture
+def monkeypatch(_isolate_scorecard, monkeypatch):
+    """Keep body patches inside the scorecard guard's lifetime."""
+    try:
+        yield monkeypatch
+    finally:
+        monkeypatch.undo()
 
 
 @pytest.fixture(autouse=True)
