@@ -526,6 +526,15 @@ def function_scope_bindings(tree: ast.Module) -> dict[ast.AST, frozenset[str]]:
             scopes[node] = visible
             pending.extend((statement, visible) for statement in body)
             pending.extend((expr, enclosing) for expr in _definition_header_expressions(node))
+        elif isinstance(node, ast.TypeAlias):
+            # The deferred value has its own parameter frame. Traversing
+            # syntax does not evaluate the value, bounds or defaults, and
+            # does not bind the alias name in an ordinary enclosing scope.
+            type_parameters = frozenset(
+                parameter.name for parameter in node.type_params
+                if isinstance(getattr(parameter, "name", None), str)
+            )
+            pending.append((node.value, enclosing | type_parameters))
         elif isinstance(node, ast.ClassDef):
             # Class assignments are not method closure bindings. Generic
             # parameters occupy a separate frame shared by the class body,
