@@ -257,7 +257,7 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
     except OverflowError:
         # Unrepresentable integer metadata follows the malformed-cost policy.
         cost = 0.0
-    tokens = metadata.get("_tokens", 0)
+    tokens = sanitize_iterations(metadata.get("_tokens", 0))
     model = metadata.get("analysed_by", "claude-code")
     duration = metadata.get("duration_seconds", 0)
 
