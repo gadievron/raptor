@@ -95,3 +95,33 @@ def test_unsteered_tautology_keeps_no_check_fast_path():
     assert result.model == {}
     assert solvers[-1].check.call_count == 0
     assert sum(solver.check.call_count for solver in solvers) == 1
+
+
+@pytest.mark.parametrize("check_name", ("check_path_feasibility", "check_path_feasibility_dual"))
+@pytest.mark.parametrize("equal_empty", (False, True), ids=("raising-comparison", "empty-comparison"))
+def test_unsupported_preference_is_rejected_before_equality_or_native_access(check_name, equal_empty):
+    from core.smt_solver import path_feasibility
+
+    comparisons = []
+
+    class UnsupportedPreference:
+        def __eq__(self, other):
+            comparisons.append(other)
+            if equal_empty:
+                return other == ""
+            raise AssertionError("unsupported preference comparison must not run")
+
+    with patch.object(path_feasibility, "_z3_available", side_effect=AssertionError("native availability must not run")):
+        with pytest.raises(TypeError, match="prefer_witness"):
+            getattr(path_feasibility, check_name)([], prefer_witness=UnsupportedPreference())
+    assert comparisons == []
+
+
+def test_supported_tuple_preference_does_not_compare_itself_with_empty_text():
+    class Preference(tuple):
+        def __eq__(self, other):
+            raise AssertionError("tuple preference must be validated as fields")
+
+    assert parse_witness_preference(Preference((" Count ", " MAX "))) == ("Count", "max")
+    assert parse_witness_preference(None) is None
+    assert parse_witness_preference("") is None
