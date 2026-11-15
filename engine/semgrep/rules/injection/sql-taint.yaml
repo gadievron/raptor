@@ -60,8 +60,9 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.injection.sql.taint.java
     message: >-
-      Untrusted data flows into a SQL query via Statement. Use
-      PreparedStatement with parameterised queries instead.
+      SQL-injection review candidate: data reaches SQL-shaped text or a SQL
+      API. Confirm input origin, query structure and execution context.
+      Use parameterised queries for untrusted values.
     languages: [java]
     severity: CRITICAL
     mode: taint
