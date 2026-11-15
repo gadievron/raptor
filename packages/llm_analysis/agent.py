@@ -57,7 +57,7 @@ from core.llm.transcript import (
 from core.logging import get_logger
 from core.paths import confine, strip_file_uri
 from core.run.finding_status import read_verdict
-from core.source import read_contained_text_capped, read_text_capped, split_lines
+from core.source import read_contained_text_capped, split_lines
 from core.source.windows import read_text_line_window_capped
 from core.progress import HackerProgress
 from core.run.output import unique_run_suffix
@@ -3095,7 +3095,7 @@ class AutonomousSecurityAgentV2:
         # hostile-giant-file OOM rationale) as read_vulnerable_code
         # above. Behaviour-preserving for the prompt: the patch prompt
         # keeps only the first 5000 chars of this content.
-        got = read_text_capped(file_path)
+        got = read_contained_text_capped(vuln.repo_path, file_path)
         if got is None:
             logger.error("   ✗ Failed to read source: %s", file_path)
             return False
