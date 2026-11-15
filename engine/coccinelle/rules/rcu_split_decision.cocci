@@ -1,15 +1,13 @@
-// rcu_split_decision.cocci — a privilege decision whose inputs span
-// an RCU read-section boundary: subject/target credentials are read
-// under rcu_read_lock(), the section closes, and the decision then
-// consumes task state (->mm / dumpability) read AFTER the unlock.
-// The target can change credentials or dumpability between the two
-// reads (commit_creds() pairs a write barrier with this exact
-// window), so the composite access check is not atomic — the
-// checked-credential half may no longer order the dumpability read.
-// A read/full barrier after the unlock orders the pair; metadata-only
-// void helpers do not make an allow/deny decision and are excluded. Detection-grade lead for CWE-362/CWE-287-style access
-// check races; never promotes on its own.
+// rcu_split_decision.cocci — Review credential/mm reads across an RCU boundary.
+// Selected int-returning functions read __task_cred(T) under rcu_read_lock(),
+// close the section, then read T->mm. This sequence does not establish an
+// access decision, a dumpability read, concurrent mutation or target identity
+// and lifetime continuity. Review those facts and the ordering contract
+// before treating a candidate as an access-check race.
+// Selected read/full barrier spellings and a new read section suppress this
+// local pattern. Silence cannot refute other race or access-check shapes.
 // @role: detection
+// raptor: confirm-only
 
 @rcusplit exists@
 expression E, T;
@@ -42,5 +40,5 @@ for _pu in p:
     _m = {"file": _pu.file, "line": int(_pu.line), "col": int(_pu.column),
           "line_end": int(_pu.line_end), "col_end": int(_pu.column_end),
           "rule": "rcu_split_decision",
-          "message": "access-check race lead: '%s' credentials were read under rcu_read_lock() but '%s->mm' (dumpability half of the decision) is read after rcu_read_unlock() -- the target can change creds/dumpability between the halves, the composite check is not atomic" % (T, T)}
+          "message": "RCU read-order candidate: '__task_cred(%s)' before rcu_read_unlock() and '%s->mm' after it; review target identity, access-decision use, concurrent mutation and ordering before claiming a race" % (T, T)}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
