@@ -30,7 +30,7 @@ def integer_type(spelling, integer_abi=None):
             (signed or width < abi.int_bits) if promote else signed,
         )
 
-    words = spelling.split()
+    words = str.split(spelling)
     tokens = set(words)
     if (
         not words

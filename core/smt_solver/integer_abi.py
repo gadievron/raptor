@@ -20,6 +20,17 @@ class IntegerABI:
     source: str = "explicit"
 
     def __post_init__(self):
+        # Metadata selects arithmetic semantics. Snapshot stored characters
+        # before comparisons, hashing or record serialization can dispatch.
+        for field in ("name", "representation", "source"):
+            value = getattr(self, field)
+            if not isinstance(value, str):
+                raise ValueError(f"invalid integer ABI {field}")
+            try:
+                text = str.__str__(value)
+            except TypeError as exc:
+                raise ValueError(f"invalid integer ABI {field}") from exc
+            object.__setattr__(self, field, text)
         if self.source not in {"explicit", "host-assumption", "binary-platform"}:
             raise ValueError("unsupported integer ABI source")
         if self.representation != "twos-complement-no-padding":
@@ -68,7 +79,11 @@ def resolve_integer_abi(value: IntegerABIInput) -> IntegerABI | None:
     if isinstance(value, IntegerABI):
         return value
     if isinstance(value, str):
-        return INTEGER_ABIS.get(value)
+        try:
+            name = str.__str__(value)
+        except TypeError:
+            return None
+        return INTEGER_ABIS.get(name)
     if isinstance(value, dict):
         try:
             return IntegerABI(**value)
