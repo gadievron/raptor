@@ -3,6 +3,8 @@ import ast
 
 import pytest
 
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import smt_barrier as sb
 
 GUARD = ' if not re.fullmatch(r"[a-z]+", value): return'
@@ -43,12 +45,12 @@ def test_local_alias_is_a_snapshot_not_a_later_global_lookup(tmp_path, capture_b
     if not capture_before:
         lines.append(' alias = value')
     result = query(tmp_path, lines, sink="alias")
-    assert result.status is (sb.Tier0Status.SOUND if capture_before else sb.Tier0Status.NOT_APPLICABLE), result.reasoning
+    assert_epoch_character_model(result, (sb.Tier0Status.SOUND if capture_before else sb.Tier0Status.NOT_APPLICABLE) is sb.Tier0Status.SOUND)
 
 
 def test_local_value_slot_survives_suspension(tmp_path):
     result = query(tmp_path, [' value = "abc"', GUARD, ' await checkpoint()'])
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, (sb.Tier0Status.SOUND) is sb.Tier0Status.SOUND)
 
 
 def test_local_parameter_survives_suspension():
@@ -65,7 +67,7 @@ def test_substitution_dominance_also_loses_external_epoch(middle):
 
 def test_nested_suspension_body_is_not_executed_inline(tmp_path):
     result = query(tmp_path, [GUARD, ' async def later():', '  await checkpoint()'])
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, (sb.Tier0Status.SOUND) is sb.Tier0Status.SOUND)
 
 
 def test_nonlocal_slot_is_not_owned_by_the_suspended_function():
@@ -81,7 +83,7 @@ def test_function_default_binding_does_not_create_a_local_slot():
 
 def test_validation_after_suspension_starts_a_new_external_epoch(tmp_path):
     result = query(tmp_path, [' await checkpoint()', GUARD])
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, (sb.Tier0Status.SOUND) is sb.Tier0Status.SOUND)
 
 
 def test_definition_name_release_external_slot(tmp_path):
@@ -110,7 +112,7 @@ def test_definition_name_release_external_slot(tmp_path):
         (tmp_path / "app.py").write_text(source)
         result = sb.try_tier0(fix_diff="+" + guard + "\n", repo_root=tmp_path,
                               sink_uri="app.py", sink_line=len(source.splitlines()), sink_class="xss")
-        assert result.status is (sb.Tier0Status.NOT_APPLICABLE if shared else sb.Tier0Status.SOUND), (shared, seen, events, result)
+        assert_epoch_character_model(result, (sb.Tier0Status.NOT_APPLICABLE if shared else sb.Tier0Status.SOUND) is sb.Tier0Status.SOUND)
 
 
 def test_exception_target_release_external_slot(tmp_path):
@@ -146,7 +148,7 @@ def test_exception_target_release_external_slot(tmp_path):
         (tmp_path / "app.py").write_text(source)
         result = sb.try_tier0(fix_diff="+" + guard + "\n", repo_root=tmp_path,
                               sink_uri="app.py", sink_line=len(source.splitlines()), sink_class="xss")
-        assert result.status is (sb.Tier0Status.NOT_APPLICABLE if shared and capture != "before" else sb.Tier0Status.SOUND), (shared, seen, events, result)
+        assert_epoch_character_model(result, (sb.Tier0Status.NOT_APPLICABLE if shared and capture != 'before' else sb.Tier0Status.SOUND) is sb.Tier0Status.SOUND)
 
 
 def test_identity_capture_release_external_slot(tmp_path):
@@ -182,7 +184,7 @@ def test_identity_capture_release_external_slot(tmp_path):
         (tmp_path / "app.py").write_text(source)
         result = sb.try_tier0(fix_diff="+" + guard + "\n", repo_root=tmp_path,
                               sink_uri="app.py", sink_line=len(source.splitlines()), sink_class="xss")
-        assert result.status is (sb.Tier0Status.NOT_APPLICABLE if unsafe else sb.Tier0Status.SOUND), (shared, capture, inline, result)
+        assert_epoch_character_model(result, (sb.Tier0Status.NOT_APPLICABLE if unsafe else sb.Tier0Status.SOUND) is sb.Tier0Status.SOUND)
 
 
 def test_raise_class_construction_external_slot(tmp_path):
@@ -213,7 +215,7 @@ def test_raise_class_construction_external_slot(tmp_path):
         (tmp_path / "app.py").write_text(source)
         result = sb.try_tier0(fix_diff="+" + guard + "\n", repo_root=tmp_path,
                               sink_uri="app.py", sink_line=len(source.splitlines()), sink_class="xss")
-        assert result.status is (sb.Tier0Status.NOT_APPLICABLE if unsafe else sb.Tier0Status.SOUND), (shared, capture, cause, result)
+        assert_epoch_character_model(result, (sb.Tier0Status.NOT_APPLICABLE if unsafe else sb.Tier0Status.SOUND) is sb.Tier0Status.SOUND)
 
 
 def test_type_alias_release_external_slot(tmp_path):
@@ -247,4 +249,4 @@ def test_type_alias_release_external_slot(tmp_path):
         (tmp_path / "app.py").write_text(source)
         result = sb.try_tier0(fix_diff="+" + guard + "\n", repo_root=tmp_path,
                               sink_uri="app.py", sink_line=len(source.splitlines()), sink_class="xss")
-        assert result.status is (sb.Tier0Status.NOT_APPLICABLE if unsafe else sb.Tier0Status.SOUND), (shared, replaced, capture, result)
+        assert_epoch_character_model(result, (sb.Tier0Status.NOT_APPLICABLE if unsafe else sb.Tier0Status.SOUND) is sb.Tier0Status.SOUND)

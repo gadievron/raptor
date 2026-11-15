@@ -3,6 +3,8 @@ import json
 
 import pytest
 
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import injection_prescreen, smt_barrier as sb, tier1_llm
 from core.dataflow.source_identity import known_python_identity_conflict
 
@@ -37,7 +39,7 @@ def test_reported_sink_row_cannot_borrow_an_earlier_sink(tmp_path, profile, over
     result = sb.try_tier0(fix_diff="+" + GUARD + "\n", repo_root=tmp_path,
                           sink_uri="app.py", sink_line=sink_line, sink_class="xss")
     expected = sb.Tier0Status.NOT_APPLICABLE if overwritten or profile == "bare-cr" else sb.Tier0Status.SOUND
-    assert result.status is expected, result.reasoning
+    assert_epoch_character_model(result, (expected) is sb.Tier0Status.SOUND)
     if expected is sb.Tier0Status.NOT_APPLICABLE:
         assert result.artifact is None
 

@@ -3,6 +3,8 @@ import json
 
 import pytest
 
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import smt_barrier as sb, tier1_llm
 
 
@@ -37,6 +39,6 @@ def test_sink_statement_requires_complete_row(tmp_path, consumer, local, descrip
                             "variable_name": "value", "charset": "a-z", "forbidden": "", "library_call": ""})
         result = tier1_llm.try_tier1b(**arguments, complete=lambda *_: reply)
     refused = multiline or (descriptor and not local)
-    assert result.status is (sb.Tier0Status.NOT_APPLICABLE if refused else sb.Tier0Status.SOUND), result.reasoning
+    assert_epoch_character_model(result, (sb.Tier0Status.NOT_APPLICABLE if refused else sb.Tier0Status.SOUND) is sb.Tier0Status.SOUND)
     if refused:
         assert result.artifact is None
