@@ -1,6 +1,7 @@
 """Release/source regression cases from the public devcontainer dogfood run."""
 from __future__ import annotations
 
+from contextlib import closing
 from dataclasses import replace
 import json
 
@@ -118,17 +119,16 @@ def test_unavailable_matching_record_is_not_a_clean_result(tmp_path):
 
 
 def test_offline_database_scopes_matches_and_fixes_to_release(tmp_path):
-    database = OsvOfflineDB(tmp_path / "osv.sqlite")
-    data = record("git", {"Debian:12": "2", "Debian:13": "3"})
-    database._init_db()
-    database._conn.execute("INSERT INTO advisories (ecosystem, package, osv_id, json) VALUES (?, ?, ?, ?)",
-                           ("Debian", "git", data["id"], json.dumps(data)))
-    database._conn.commit()
-    assert database.query("Debian:12", "git", "2") == []
-    assert database.query("Debian:12", "git", "1")[0].fixed_versions == ["2"]
-    with pytest.raises(ValueError, match="release is unknown"):
-        database.query("Debian", "git", "1")
-    database.close()
+    with closing(OsvOfflineDB(tmp_path / "osv.sqlite")) as database:
+        data = record("git", {"Debian:12": "2", "Debian:13": "3"})
+        database._init_db()
+        database._conn.execute("INSERT INTO advisories (ecosystem, package, osv_id, json) VALUES (?, ?, ?, ?)",
+                               ("Debian", "git", data["id"], json.dumps(data)))
+        database._conn.commit()
+        assert database.query("Debian:12", "git", "2") == []
+        assert database.query("Debian:12", "git", "1")[0].fixed_versions == ["2"]
+        with pytest.raises(ValueError, match="release is unknown"):
+            database.query("Debian", "git", "1")
 
 
 def test_ubuntu_standard_and_pro_streams_are_distinct(tmp_path):
