@@ -459,18 +459,20 @@ def test_synthesize_one_fetch_fail(monkeypatch, tmp_path: Path):
 
 def _results_db(path: Path):
     con = sqlite3.connect(str(path))
-    con.execute(cvefix_walk._SCHEMA)
+    try:
+        con.execute(cvefix_walk._SCHEMA)
 
-    def ins(fix, cwe, after):
-        con.execute("INSERT INTO walk_results VALUES (?,?,?,?,?,?,?,?,?,?)",
-                    (fix, "CVE-" + fix, cwe, "Python", "https://github.com/o/a",
-                     fix + "p", "ok", 1, after, 0.0))
-    ins("f1", "CWE-89", 1)   # candidate -> sound
-    ins("f2", "CWE-79", 2)   # candidate -> not_sound
-    ins("f3", "CWE-78", 1)   # candidate -> build_fail (pipeline error)
-    ins("f4", "CWE-22", 0)   # after==0 -> NOT a candidate
-    con.commit()
-    con.close()
+        def ins(fix, cwe, after):
+            con.execute("INSERT INTO walk_results VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        (fix, "CVE-" + fix, cwe, "Python", "https://github.com/o/a",
+                         fix + "p", "ok", 1, after, 0.0))
+        ins("f1", "CWE-89", 1)   # candidate -> sound
+        ins("f2", "CWE-79", 2)   # candidate -> not_sound
+        ins("f3", "CWE-78", 1)   # candidate -> build_fail (pipeline error)
+        ins("f4", "CWE-22", 0)   # after==0 -> NOT a candidate
+        con.commit()
+    finally:
+        con.close()
 
 
 def test_synthesize_from_results_aggregates_persists_resumes(monkeypatch, tmp_path: Path):
