@@ -3178,6 +3178,20 @@ def _python_chain_reaches_sink(
             if hasattr(node, "lineno")
         ):
             return False
+    # A positive guard can execute its success body on the validator row.
+    # The regex call's admission does not grant effects in that body purity.
+    if external_slot_seen:
+        for guard in _walk_same_scope(scope_root):
+            if not isinstance(guard, ast.If) or guard.lineno != validator_line:
+                continue
+            body = ast.Module(body=[*guard.body, *guard.orelse], type_ignores=[])
+            if any(
+                getattr(part, "lineno", None) == validator_line
+                and not isinstance(part, (ast.Assign, ast.AnnAssign))
+                and possible_call(part)
+                for part in _walk_same_scope(body)
+            ):
+                return False
     # Loop back-edge kill: a rebind textually AFTER the sink (or before
     # the validator) still reaches the sink on the next iteration when
     # it shares a loop with the sink — the flat forward pass cannot see
