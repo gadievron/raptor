@@ -37,7 +37,7 @@ def finalise(counts, links, maps, crypts, guarded=()):
 
 @pytest.mark.parametrize("missing", ["maps", "crypts"], ids=["no-maps", "no-crypts"])
 def test_missing_required_category_skips_relationship_work(missing):
-    counts = [("owned.c", "owned", i + 1, "skb", f"n{i}") for i in range(128)]
+    counts = [("owned.c", "owned", i + 1, "skb", f"n{i}", 2, i + 1, 9) for i in range(128)]
     links = ObservedLinks([("owned.c", "owned", f"table{i}", f"n{i}") for i in range(128)])
     maps = [] if missing == "maps" else [("owned.c", "owned", 200, "skb", "table0")]
     crypts = [] if missing == "crypts" else [("owned.c", "owned", "table0")]
@@ -47,26 +47,26 @@ def test_missing_required_category_skips_relationship_work(missing):
 
 
 def test_complete_relation_keeps_report_span_and_message():
-    rows = finalise([("owned.c", "owned", 5, "skb", "n")],
+    rows = finalise([("owned.c", "owned", 5, "skb", "n", 2, 5, 9)],
                     [("owned.c", "owned", "table", "n")],
                     [("owned.c", "owned", 20, "skb", "table")],
                     [("owned.c", "owned", "table")])
     assert len(rows) == 1
     row = rows[0]
-    assert (row["file"], row["line"], row["col"], row["line_end"], row["col_end"]) == ("owned.c", 5, 0, 5, 0)
+    assert (row["file"], row["line"], row["col"], row["line_end"], row["col_end"]) == ("owned.c", 5, 2, 5, 9)
     assert row["rule"] == "scatterlist_frag_undersize"
     assert "at line 5" in row["message"] and "at line 20" in row["message"]
 
 
 def test_inline_count_does_not_require_links():
-    rows = finalise([("owned.c", "owned", 5, "skb", "<inline:table>")], [],
+    rows = finalise([("owned.c", "owned", 5, "skb", "<inline:table>", 2, 5, 9)], [],
                     [("owned.c", "owned", 20, "skb", "table")],
                     [("owned.c", "owned", "table")])
     assert len(rows) == 1 and rows[0]["line"] == 5
 
 
 def test_other_function_crypto_does_not_qualify():
-    assert finalise([("owned.c", "owned", 5, "skb", "n")],
+    assert finalise([("owned.c", "owned", 5, "skb", "n", 2, 5, 9)],
                     [("owned.c", "owned", "table", "n")],
                     [("owned.c", "owned", 20, "skb", "table")],
                     [("owned.c", "other", "table")]) == []
@@ -74,14 +74,14 @@ def test_other_function_crypto_does_not_qualify():
 
 def test_guarded_function_stays_quiet():
     links = ObservedLinks([("owned.c", "owned", "table", "n")])
-    assert finalise([("owned.c", "owned", 5, "skb", "n")], links,
+    assert finalise([("owned.c", "owned", 5, "skb", "n", 2, 5, 9)], links,
                     [("owned.c", "owned", 20, "skb", "table")],
                     [("owned.c", "owned", "table")], guarded=[("owned.c", "owned")]) == []
     assert links.visits == 0
 
 
 def test_duplicate_maps_keep_first_report_once():
-    rows = finalise([("owned.c", "owned", 5, "skb", "n")],
+    rows = finalise([("owned.c", "owned", 5, "skb", "n", 2, 5, 9)],
                     [("owned.c", "owned", "a", "n"), ("owned.c", "owned", "b", "n")],
                     [("owned.c", "owned", 20, "skb", "a"), ("owned.c", "owned", 30, "skb", "b")],
                     [("owned.c", "owned", "a"), ("owned.c", "owned", "b")])

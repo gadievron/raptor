@@ -144,7 +144,8 @@ nsg << sfu_count.nsg;
 
 for _pu in p:
     _sfu_counts.append((_pu.file, _pu.current_element, int(_pu.line),
-                        str(skb), str(nsg)))
+                        str(skb), str(nsg), int(_pu.column),
+                        int(_pu.line_end), int(_pu.column_end)))
 
 // The count variable feeding a table: sg_init_table(sg, nsg) or a
 // kmalloc_array allocation into the table pointer. Without this link
@@ -193,7 +194,8 @@ sg << sfu_counti.sg;
 
 for _pu in p:
     _sfu_counts.append((_pu.file, _pu.current_element, int(_pu.line),
-                        str(skb), "<inline:%s>" % str(sg)))
+                        str(skb), "<inline:%s>" % str(sg), int(_pu.column),
+                        int(_pu.line_end), int(_pu.column_end)))
 
 // The skb-to-scatterlist map.
 @sfu_map exists@
@@ -247,7 +249,7 @@ for _pu in p:
 import json, sys
 _seen = set()
 if _sfu_maps and _sfu_crypts:
-    for _cf, _cfn, _cl, _cskb, _cvar in _sfu_counts:
+    for _cf, _cfn, _cl, _cskb, _cvar, _cc, _cle, _cce in _sfu_counts:
         if (_cf, _cfn) in _sfu_guarded:
             continue
         if _cvar.startswith("<inline:"):
@@ -267,11 +269,12 @@ if _sfu_maps and _sfu_crypts:
             if not any(_rf == _cf and _rfn == _cfn and _rsg == _msg_
                        for _rf, _rfn, _rsg in _sfu_crypts):
                 continue
-            if (_cf, _cl) in _seen:
+            _span = (_cf, _cl, _cc, _cle, _cce)
+            if _span in _seen:
                 continue
-            _seen.add((_cf, _cl))
-            _m = {"file": _cf, "line": _cl, "col": 0,
-                  "line_end": _cl, "col_end": 0,
+            _seen.add(_span)
+            _m = {"file": _cf, "line": _cl, "col": _cc,
+                  "line_end": _cle, "col_end": _cce,
                   "rule": "scatterlist_frag_undersize",
                   "message": "scatterlist sized from bare fragment count "
                              "'skb_shinfo(%s)->nr_frags' at line %s but "
