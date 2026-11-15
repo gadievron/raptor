@@ -1,11 +1,12 @@
 """Owned query-header reader/cache control with no CLI discovery."""
-import builtins
+import io
 import errno
 import os
 
 import pytest
 from core.audit import codeql_query_resolver as source
 from core.testing.module_state import isolated_module_state
+from core.testing.module_bindings import patch_module_attribute
 
 
 @pytest.mark.parametrize("body_kind", ["healthy", "cancel", "io", "unexpected"])
@@ -38,14 +39,14 @@ def test_query_index_reader_precedence(tmp_path, monkeypatch, body_kind, close_k
                 raise cleanup
 
         def read(self, size):
-            assert size == source._HEADER_READ_BYTES
+            assert size == source._HEADER_READ_BYTES + 1
             assert self.stream.read(size) == content
             if primary is not None:
                 raise primary
             return content
 
     def observe(*args, **kwargs):
-        stream = builtins.open(*args, **kwargs)
+        stream = io.TextIOWrapper(*args, **kwargs)
         wrapped = Observed(stream)
         streams.append(wrapped)
         return wrapped
@@ -55,7 +56,7 @@ def test_query_index_reader_precedence(tmp_path, monkeypatch, body_kind, close_k
         return [tmp_path]
 
     monkeypatch.setattr(source, "_pack_roots", owned_roots)
-    monkeypatch.setattr(source, "open", observe, raising=False)
+    patch_module_attribute(monkeypatch, source, "io", "TextIOWrapper", observe)
     original_index, original_locks = source._PACK_INDEX_CACHE, source._PACK_LOCKS
     with isolated_module_state(source, {"_PACK_INDEX_CACHE": {}, "_PACK_LOCKS": {}},
                                lock=source._CACHE_LOCK):

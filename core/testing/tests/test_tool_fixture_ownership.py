@@ -307,3 +307,37 @@ def test_scratch_fixture_attempts_all_fallback_removals(tmp_path):
     finally:
         owner.rmtree_hardened = original_remove
         _finish(generator, cleanup)
+
+
+@pytest.mark.parametrize("mode", ["normal", "error", "interrupt"])
+def test_scope_gate_and_body_patch_share_teardown_ownership(mode):
+    from types import SimpleNamespace
+    from packages.semgrep import runner
+
+    tree = ast.parse((ROOT / "packages/semgrep/tests/test_runner.py").read_text())
+    fixture = next(node for node in tree.body
+                   if isinstance(node, ast.FunctionDef) and node.name == "_scope_isolation_ok")
+    fixture.decorator_list = []
+    namespace = {}
+    exec(compile(ast.Module(body=[fixture], type_ignores=[]), "scope_fixture", "exec"), namespace)
+    request = SimpleNamespace(node=SimpleNamespace(get_closest_marker=lambda name: None))
+    original = runner.scope_isolation_available
+    # Always restore the caller even if the deliberately ordered teardown regresses.
+    with pytest.MonkeyPatch.context() as restore:
+        restore.setattr(runner, "scope_isolation_available", original)
+        scope = pytest.MonkeyPatch()
+        active = namespace["_scope_isolation_ok"](request, scope)
+        try:
+            next(active)
+            assert runner.scope_isolation_available() is True
+            scope.setattr(runner, "scope_isolation_available", lambda: False)
+            if mode == "normal":
+                active.close()
+            else:
+                error = RuntimeError if mode == "error" else KeyboardInterrupt
+                with pytest.raises(error):
+                    active.throw(error("owned scope failure"))
+        finally:
+            active.close()
+            scope.undo()
+        assert runner.scope_isolation_available is original

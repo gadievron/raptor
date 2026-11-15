@@ -58,6 +58,11 @@ def _load_cli():
 def cli_env(tmp_path, monkeypatch):
     """Target + out dir with a pre-built two-function checklist, the
     lifecycle stub faked, and the pipeline tripwired."""
+    from core.project import sessions
+    # Forecast dispatch is independent of an ambient Claude session. On
+    # macOS the ancestry lookup would otherwise run ps through a borrowed
+    # subprocess module, outside the fixture's owned lifecycle runner.
+    monkeypatch.setattr(sessions, "_comm", lambda _pid: None)
     from core.llm import billing
     from core.llm.config import ModelConfig
     monkeypatch.setattr(billing, "_get_default_primary_model", lambda **kwargs:

@@ -121,8 +121,8 @@ def test_equivalent_selected_header_aliases_are_read_once(tmp_path, target_harve
     helper, namespace = target_harvest
     base = tmp_path / "base.h"
     base.touch()
-    (tmp_path / "alias.H").symlink_to(base)
-    (tmp_path / "alias.h").symlink_to(base)
+    (tmp_path / "alias-upper.H").symlink_to(base)
+    (tmp_path / "alias-lower.h").symlink_to(base)
     reads = []
 
     def read(path, cap):

@@ -30,12 +30,16 @@ def test_normal_audit_delivers_source_and_reference_then_retains_prior(tmp_path,
     calls = []
 
     class Client:
+        _attempt_admission_protocol = 1
         _call_cost_history = None
 
         def is_budget_exhausted(self):
             return False
 
         def generate_structured(self, prompt, schema, **kwargs):
+            admit = kwargs.pop("accounting_attempt_admission", None)
+            if admit is not None:
+                assert admit() is True
             task = kwargs["task_type"]
             calls.append((task, prompt))
             if task == "study":

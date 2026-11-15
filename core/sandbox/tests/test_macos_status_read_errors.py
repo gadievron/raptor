@@ -21,9 +21,11 @@ pytestmark = pytest.mark.skipif(os.name != 'posix', reason='owned POSIX status p
 ])
 def test_parent_refuses_incomplete_status_after_read_error(tmp_path, payload, fault, category):
     endpoints, identities, status, reads, launches = [], {}, {}, [], []
+    pairs = []
 
     def pipe():
         pair = os.pipe()
+        pairs.append(pair)
         for fd in pair:
             info = os.fstat(fd)
             identities[fd] = (info.st_dev, info.st_ino)
@@ -31,8 +33,7 @@ def test_parent_refuses_incomplete_status_after_read_error(tmp_path, payload, fa
         return pair
 
     def read(fd, size):
-        info = os.fstat(fd)
-        if (info.st_dev, info.st_ino) == status.get('identity'):
+        if fd == status.get('read_fd'):
             reads.append(True)
             if fault == 'interrupt' and len(reads) == 1:
                 raise InterruptedError(errno.EINTR, 'owned interrupted status read')
@@ -61,8 +62,10 @@ def test_parent_refuses_incomplete_status_after_read_error(tmp_path, payload, fa
         assert mac.SANDBOX_EXEC in command
         launches.append(True)
         fd = int(kwargs['env']['_RAPTOR_STATUS_FD'])
-        info = os.fstat(fd)
-        status['identity'] = (info.st_dev, info.st_ino)
+        # Darwin gives a pipe's ends distinct identities. Route the fault by
+        # the owned pair, not by Linux's shared read/write inode behaviour.
+        status['read_fd'] = next(read_end for read_end, write_end in pairs
+                                 if write_end == fd)
         if payload:
             os.write(fd, payload)
         return Process()

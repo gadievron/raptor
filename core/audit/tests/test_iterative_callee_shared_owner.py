@@ -36,7 +36,11 @@ def related(tmp_path, monkeypatch):
             pass
     prompts = CapturedPrompts()
     class Client:
+        _attempt_admission_protocol = 1
         def generate_structured(self, prompt, schema, **kwargs):
+            admit = kwargs.pop("accounting_attempt_admission", None)
+            if admit is not None:
+                assert admit() is True
             prompts.append(prompt)
             prompts.after()
             return StructuredResponse(result={"status": "clean", "body": "Independent caller judgment",

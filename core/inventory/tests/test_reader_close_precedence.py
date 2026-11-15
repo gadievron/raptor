@@ -1,12 +1,10 @@
 """Inventory read cancellation survives secondary stream cleanup failures."""
 
-from pathlib import Path
-
 import pytest
 
 from core.inventory import exclusions, header_api
 from core.source import contained
-from core.testing.module_views import scoped_function_imports
+from core.testing.module_views import module_function_view, scoped_function_imports
 
 
 def _read_case(tmp_path, monkeypatch, reader, primary):
@@ -37,25 +35,22 @@ def _read_case(tmp_path, monkeypatch, reader, primary):
         def tell(self):
             return self.stream.tell()
 
-    class OwnedPath(type(Path())):
-        def open(self, *args, **kwargs):
-            stream = super().open(*args, **kwargs)
-            assert self == source
-            streams.append(stream)
-            return Reader(stream)
+    def open_binary(path, mode, **kwargs):
+        stream = contained.open_regular(path, mode, **kwargs)
+        assert path == source and stream is not None
+        streams.append(stream)
+        return Reader(stream)
 
-    # Only these consumers see the replacement class; pathlib stays native.
-    monkeypatch.setattr(module, 'Path', OwnedPath)
+    if reader == 'header':
+        # The header reader now consumes the shared fd-gated byte reader,
+        # not Path.open. Own that consumer's real reader globals so the
+        # injected read/close faults still reach its actual stream boundary.
+        owned = module_function_view(contained, bindings={'open_regular': open_binary})
+        monkeypatch.setattr(module, 'read_bytes_capped', owned.read_bytes_capped)
 
     def consume():
         if reader == 'header':
             return module.scan_public_api(str(tmp_path))
-        def open_binary(path, mode, **kwargs):
-            stream = contained.open_regular(path, mode, **kwargs)
-            assert path == source and stream is not None
-            streams.append(stream)
-            return Reader(stream)
-
         with scoped_function_imports(
             module, ["is_binary_file"], {"core.source.contained": contained},
         ) as imports:

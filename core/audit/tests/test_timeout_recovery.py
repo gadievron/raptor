@@ -380,7 +380,8 @@ class TestReviewOneFunctionTimeoutPath:
     def test_wiring_present(self):
         src = (Path(__file__).resolve().parents[1]
                / "orchestrator.py").read_text()
-        idx = src.find("def review_one_function")
+        assert "return _review_one_function_impl(" in src
+        idx = src.find("def _review_one_function_impl")
         assert idx != -1
         end = src.find("\ndef ", idx)
         window = src[idx:end if end != -1 else len(src)]

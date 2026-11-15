@@ -268,6 +268,8 @@ class TestTriageDemotion:
 class _FakePopen:
     """Stand-in for the seatbelt shim process — never spawns."""
 
+    stdin = stdout = stderr = None
+
     def __init__(self, cmd, **kwargs):
         self.cmd = cmd
         self.pid = 4190001  # never signalled on the normal path

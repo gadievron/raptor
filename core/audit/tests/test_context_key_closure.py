@@ -17,8 +17,8 @@ hand-kept key list:
 2. every key the renderer reads is produced somewhere.
 
 Ctx-shaped variables are recognised by naming convention (``ctx``,
-``cc_ctx``, ``ref_review_ctx``, ... — any name ending in ``ctx``),
-which is the convention every producer/consumer site uses.
+``cc_ctx``, ``ref_review_ctx``, ... — names ending in ``ctx`` or
+``context``), including aliases made by ``dict(ctx)`` copies.
 """
 
 from __future__ import annotations
@@ -45,14 +45,15 @@ _WRITE_EXCEPTIONS: frozenset[str] = frozenset()
 _READ_EXCEPTIONS: frozenset[str] = frozenset()
 
 
-def _is_ctx_name(node: ast.expr) -> bool:
-    return isinstance(node, ast.Name) and node.id.lower().endswith("ctx")
+def _is_ctx_name(node: ast.expr, aliases: frozenset[str] = frozenset()) -> bool:
+    return (isinstance(node, ast.Name)
+            and (node.id.lower().endswith(("ctx", "context")) or node.id in aliases))
 
 
-def _sub_key(node: ast.expr) -> str | None:
+def _sub_key(node: ast.expr, aliases: frozenset[str] = frozenset()) -> str | None:
     if (
         isinstance(node, ast.Subscript)
-        and _is_ctx_name(node.value)
+        and _is_ctx_name(node.value, aliases)
         and isinstance(node.slice, ast.Constant)
         and isinstance(node.slice.value, str)
     ):
@@ -60,11 +61,12 @@ def _sub_key(node: ast.expr) -> str | None:
     return None
 
 
-def _method_key(node: ast.expr, methods: tuple[str, ...]) -> str | None:
+def _method_key(node: ast.expr, methods: tuple[str, ...],
+                aliases: frozenset[str] = frozenset()) -> str | None:
     if (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
-        and _is_ctx_name(node.func.value)
+        and _is_ctx_name(node.func.value, aliases)
         and node.func.attr in methods
         and node.args
         and isinstance(node.args[0], ast.Constant)
@@ -82,8 +84,28 @@ def _scan() -> tuple[dict[str, set[str]], dict[str, set[str]]]:
         tree = ast.parse(source)
         # Python normalizes identifiers before building Name nodes. Preserve
         # those spellings, and still parse every file so syntax errors fail.
-        if "ctx" not in unicodedata.normalize("NFKC", source).lower():
+        normalized = unicodedata.normalize("NFKC", source).lower()
+        if "ctx" not in normalized and "context" not in normalized:
             continue
+        aliases = set()
+        # A shallow owned copy retains the producer/renderer context contract.
+        # Derive aliases from syntax rather than listing individual producers.
+        changed = True
+        while changed:
+            changed = False
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                    continue
+                value = node.value
+                if (isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
+                        and value.func.id == "dict" and len(value.args) == 1
+                        and not value.keywords and _is_ctx_name(value.args[0], aliases)):
+                    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                    for target in targets:
+                        if isinstance(target, ast.Name) and target.id not in aliases:
+                            aliases.add(target.id)
+                            changed = True
+        aliases = frozenset(aliases)
         for node in ast.walk(tree):
             if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
                 # A bare annotation declares a type, not a runtime value.
@@ -94,11 +116,11 @@ def _scan() -> tuple[dict[str, set[str]], dict[str, set[str]]]:
                     else [node.target]
                 )
                 for t in targets:
-                    key = _sub_key(t)
+                    key = _sub_key(t, aliases)
                     if key:
                         writes.setdefault(key, set()).add(path.name)
                     if (
-                        _is_ctx_name(t)
+                        _is_ctx_name(t, aliases)
                         and isinstance(node, (ast.Assign, ast.AnnAssign))
                         and isinstance(node.value, ast.Dict)
                     ):
@@ -110,16 +132,16 @@ def _scan() -> tuple[dict[str, set[str]], dict[str, set[str]]]:
                                     k.value, set(),
                                 ).add(path.name)
             elif isinstance(node, ast.Call):
-                key = _method_key(node, ("setdefault",))
+                key = _method_key(node, ("setdefault",), aliases)
                 if key:
                     writes.setdefault(key, set()).add(path.name)
                     reads.setdefault(key, set()).add(path.name)
                     continue
-                key = _method_key(node, ("get", "pop"))
+                key = _method_key(node, ("get", "pop"), aliases)
                 if key:
                     reads.setdefault(key, set()).add(path.name)
             elif isinstance(node, ast.Subscript):
-                key = _sub_key(node)
+                key = _sub_key(node, aliases)
                 if key and isinstance(node.ctx, ast.Load):
                     reads.setdefault(key, set()).add(path.name)
     return writes, reads
@@ -302,3 +324,20 @@ def test_annotated_context_literal_is_a_producer_with_missing_key_control(tmp_pa
     producer.write_text('def build():\n    ctx: dict = {}\n    ctx["line_start"]: int\n    return ctx\n')
     writes, _ = owner._scan()
     assert owner._renderer_reads() - set(writes) == {"line_start"}
+
+
+def test_context_parameter_and_owned_copy_are_producers(tmp_path, monkeypatch):
+    monkeypatch.setitem(globals(), "_AUDIT", tmp_path)
+    (tmp_path / "sample.py").write_text(
+        "def offer(context):\n"
+        "    context['synthesis_review_context'] = 'owned'\n"
+        "    offered = dict(context)\n"
+        "    offered['binary_caller_context'] = 'owned'\n"
+        "    return (context.get('synthesis_review_context'), offered.get('binary_caller_context'))\n"
+        "ordinary = {'not_context': 1}\n",
+        encoding="utf-8",
+    )
+    writes, reads = _scan()
+    expected = {key: {"sample.py"} for key in
+                ("synthesis_review_context", "binary_caller_context")}
+    assert writes == reads == expected

@@ -870,25 +870,28 @@ def _rereview_checklist():
 
 
 def _covering_records():
-    """LLM-analysed coverage over every checklist function — the
-    fully-covered-target shape that made seeds a structured no-op."""
+    """Current C review plus explicit operator coverage for the abstract binary.
+
+    This inventory-only fixture has no captured implementation view, so a
+    model projection cannot retire its binary items. Operator coverage keeps
+    the seed scheduling contract independent of binary-view admission.
+    """
     from core.coverage import journal_mac
 
-    def _row(file, function):
+    def _row(file, function, tool):
         row = {"file": file, "function": function, "status": "clean"}
-        token = journal_mac.mint_coverage_row(row, "llm")
+        token = journal_mac.mint_coverage_row(row, tool)
         assert token, "hermetic XDG key must be mintable"
         row[journal_mac.TOKEN_KEY] = token
         return row
 
-    return [{
-        "tool": "llm",
-        "functions_analysed": [
-            _row("binary:acmed", "parse_channel"),
-            _row("binary:acmed", "validate_sig"),
-            _row("src/auth.c", "check_pw"),
-        ],
-    }]
+    return [
+        {"tool": "llm", "functions_analysed": [
+            _row("src/auth.c", "check_pw", "llm")]},
+        {"tool": "mark", "functions_analysed": [
+            _row("binary:acmed", "parse_channel", "mark"),
+            _row("binary:acmed", "validate_sig", "mark")]},
+    ]
 
 
 class TestRereviewResolution:

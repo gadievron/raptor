@@ -106,15 +106,16 @@ class TestReachabilityGate:
         )
         assert result.status == "finding"
 
-    def test_binary_absent_demoted_to_dormant(self, tmp_path):
+    def test_flat_binary_absence_cannot_establish_dormancy(self, tmp_path):
         outcome = _outcome()
         ctx = _ctx(role="internal", callers=[])
         config = _config(tmp_path, binary_verdicts={"foo": "absent"})
         result = _apply_reachability_gate(
             outcome, ctx, set(), config,
         )
-        assert result.status == "dormant"
-        assert "binary oracle" in result.body
+        assert result.status == "suspicious"
+        assert "no visible callers" in result.body
+        assert "binary oracle" not in result.body
 
     def test_binary_absent_header_inline_not_demoted(self, tmp_path):
         outcome = _outcome(file="include/net/netlink.h", function="nla_total_size_64bit")
@@ -136,14 +137,15 @@ class TestReachabilityGate:
         )
         assert result.status != "dormant"
 
-    def test_binary_absent_non_header_still_demoted(self, tmp_path):
+    def test_flat_binary_absence_cannot_retire_non_header(self, tmp_path):
         outcome = _outcome(file="net/core/sock.c", function="foo")
         ctx = _ctx(role="internal", callers=[])
         config = _config(tmp_path, binary_verdicts={"foo": "absent"})
         result = _apply_reachability_gate(
             outcome, ctx, set(), config,
         )
-        assert result.status == "dormant"
+        assert result.status == "suspicious"
+        assert "binary oracle" not in result.body
 
     def test_binary_present_not_demoted(self, tmp_path):
         outcome = _outcome()

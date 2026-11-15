@@ -46,6 +46,15 @@ def test_failed_rule_preparation_or_scan_reclaims_axis(axis_case, monkeypatch, s
 
     if stage == "write":
         monkeypatch.setattr(Path, "write_text", fail_write)
+    if stage == "write" and error_type is OSError:
+        # Ordinary staging I/O failure deliberately falls back to original
+        # rules. Cancellation and unexpected failures must still propagate.
+        with analyzer._materialize_rules_dir(axis) as effective:
+            assert effective == axis
+            assert (effective / "a.cocci").read_text() == "// @api-packs: packs crypto\n"
+        assert roots and all(not root.exists() for root in roots)
+        assert not scratch._keepalive_paths
+        return
     with pytest.raises(error_type) as caught:
         with analyzer._materialize_rules_dir(axis) as effective:
             assert stage == "scan"
@@ -83,9 +92,11 @@ def test_failed_verbatim_copy_reclaims_prior_rendered_file(axis_case):
     axis, roots = axis_case
     (axis / "b.cocci").unlink()
     (axis / "b.cocci").mkdir()
-    with pytest.raises(IsADirectoryError):
-        with analyzer._materialize_rules_dir(axis):
-            pytest.fail("partial preparation must not be yielded")
+    with analyzer._materialize_rules_dir(axis) as effective:
+        assert effective == axis
+        assert (effective / "b.cocci").is_dir()
+        assert roots and all(root.exists() for root in roots)
+    # The failed staging tree is reclaimed after the fallback consumer exits.
     assert all(not root.exists() for root in roots)
     assert not scratch._keepalive_paths
     assert (axis / "b.cocci").is_dir()

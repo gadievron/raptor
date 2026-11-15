@@ -91,14 +91,14 @@ class TestComputeStats:
         assert "Suspicious: 3" in summary
 
     def test_load_review_state_marks_mechanical_entries(self, monkeypatch):
-        from types import SimpleNamespace
+        from core.coverage.journal import ReviewJournalEntry
 
         from core.audit import journal as journal_mod
         from core.audit.report import _load_review_state
 
         def _entry(func, *, strategies=(), body=""):
-            return SimpleNamespace(
-                file="a.c", function=func, verdict="suspicious",
+            return ReviewJournalEntry(
+                run_id="owned", file="a.c", function=func, verdict="suspicious",
                 source_hash="h", strategies=list(strategies), body=body,
                 line_start=1, ts="2026-01-01T00:00:00Z",
             )
@@ -126,13 +126,13 @@ class TestComputeStats:
         # The verdict-override join binds a finding's line to the
         # journal site whose span contains it — the records must
         # carry both span ends, not just line_start.
-        from types import SimpleNamespace
+        from core.coverage.journal import ReviewJournalEntry
 
         from core.audit import journal as journal_mod
         from core.audit.report import _load_review_state
 
-        entry = SimpleNamespace(
-            file="a.c", function="f1", verdict="clean",
+        entry = ReviewJournalEntry(
+            run_id="owned", file="a.c", function="f1", verdict="clean",
             source_hash="h", strategies=["taint"], body="deep dive",
             line_start=40, line_end=60, ts="2026-01-01T00:00:00Z",
         )
