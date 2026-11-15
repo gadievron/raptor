@@ -1,30 +1,25 @@
-"""Bayesian verdict aggregation — Beta-Bernoulli posterior over hypotheses.
+"""Optional Beta-Bernoulli aggregation of supplied tool observations.
 
-The 3-valued verdict ladder in `verdict.py` is the right floor: tool
-failure, confirmed-without-matches, and refuted-with-matches all
-collapse to a known cell of the lattice. But it discards information
-when evidence is plentiful — three confirming runs and one refuting
-run looks identical to one of each, because both collapse to
-inconclusive.
+Each observation contributes to a model: a match adds confirmation,
+absence of a match adds refutation, and tool failure contributes nothing.
+Definitive SMT predicates use the hypothesis's declared polarity instead
+of match presence. The caller chooses the prior and any observation weights.
 
-This module fixes that by aggregating evidence through a Beta-Bernoulli
-posterior. Each piece of evidence contributes a single observation
-(match present → confirmation, match absent → refutation, tool
-failure → no-op). The Beta distribution is the conjugate prior for
-Bernoulli observations, so the posterior update is one line of
-arithmetic and the result is a calibrated probability `p(vuln)`.
+The resulting mean is conditional on this mapping and the Bernoulli model.
+It is not a calibrated probability that source code is vulnerable. Repeated
+or correlated observations do not establish independent evidence, and the
+score does not grant source-reachability or finding-promotion authority.
 
-Math reminder. Beta(α, β) is the prior belief over the unknown
-probability `p` that the hypothesis is a real vulnerability. After one
-positive observation: Beta(α+1, β). After one negative: Beta(α, β+1).
-The posterior mean — `α / (α + β)` — is the point estimate, and the
-total `α + β` is "evidence strength" (higher = more concentrated
-distribution). No MCMC, no integrals; the conjugate update is exact.
+For a Beta(alpha, beta) prior, a positive observation adds its weight to
+alpha and a negative observation adds its weight to beta. The model mean
+is alpha / (alpha + beta); the sum is the model's pseudo-count strength.
+These arithmetic updates do not establish the model's empirical calibration.
 
-Not wired into `runner.py`; the audit orchestrator adopted
-`verdict_from_posterior` for its chain-outcome scoring. Use it
-directly from a `ValidationResult.evidence` list when you need a
-probability instead of a discrete verdict.
+The helpers are exposed as an optional library API. Neither the hypothesis
+runner nor the audit orchestrator uses these helpers to score or promote
+findings. Callers can use ``posterior_from`` with a ``ValidationResult``
+evidence list when they explicitly want this model, retaining the evidence's
+scope and the assumptions required to interpret the score.
 """
 
 import math
