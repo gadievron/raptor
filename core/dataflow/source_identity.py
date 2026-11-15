@@ -85,11 +85,19 @@ def _comprehension_target_binds(target: ast.AST, name: str) -> bool:
 def known_python_identity_conflict(
     source_text: str, call_line: int, canonical_calls: tuple[str, ...],
 ) -> str | None:
-    """Refuse known namespace conflicts without inventing another binder.
+    """Refuse known namespace or row-profile conflicts without another binder.
 
     Written canonical names without an import retain the legacy model
     assumption; this routine must not authorise new transfer contracts.
     """
+    # Scanner/proof rows count LF. Python's parser also treats bare CR as
+    # a newline, so an AST row could otherwise identify a different sink.
+    carriage = source_text.find("\r")
+    while carriage >= 0:
+        if not source_text.startswith("\r\n", carriage):
+            return "Python source row mapping is unverified for bare carriage returns"
+        carriage = source_text.find("\r", carriage + 2)
+
     from core.analysis.python_module_callgraph import (
         function_scope_bindings,
         module_distrusted_roots,
