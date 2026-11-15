@@ -561,9 +561,9 @@ def test_known_safe_call_branch_wrapped_declines_js(tmp_path: Path):
     assert "unconditionally" in r.reasoning
 
 
-def test_known_safe_call_unconditional_still_sound_js(tmp_path: Path):
+def test_known_safe_call_unconditional_reaches_context_gate_js(tmp_path: Path):
     """Two-direction: the same curated call executed unconditionally
-    in the sink's function keeps its SOUND verdict."""
+    in the sink's function reaches the output-context gate."""
     (tmp_path / "app.js").write_text(
         "function serve(req, res) {\n"                           # 1
         "    let name = req.query.name;\n"                        # 2
@@ -583,7 +583,8 @@ def test_known_safe_call_unconditional_still_sound_js(tmp_path: Path):
         sink_uri="app.js", sink_line=4, sink_class="xss",
         language="javascript", complete=_fake_complete(reply),
     )
-    assert r.status is t1.Tier0Status.SOUND
+    assert r.status.value == "not_applicable"
+    assert r.extras["unverified_source_contracts"] == ["html_text_or_quoted_attribute_sink_context_and_policy"]
 
 
 def test_known_safe_call_braceless_multiline_if_declines_js(tmp_path: Path):
@@ -615,10 +616,10 @@ def test_known_safe_call_braceless_multiline_if_declines_js(tmp_path: Path):
     assert "unconditionally" in r.reasoning
 
 
-def test_known_safe_call_blank_line_before_sanitizer_still_sound_js(tmp_path: Path):
+def test_known_safe_call_blank_line_before_sanitizer_reaches_context_gate_js(tmp_path: Path):
     """Two-direction for the dangling-guard check: an unconditional
     sanitizer whose nearest preceding NON-BLANK line is a plain
-    statement (blank line skipped) must keep its SOUND verdict."""
+    statement (blank line skipped) must reach the output-context gate."""
     (tmp_path / "app.js").write_text(
         "function serve(req, res) {\n"                           # 1
         "    let name = req.query.name;\n"                        # 2
@@ -639,7 +640,8 @@ def test_known_safe_call_blank_line_before_sanitizer_still_sound_js(tmp_path: Pa
         sink_uri="app.js", sink_line=5, sink_class="xss",
         language="javascript", complete=_fake_complete(reply),
     )
-    assert r.status is t1.Tier0Status.SOUND
+    assert r.status.value == "not_applicable"
+    assert r.extras["unverified_source_contracts"] == ["html_text_or_quoted_attribute_sink_context_and_policy"]
 
 
 def test_known_safe_call_branch_wrapped_declines_python_in_with(tmp_path: Path):
@@ -1288,11 +1290,11 @@ def test_lexical_transform_semicolon_joined_first_target_declines(
     assert r.status is t1.Tier0Status.NOT_APPLICABLE
 
 
-def test_lexical_transform_semicolon_joined_correct_target_sound(
+def test_lexical_transform_semicolon_joined_correct_target_reaches_context_gate(
     tmp_path: Path,
 ):
-    """Two-direction: the target in the SAME segment as the call keeps
-    certifying when the sink consumes it."""
+    """Two-direction: the target in the SAME segment as the call reaches
+    the output-context gate when the sink consumes it."""
     (tmp_path / "app.js").write_text(
         "function f(req, res) {\n"
         "  var raw = x; var y = validator.escape(x);\n"   # line 2
@@ -1312,7 +1314,8 @@ def test_lexical_transform_semicolon_joined_correct_target_sound(
         sink_uri="app.js", sink_line=3, sink_class="xss",
         language="javascript", complete=_fake_complete(reply),
     )
-    assert r.status is t1.Tier0Status.SOUND
+    assert r.status.value == "not_applicable"
+    assert r.extras["unverified_source_contracts"] == ["html_text_or_quoted_attribute_sink_context_and_policy"]
 
 
 # ---------------------------------------------------------------------------
@@ -1562,9 +1565,9 @@ def test_lexical_multi_declarator_first_target_declines(tmp_path: Path):
     assert r.status is t1.Tier0Status.NOT_APPLICABLE
 
 
-def test_lexical_multi_declarator_correct_target_sound(tmp_path: Path):
-    """Two-direction: the declarator that IS the call keeps
-    certifying when the sink consumes it."""
+def test_lexical_multi_declarator_correct_target_reaches_context_gate(tmp_path: Path):
+    """Two-direction: the declarator that IS the call reaches
+    the output-context gate when the sink consumes it."""
     (tmp_path / "app.js").write_text(
         "function f(req, res) {\n"
         "  var safe = x, y = validator.escape(x);\n"       # line 2
@@ -1584,7 +1587,8 @@ def test_lexical_multi_declarator_correct_target_sound(tmp_path: Path):
         sink_uri="app.js", sink_line=3, sink_class="xss",
         language="javascript", complete=_fake_complete(reply),
     )
-    assert r.status is t1.Tier0Status.SOUND
+    assert r.status.value == "not_applicable"
+    assert r.extras["unverified_source_contracts"] == ["html_text_or_quoted_attribute_sink_context_and_policy"]
 
 
 # ---------------------------------------------------------------------------
