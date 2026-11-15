@@ -181,6 +181,8 @@ class WebScanner:
         oob_callback_host: str | None = None,
         oob_grace: float = 10.0,
         browser: bool = False,
+        required_hosts: list[str] | None = None,
+        origin_verify: str | None = None,
         allow_unsandboxed_chromium: bool = False,
         report_options=None,
     ) -> None:
@@ -214,6 +216,10 @@ class WebScanner:
         self.ffuf_wordlist_dir = ffuf_wordlist_dir
         self.ffuf_api_wordlist = ffuf_api_wordlist
         self.use_browser = browser
+        from packages.web.egress_hosts import required_host
+        self.required_hosts = tuple(dict.fromkeys(required_host(host) for host in (required_hosts or [])))
+        from packages.web.origin_verify import validate_value
+        self.origin_verify = validate_value(origin_verify) if origin_verify is not None else None
         self.allow_unsandboxed_chromium = allow_unsandboxed_chromium
         self._browser_coverage_gaps: list[str] = []
         self.oob_grace = oob_grace
@@ -239,6 +245,11 @@ class WebScanner:
             approved_tools=approved_tools or [],
         )
 
+        from core.llm.egress import register_web_target
+        register_web_target(self.base_url)
+        for host in self.required_hosts:
+            register_web_target(f"https://{host}")
+
         self.client = WebClient(
             base_url, verify_ssl=verify_ssl, reveal_secrets=reveal_secrets,
             block_private_ips=block_private_ips,
@@ -248,6 +259,9 @@ class WebScanner:
         # policy as "origin checks only".
         self.client.execution_policy = self.execution_policy
         self.client.rate_limit = rate_limit
+        if self.origin_verify is not None:
+            from packages.web.origin_verify import HEADER_NAME
+            self.client.session.headers[HEADER_NAME] = self.origin_verify
         self.crawler = WebCrawler(self.client, max_depth=max_depth, max_pages=max_pages)
         # The fuzzer is always constructed: without an LLM it fuzzes with
         # static payloads, and the three-gate oracle keeps the false
@@ -510,6 +524,11 @@ class WebScanner:
                 )
         if not config.headers and not config.cookies:
             updates.update(self._session_ffuf_credentials())
+        if self.origin_verify is not None:
+            from packages.web.origin_verify import with_origin_header
+            updates["headers"] = with_origin_header(
+                updates.get("headers", config.headers), self.origin_verify,
+            )
         if (
             config.filter_size is None
             and config.filter_words is None
@@ -993,6 +1012,9 @@ class WebScanner:
         )
         client.execution_policy = self.execution_policy
         client.rate_limit = self._client_rate_limit
+        if self.origin_verify is not None:
+            from packages.web.origin_verify import HEADER_NAME
+            client.session.headers[HEADER_NAME] = self.origin_verify
         return client
 
     def _phase_access_control(
@@ -1416,6 +1438,11 @@ class WebScanner:
             logger.warning("API sweep skipped: %s", self._redact(str(e)))
             return
         credentials = self._session_ffuf_credentials()
+        if self.origin_verify is not None:
+            from packages.web.origin_verify import with_origin_header
+            credentials["headers"] = with_origin_header(
+                credentials.get("headers", ()), self.origin_verify,
+            )
         for index, op in enumerate(eligible):
             field_path = op.string_body_fields[0]
             raw = build_raw_request(op, self.base_url, field_path)
@@ -1751,6 +1778,9 @@ class WebScanner:
                 headers["Authorization"] = f"Bearer {self.session.token}"
             elif self.session.mode in ("form", "cookie"):
                 cookies = dict(self.client.get_cookies() or {})
+        if self.origin_verify is not None:
+            from packages.web.origin_verify import HEADER_NAME
+            headers[HEADER_NAME] = self.origin_verify
         screenshots = self.out_dir / "screenshots"
         screenshots.mkdir(exist_ok=True)
         return BrowserEngine(
@@ -2494,12 +2524,21 @@ class WebScanner:
             "Phase 7b: External validation oracles (%s)",
             ", ".join(self.external_validators),
         )
+        nuclei_config = self.nuclei_config or NucleiConfig()
+        if self.origin_verify is not None:
+            from dataclasses import replace
+
+            from packages.web.origin_verify import with_origin_header
+            nuclei_config = replace(
+                nuclei_config,
+                headers=with_origin_header(nuclei_config.headers, self.origin_verify),
+            )
         runner = ExternalValidatorRunner(
             base_url=self.base_url,
             out_dir=self.out_dir,
             policy=self.execution_policy,
             reveal_secrets=self.reveal_secrets,
-            nuclei_config=self.nuclei_config,
+            nuclei_config=nuclei_config,
         )
         self._external_validation_results = runner.run(
             findings, self.external_validators,
@@ -3169,6 +3208,16 @@ Examples:
     )
 
     parser.add_argument("--url", required=True, help="Target web application URL")
+    parser.add_argument(
+        "--required-host", action="append",
+        default=[host.strip() for host in os.environ.get("RAPTOR_WEB_REQUIRED_HOSTS", "").split(",") if host.strip()],
+        metavar="HOST",
+        help="Additional exact DNS host for login transport; repeatable. Does not expand scan scope.",
+    )
+    parser.add_argument(
+        "--origin-verify-file", default=os.environ.get("RAPTOR_ORIGIN_VERIFY_FILE"),
+        metavar="FILE", help="Owner-only file containing the target X-Origin-Verify value",
+    )
     parser.add_argument("--out", help="Output directory for results")
     parser.add_argument(
         "--project", default=None, metavar="NAME",
@@ -3660,6 +3709,13 @@ def main():
     args = parser.parse_args()
     if args.allow_unsandboxed_chromium and not args.browser:
         parser.error("--allow-unsandboxed-chromium requires --browser")
+    origin_verify = None
+    if args.origin_verify_file:
+        from packages.web.origin_verify import read_value
+        try:
+            origin_verify = read_value(args.origin_verify_file)
+        except ValueError as exc:
+            parser.error(str(exc))
     from core.reporting.options import options_from_args
     report_options = options_from_args(args, parser)
     if args.project is not None:
@@ -3810,6 +3866,8 @@ def main():
         oob_callback_host=args.oob_callback_host,
         oob_grace=args.oob_grace,
         browser=bool(args.browser),
+        required_hosts=args.required_host,
+        origin_verify=origin_verify,
         allow_unsandboxed_chromium=bool(args.allow_unsandboxed_chromium),
         report_options=report_options,
     )

@@ -853,6 +853,8 @@ fd is a broken route.
 | Variable | Default | Meaning |
 |---|---|---|
 | `RAPTOR_WEB_BROWSER_EXECUTABLE` | Playwright default; `/usr/bin/chromium` in the Linux container | Absolute path to the Chromium executable used by web scanning and its availability check. Set only to a browser installation you trust. An invalid override fails rather than falling back to a bundled browser. |
+| `RAPTOR_WEB_REQUIRED_HOSTS` | unset | Comma-separated exact public DNS hosts admitted to the active web transport proxy for login. The target host is admitted automatically. `--required-host` adds hosts; grants do not expand scan or browser navigation scope. The proxy is CONNECT-only, so ordinary HTTP clients may still need a tunneled transport. |
+| `RAPTOR_ORIGIN_VERIFY_FILE` | unset | Owner-only regular file holding the target's `X-Origin-Verify` value. `--origin-verify-file` overrides it. The value is sent only on target requests and stays out of command arguments. |
 
 ## External-standard variables
 
