@@ -1779,21 +1779,32 @@ def _python_scope_possible_calls(scope_root: ast.AST) -> Callable[[ast.AST], boo
     replacement_effects: set[ast.AST] | None = None
     replacement_names: dict[ast.AST, str] = {}
 
+    def replacement_name(node: ast.AST) -> str | None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.MatchAs)):
+            return node.name
+        if _TYPE_ALIAS_NODE is not None and isinstance(node, _TYPE_ALIAS_NODE):
+            target = getattr(node, "name")
+            if isinstance(target, ast.Name):
+                return target.id
+        return None
+
     def possible_call(node: ast.AST) -> bool:
         nonlocal replacement_effects, replacement_names
-        if not (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                or isinstance(node, ast.MatchAs) and node.name is not None):
+        if replacement_name(node) is None:
+            if _TYPE_ALIAS_NODE is not None and isinstance(node, _TYPE_ALIAS_NODE):
+                return True  # An unknown alias target cannot borrow a binding fact.
             return _python_possible_call(node)
         if not isinstance(scope_root, (ast.FunctionDef, ast.AsyncFunctionDef)):
             return True
         if replacement_effects is None:
             nodes = tuple(_walk_same_scope(scope_root))
-            replacement_names = {
-                part: part.name for part in nodes
-                if part is not scope_root
-                and isinstance(part, (ast.FunctionDef, ast.AsyncFunctionDef, ast.MatchAs))
-                and part.name is not None
-            }
+            replacement_names = {}
+            for part in nodes:
+                if part is scope_root:
+                    continue
+                name = replacement_name(part)
+                if name is not None:
+                    replacement_names[part] = name
             names = set(replacement_names.values())
             parents = {child: parent for parent in ast.walk(scope_root)
                        for child in ast.iter_child_nodes(parent)}
