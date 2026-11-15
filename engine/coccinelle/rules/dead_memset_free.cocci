@@ -46,6 +46,8 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message": "Candidate: memset(buf, 0, n) before free(buf) — compiler may remove the clear as a dead store (CWE-14). Use memset_s/explicit_bzero instead."
 }
 print("COCCIRESULT:" + json.dumps(msg))
