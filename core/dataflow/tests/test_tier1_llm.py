@@ -1828,3 +1828,36 @@ def test_curated_call_error_cannot_preserve_raw_binding(tmp_path: Path, exit_sta
         language="python", complete=_fake_complete(reply),
     )
     assert control.status is t1.Tier0Status.SOUND
+
+
+def test_global_slot_validator_row_call_and_local_control(tmp_path):
+    from core.dataflow import smt_barrier as sb
+
+    observations = []
+    for shared, snapshot in ((False, False), (True, False), (False, True), (True, True)):
+        line = "    safe = html.escape('<input>'); replace_slot()"
+        if snapshot:
+            line += "; snapshot = safe"
+        source = ("import html\nsafe = ''\ndef replace_slot():\n    global safe\n    safe = '<raw marker>'\ndef process(raw):\n"
+                  + ("    global safe\n" if shared else "")
+                  + "    if type(raw) is not str: return\n" + line + "\n    sink(" + ("snapshot" if snapshot else "safe") + ")\n")
+        seen = []
+        namespace = {"sink": seen.append}
+        exec(compile(source, "owned-fixture.py", "exec"), namespace)
+        namespace["process"]("<input>")
+        expected = "<raw marker>" if shared else "&lt;input&gt;"
+        assert seen == [expected]
+        (tmp_path / "app.py").write_text(source)
+        reply = json.dumps({"kind": "known_safe_call", "validator_source_line": line,
+                            "variable_name": "safe", "charset": "", "forbidden": "",
+                            "library_call": "html.escape", "exact_type": "str"})
+        result = t1.try_tier1b(fix_diff="+" + line + "\n", repo_root=tmp_path,
+                              sink_uri="app.py", sink_line=len(source.splitlines()),
+                              sink_class="xss", language="python", complete=lambda *_: reply)
+        observations.append({"shared": shared, "observed": seen, "status": result.status.name,
+                             "reason": result.reasoning})
+        if not shared:
+            assert result.status is sb.Tier0Status.SOUND
+        else:
+            print(json.dumps(observations))
+            assert result.status is sb.Tier0Status.NOT_APPLICABLE, observations
