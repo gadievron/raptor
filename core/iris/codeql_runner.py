@@ -12,7 +12,7 @@ import re
 from typing import Any, TYPE_CHECKING
 
 from core.run.scratch import scratch_dir
-from core.sarif.parser import load_sarif
+from core.sarif.parser import get_run_execution_diagnostics, load_sarif
 
 from .refine import RefinementFeedback
 from .specs import (
@@ -52,7 +52,7 @@ def _write_temp_pack(
 
 def _parse_sarif_matches(sarif_path: Path) -> list[dict[str, Any]] | None:
     """Extract match records from a SARIF file — ``None`` when the
-    file is unreadable.
+    file is unreadable or reports incomplete evaluation.
 
     Bounded canonical loader (100 MiB stat gate before the read): the
     SARIF is CodeQL output over the analysed target, which can inflate
@@ -73,6 +73,10 @@ def _parse_sarif_matches(sarif_path: Path) -> list[dict[str, Any]] | None:
 
     matches = []
     for run in runs:
+        # A readable report can still declare a failed or partial evaluation.
+        # Reuse the shared diagnostic contract before crediting this round.
+        if any(get_run_execution_diagnostics(run).values()):
+            return None
         for result in run.get("results", []):
             for loc in result.get("locations", []):
                 phys = loc.get("physicalLocation", {})
@@ -249,7 +253,7 @@ def make_codeql_tool_runner(
                     # parse is a failed round, never an empty one.
                     return RefinementFeedback(
                         tool_errors=[
-                            f"sarif unreadable: {result.sarif_path}",
+                            f"sarif unreadable or incomplete: {result.sarif_path}",
                         ],
                         n_attempts=1,
                     )
