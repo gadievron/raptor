@@ -40,7 +40,7 @@ from core.sarif.parser import (
     ArtifactUriResolver, _as_dict, _coerce_line, _extract_cwe_from_rule, get_result_rule,
     _text_value, rule_default_level, sarif_uri_path,
 )
-from core.source import read_text_capped
+from core.source import read_contained_text_capped
 from packages.codeql.dataflow_validator import DataflowValidation, DataflowValidator
 from packages.codeql.dataflow_visualizer import DataflowVisualizer
 
@@ -604,7 +604,7 @@ class AutonomousCodeQLAnalyzer:
             # pulled into memory per finding. Sibling
             # DataflowValidator.read_source_context carries the same
             # cap with the full rationale.
-            got = read_text_capped(file_path)
+            got = read_contained_text_capped(repo_path, file_path)
             if got is None:
                 self.logger.warning(
                     "Failed to read vulnerable code at %s", file_path,
