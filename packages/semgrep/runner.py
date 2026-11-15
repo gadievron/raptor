@@ -959,7 +959,7 @@ def run_rule(
     if runtime is not None and not snap_output_valid:
         # Keep the rejected native payload for diagnostics, never its coverage.
         parsed_json.update(files_examined=[], files_failed=[], skipped_summary={},
-                           skipped_rules=[], semgrep_version="")
+                           skipped_rules=[], semgrep_version="", _path_error_renderings=[])
 
     # Engine failure must never read as verified silence: surface the
     # budget refusals and the real errors array, and when semgrep
@@ -1013,6 +1013,7 @@ def run_rule(
         findings=findings,
         files_examined=parsed_json["files_examined"],
         files_failed=parsed_json["files_failed"],
+        _path_error_renderings=parsed_json.get("_path_error_renderings"),
         skipped_summary=skipped_summary,
         skipped_rules=skipped_rules,
         semgrep_version=parsed_json["semgrep_version"],

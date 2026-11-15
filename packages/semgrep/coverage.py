@@ -1,5 +1,6 @@
 """Coverage record builder for Semgrep — same shape as Coccinelle/CodeQL records."""
 
+from collections import Counter
 from datetime import datetime, timezone
 
 from .models import SemgrepResult
@@ -37,6 +38,8 @@ def to_coverage_record(
         files.update(r.files_examined)
         # Path-bearing per-file failures (any level) — the entries
         # parse_json_output routed into files_failed.
+        correlation = getattr(r, "_path_error_renderings", None)
+        remaining = Counter(correlation) if correlation is not None else None
         failed_reasons = set()
         for f in r.files_failed:
             failures.append({
@@ -44,22 +47,20 @@ def to_coverage_record(
                 "path": f.get("path", ""),
                 "reason": f.get("reason", "error"),
             })
-            failed_reasons.add(f.get("reason", "error"))
-        # Engine-level errors. parse_json_output renders error/fatal
-        # entries into ``errors`` regardless of whether they were also
-        # path-bearing, so an error-level per-file failure appears in
-        # BOTH lists — skip renderings whose message is already
-        # accounted for above, otherwise one underlying error produces
-        # two files_failed records and inflates failure counts.
+            if remaining is None:
+                failed_reasons.add(f.get("reason", "error"))
+        # Correlation survives message escaping and truncation. Consume only
+        # as many renderings as the producer associated with path failures.
+        # Results without correlation retain exact-message legacy matching.
         for err in r.errors:
-            # Identity, not substring: the rendered engine error is
-            # "<type>: <message>" and the per-file reason is exactly
-            # <message> — a per-file reason that merely SUBSTRINGed an
-            # unrelated engine error used to drop the engine-error
-            # row silently. Compare the message part exactly.
-            err_msg = err.split(": ", 1)[1] if ": " in err else err
-            if err_msg in failed_reasons:
-                continue
+            if remaining is not None:
+                if remaining[err]:
+                    remaining[err] -= 1
+                    continue
+            else:
+                err_msg = err.split(": ", 1)[1] if ": " in err else err
+                if err_msg in failed_reasons:
+                    continue
             # Every entry is path-bearing (sibling-builder contract:
             # consumers key and dedupe on ``path``); no per-file
             # binding exists for an engine error, so the pack itself

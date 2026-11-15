@@ -184,6 +184,10 @@ class SemgrepResult:
     json_output: str = ""
     elapsed_ms: int = 0
     errors: list[str] = field(default_factory=list)
+    # Runner-only association with path-bearing errors; preserve multiplicity.
+    # None retains legacy behavior for results without producer correlation.
+    # Raw JSON remains available separately; this field is not serialized.
+    _path_error_renderings: list[str] | None = field(default=None, repr=False)
 
     @property
     def ok(self) -> bool:
@@ -610,6 +614,7 @@ def parse_json_output(text: str) -> dict[str, Any]:
         "files_failed": [],
         "semgrep_version": "",
         "errors": [],
+        "_path_error_renderings": [],
         "skipped_summary": {},
         "skipped_rules": [],
     }
@@ -676,12 +681,14 @@ def parse_json_output(text: str) -> dict[str, Any]:
         _render_error(e) for e in errors
         if isinstance(e, dict) and _incompatible_rule(e)
     ]
-    out["errors"].extend(
-        _render_error(e)
-        for e in errors
-        if isinstance(e, dict)
-        and _diagnostic_level(e) in ("error", "fatal", None)
-    )
+    for entry in errors:
+        if not isinstance(entry, dict) or _diagnostic_level(entry) not in ("error", "fatal", None):
+            continue
+        rendered = _render_error(entry)
+        out["errors"].append(rendered)
+        path = entry.get("path")
+        if isinstance(path, str) and path and "\x00" not in path and not _incompatible_rule(entry):
+            out["_path_error_renderings"].append(rendered)
 
     version = reported_version(data.get("version"))
     if version is None:
