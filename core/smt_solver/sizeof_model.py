@@ -13,6 +13,9 @@ def builtin_integer_sizeof(spelling, integer_abi):
     abi = resolve_integer_abi(integer_abi)
     if abi is None:
         return None
+    if not isinstance(spelling, str):
+        return None
+    spelling = str.__str__(spelling)
     if spelling == "char":
         return 1
     kind = integer_type(spelling, abi)
