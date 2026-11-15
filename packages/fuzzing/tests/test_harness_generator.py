@@ -93,12 +93,12 @@ class TestHarnessGenerator(unittest.TestCase):
         filenames may contain quotes and newlines — a hostile name must
         never escape the include string into compiled source. Safe
         names keep their include line (two-direction)."""
-        tmpdir = Path(tempfile.mkdtemp())
-        hostile = tmpdir / 'evil.h"\n#include "backdoor.h'
-        hostile.write_text("int parse_buf(const uint8_t *p, size_t n);\n")
-        safe = tmpdir / "parse.h"
-        safe.write_text("int parse_buf(const uint8_t *p, size_t n);\n")
-        try:
+        with tempfile.TemporaryDirectory() as raw:
+            tmpdir = Path(raw)
+            hostile = tmpdir / 'evil.h"\n#include "backdoor.h'
+            hostile.write_text("int parse_buf(const uint8_t *p, size_t n);\n")
+            safe = tmpdir / "parse.h"
+            safe.write_text("int parse_buf(const uint8_t *p, size_t n);\n")
             gen = HarnessGenerator(llm=None)
 
             harness = gen.generate(HarnessSpec(
@@ -114,10 +114,6 @@ class TestHarnessGenerator(unittest.TestCase):
                 target_function="parse_buf", header_path=safe,
             ))
             self.assertIn('#include "parse.h"', harness.source_code)
-        finally:
-            hostile.unlink()
-            safe.unlink()
-            tmpdir.rmdir()
 
     def test_llm_success_path(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".h", delete=False) as f:
