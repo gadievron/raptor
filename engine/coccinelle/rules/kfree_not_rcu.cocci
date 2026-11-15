@@ -51,6 +51,9 @@ sys.stdout.write("COCCIRESULT:" + json.dumps({
     "rule": "kfree_not_rcu",
     "file": _p.file,
     "line": int(_m.line),
+    "col": int(_m.column),
+    "line_end": int(_m.line_end),
+    "col_end": int(_m.column_end),
     "rcu_line": int(_p.line),
     "message": "Plain free after RCU publication of the same expression — review object identity, unpublication, reader domain and deferred-free or grace-period semantics",
 }) + "\n")
