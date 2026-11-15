@@ -3618,9 +3618,10 @@ def prove_neutralizes(
       * ``charset``     -> Z3 regex-intersection emptiness
       * ``charset_sub`` -> finite-set inclusion (danger ⊆ forbidden)
 
-    Either way, SOUND verdicts are real mathematical proofs of
-    language neutralisation; SAT/missing-element verdicts carry a
-    concrete counterexample input.
+    A sound verdict proves exclusion of the selected danger characters.
+    It does not establish the sink's interpretation context or safety of
+    composing the value with other output. SAT/missing-element verdicts
+    carry a concrete counterexample input.
 
     ``timeout_ms`` bounds the Z3 query (charset kind only —
     finite-set inclusion is constant-time); ``None`` uses the shared
@@ -3872,6 +3873,16 @@ def try_tier0(
         )
     verdict = prove_neutralizes(spec, sink_class)
     if verdict.sound:
+        if sink_class == "xss":
+            return Tier0Result(
+                Tier0Status.NOT_APPLICABLE,
+                "character exclusion proved, but HTML sink interpretation "
+                "and output composition are unverified",
+                spec=spec,
+                extras={"validator_line": line, "var_name": spec.var_name,
+                        "smt_character_model": {"sound": True, "source_bound": False,
+                                                "reasoning": verdict.reasoning}},
+            )
         if spec.kind == "charset_sub":
             artifact = (
                 f"smt:charset_sub:[{spec.forbidden}]@{sink_uri}:{line}"
