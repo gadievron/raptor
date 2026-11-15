@@ -127,6 +127,14 @@ def known_python_identity_conflict(
             if isinstance(owner, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.TypeAlias)):
                 if any(getattr(parameter, "name", None) == root for parameter in owner.type_params):
                     return "source library root is shadowed by a type parameter"
+        if isinstance(frame, ast.TypeVar) and child is frame.default_value:
+            owner = parents.get(frame)
+            if isinstance(owner, (ast.FunctionDef, ast.ClassDef, ast.TypeAlias)):
+                for parameter in owner.type_params:
+                    if isinstance(parameter, ast.TypeVar) and parameter.name == root:
+                        return "source library root is shadowed by a type parameter"
+                    if parameter is frame:
+                        break
         if isinstance(frame, ast.TypeAlias) and child is frame.value:
             if any(getattr(parameter, "name", None) == root for parameter in frame.type_params):
                 return "source library root is shadowed by a type parameter"
