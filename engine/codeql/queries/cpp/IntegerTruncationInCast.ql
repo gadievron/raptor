@@ -2,8 +2,9 @@
  * @name Potential integer truncation in an explicit cast
  * @description An explicit cast converts a wider integral value to a narrower
  *              destination without sufficient static evidence that the value
- *              fits. Allocation or buffer-size use adds risk context when
- *              observed; it is not required for a finding.
+ *              fits. Candidate allocation-size or buffer-length uses add context;
+ *              review callee identity, argument semantics and resulting bounds.
+ *              Such context is not required for a finding.
  * @kind path-problem
  * @problem.severity error
  * @security-severity 8.0
@@ -28,8 +29,9 @@ where
     if flowsToMemoryOperation(sinkNode.getCast())
     then
       extra =
-        " The truncated value flows to a memory allocation or buffer operation, " +
-          "risking a heap overflow from an undersized buffer."
+        " The converted value reaches a candidate allocation-size or buffer-length argument. " +
+          "Review callee identity, argument semantics and resulting bounds before assessing " +
+          "memory-safety impact."
     else extra = ""
   )
 select sinkNode.getCast(), source, sink,
