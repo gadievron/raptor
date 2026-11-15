@@ -7,6 +7,8 @@ correct version-range filtering.
 
 from __future__ import annotations
 
+from contextlib import closing
+
 import io
 import json
 import zipfile
@@ -85,20 +87,20 @@ def test_ingest_and_query_pypi(tmp_path: Path) -> None:
               introduced="3.0", fixed="3.2.20"),
     ])
     http = _ZipServingHttp({"PyPI/all.zip": blob})
-    db = OsvOfflineDB(tmp_path / "osv.sqlite", http=http)
-    stats = db.ensure_fresh(["PyPI"])
-    assert len(stats) == 1
-    assert stats[0].ecosystem == "PyPI"
-    assert stats[0].advisories == 2
+    with closing(OsvOfflineDB(tmp_path / "osv.sqlite", http=http)) as db:
+        stats = db.ensure_fresh(["PyPI"])
+        assert len(stats) == 1
+        assert stats[0].ecosystem == "PyPI"
+        assert stats[0].advisories == 2
 
-    # Lookup at a vulnerable version → both apply.
-    advs = db.query("PyPI", "django", "4.2.0")
-    assert {a.osv_id for a in advs} == {"PYSEC-1"}
-    advs = db.query("PyPI", "django", "3.1.0")
-    assert {a.osv_id for a in advs} == {"PYSEC-1", "PYSEC-2"}
-    # Lookup at fixed version → none apply.
-    advs = db.query("PyPI", "django", "4.2.7")
-    assert advs == []
+        # Lookup at a vulnerable version → both apply.
+        advs = db.query("PyPI", "django", "4.2.0")
+        assert {a.osv_id for a in advs} == {"PYSEC-1"}
+        advs = db.query("PyPI", "django", "3.1.0")
+        assert {a.osv_id for a in advs} == {"PYSEC-1", "PYSEC-2"}
+        # Lookup at fixed version → none apply.
+        advs = db.query("PyPI", "django", "4.2.7")
+        assert advs == []
 
 
 def test_pypi_name_normalisation(tmp_path: Path) -> None:
@@ -110,11 +112,11 @@ def test_pypi_name_normalisation(tmp_path: Path) -> None:
               introduced="0", fixed="3.0"),
     ])
     http = _ZipServingHttp({"PyPI/all.zip": blob})
-    db = OsvOfflineDB(tmp_path / "osv.sqlite", http=http)
-    db.ensure_fresh(["PyPI"])
-    assert db.query("PyPI", "Python-DateUtil", "2.8.0")
-    assert db.query("PyPI", "python_dateutil", "2.8.0")
-    assert db.query("PyPI", "python.dateutil", "2.8.0")
+    with closing(OsvOfflineDB(tmp_path / "osv.sqlite", http=http)) as db:
+        db.ensure_fresh(["PyPI"])
+        assert db.query("PyPI", "Python-DateUtil", "2.8.0")
+        assert db.query("PyPI", "python_dateutil", "2.8.0")
+        assert db.query("PyPI", "python.dateutil", "2.8.0")
 
 
 def test_no_data_for_unknown_pkg(tmp_path: Path) -> None:
@@ -122,27 +124,27 @@ def test_no_data_for_unknown_pkg(tmp_path: Path) -> None:
         _osv("X", "PyPI", "django", introduced="0", fixed="4.2.7"),
     ])
     http = _ZipServingHttp({"PyPI/all.zip": blob})
-    db = OsvOfflineDB(tmp_path / "osv.sqlite", http=http)
-    db.ensure_fresh(["PyPI"])
-    assert db.query("PyPI", "no-such-pkg", "1.0") == []
+    with closing(OsvOfflineDB(tmp_path / "osv.sqlite", http=http)) as db:
+        db.ensure_fresh(["PyPI"])
+        assert db.query("PyPI", "no-such-pkg", "1.0") == []
 
 
 def test_freshness_skips_re_download(tmp_path: Path) -> None:
     blob = _make_zip([_osv("X", "PyPI", "django", fixed="4.2.7")])
     http = _ZipServingHttp({"PyPI/all.zip": blob})
-    db = OsvOfflineDB(tmp_path / "osv.sqlite", http=http, ttl_seconds=3600)
-    db.ensure_fresh(["PyPI"])
-    db.ensure_fresh(["PyPI"])      # second call should hit freshness check
-    assert len(http.calls) == 1
+    with closing(OsvOfflineDB(tmp_path / "osv.sqlite", http=http, ttl_seconds=3600)) as db:
+        db.ensure_fresh(["PyPI"])
+        db.ensure_fresh(["PyPI"])      # second call should hit freshness check
+        assert len(http.calls) == 1
 
 
 def test_force_redownloads(tmp_path: Path) -> None:
     blob = _make_zip([_osv("X", "PyPI", "django", fixed="4.2.7")])
     http = _ZipServingHttp({"PyPI/all.zip": blob})
-    db = OsvOfflineDB(tmp_path / "osv.sqlite", http=http)
-    db.ensure_fresh(["PyPI"])
-    db.ensure_fresh(["PyPI"], force=True)
-    assert len(http.calls) == 2
+    with closing(OsvOfflineDB(tmp_path / "osv.sqlite", http=http)) as db:
+        db.ensure_fresh(["PyPI"])
+        db.ensure_fresh(["PyPI"], force=True)
+        assert len(http.calls) == 2
 
 
 def test_refused_zip_keeps_existing_advisories(tmp_path: Path) -> None:
@@ -174,10 +176,10 @@ def test_refused_zip_keeps_existing_advisories(tmp_path: Path) -> None:
 def test_unknown_ecosystem_silently_skipped(tmp_path: Path) -> None:
     """Homebrew / etc. have no OSV bucket — silently skip."""
     http = _ZipServingHttp({})
-    db = OsvOfflineDB(tmp_path / "osv.sqlite", http=http)
-    stats = db.ensure_fresh(["Homebrew"])
-    assert stats == []
-    assert http.calls == []
+    with closing(OsvOfflineDB(tmp_path / "osv.sqlite", http=http)) as db:
+        stats = db.ensure_fresh(["Homebrew"])
+        assert stats == []
+        assert http.calls == []
 
 
 def test_cargo_bucket_name_remap(tmp_path: Path) -> None:
@@ -188,10 +190,10 @@ def test_cargo_bucket_name_remap(tmp_path: Path) -> None:
               introduced="0", fixed="1.30"),
     ])
     http = _ZipServingHttp({"crates.io/all.zip": blob})
-    db = OsvOfflineDB(tmp_path / "osv.sqlite", http=http)
-    db.ensure_fresh(["Cargo"])
-    advs = db.query("Cargo", "tokio", "1.20")
-    assert {a.osv_id for a in advs} == {"RUSTSEC-1"}
+    with closing(OsvOfflineDB(tmp_path / "osv.sqlite", http=http)) as db:
+        db.ensure_fresh(["Cargo"])
+        advs = db.query("Cargo", "tokio", "1.20")
+        assert {a.osv_id for a in advs} == {"RUSTSEC-1"}
 
 
 def test_ingest_skips_zip_slip_paths(tmp_path: Path) -> None:
@@ -224,10 +226,10 @@ def test_query_without_version_returns_all(tmp_path: Path) -> None:
         _osv("B", "PyPI", "django", fixed="3.2.20"),
     ])
     http = _ZipServingHttp({"PyPI/all.zip": blob})
-    db = OsvOfflineDB(tmp_path / "osv.sqlite", http=http)
-    db.ensure_fresh(["PyPI"])
-    advs = db.query("PyPI", "django", None)
-    assert {a.osv_id for a in advs} == {"A", "B"}
+    with closing(OsvOfflineDB(tmp_path / "osv.sqlite", http=http)) as db:
+        db.ensure_fresh(["PyPI"])
+        advs = db.query("PyPI", "django", None)
+        assert {a.osv_id for a in advs} == {"A", "B"}
 
 
 def test_close_releases_connection(tmp_path: Path) -> None:
