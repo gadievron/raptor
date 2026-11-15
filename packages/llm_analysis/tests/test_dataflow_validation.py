@@ -74,7 +74,8 @@ class FakeCostTracker:
     def fraction_used(self) -> float:
         return self.total_cost / self.budget if self.budget else 0.0
 
-    def add_cost(self, model_name: str, cost: float) -> None:
+    def add_cost(self, model_name: str, cost: float, tokens: int = 0,
+                 thinking_tokens: int = 0) -> None:
         self.added.append(cost)
         self.total_cost += cost
 
@@ -4192,7 +4193,7 @@ class _RecordingTracker:
     def __init__(self):
         self.entries: list = []
 
-    def add_cost(self, model_name, cost):
+    def add_cost(self, model_name, cost, tokens=0, thinking_tokens=0):
         self.entries.append((model_name, cost))
 
 
