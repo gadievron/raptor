@@ -77,6 +77,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from core.dataflow.tier1_llm import _LLMSpec
 
 from core.dataflow import sanitizer_cut_config as _sc_config
@@ -1752,22 +1753,8 @@ def _python_possible_call(node: ast.AST, *, scope_root: ast.AST | None = None) -
     Function definitions also replace their bound name; their deferred body
     is not executed by this classification.
     """
-    if scope_root is not None and isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-        if not isinstance(scope_root, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            return True
-        if not _python_name_has_local_slot(scope_root, node.name):
-            return True
-        args = scope_root.args
-        parameters = [*args.posonlyargs, *args.args, *args.kwonlyargs]
-        parameters += [arg for arg in (args.vararg, args.kwarg) if arg is not None]
-        if any(arg.arg == node.name for arg in parameters) or any(
-            part is not scope_root and part is not node
-            and (getattr(part, "lineno", -1), getattr(part, "col_offset", -1))
-            < (node.lineno, node.col_offset)
-            and _node_rebinds_var(part, node.name)
-            for part in _walk_same_scope(scope_root)
-        ):
-            return True
+    if scope_root is not None:
+        return _python_scope_possible_calls(scope_root)(node)
     if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
         return True
     return (_python_operator_dispatch(node) or _python_iteration_dispatch(node)
@@ -1781,6 +1768,57 @@ def _python_possible_call(node: ast.AST, *, scope_root: ast.AST | None = None) -
              or _python_unpack_load(part) or _python_collection_key_dispatch(part)
              or isinstance(part, (ast.Call, ast.Attribute, ast.Subscript, ast.FormattedValue))
              for value in _python_definition_headers(node) for part in ast.walk(value))
+
+
+def _python_scope_possible_calls(scope_root: ast.AST) -> Callable[[ast.AST], bool]:
+    """Keep definition replacement facts within one immutable source scope."""
+    definition_effects: set[ast.AST] | None = None
+    definitions: set[ast.FunctionDef | ast.AsyncFunctionDef] = set()
+
+    def possible_call(node: ast.AST) -> bool:
+        nonlocal definition_effects, definitions
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return _python_possible_call(node)
+        if not isinstance(scope_root, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return True
+        if definition_effects is None:
+            nodes = tuple(_walk_same_scope(scope_root))
+            definitions = {
+                part for part in nodes
+                if part is not scope_root
+                and isinstance(part, (ast.FunctionDef, ast.AsyncFunctionDef))
+            }
+            names = {part.name for part in definitions}
+            body = ast.Module(body=scope_root.body, type_ignores=[])
+            declared = {
+                name for part in _walk_same_scope(body)
+                if isinstance(part, (ast.Global, ast.Nonlocal))
+                for name in part.names
+            }
+            shared = declared | _nested_scope_escaping_rebinds(scope_root)
+            args = scope_root.args
+            parameters = [*args.posonlyargs, *args.args, *args.kwonlyargs]
+            parameters += [arg for arg in (args.vararg, args.kwarg) if arg is not None]
+            parameter_names = {arg.arg for arg in parameters}
+            first_bindings: dict[str, tuple[int, int]] = {}
+            for part in nodes:
+                if part is scope_root:
+                    continue
+                position = (getattr(part, "lineno", -1), getattr(part, "col_offset", -1))
+                for name in names:
+                    if _node_rebinds_var(part, name):
+                        previous = first_bindings.get(name)
+                        if previous is None or position < previous:
+                            first_bindings[name] = position
+            definition_effects = {
+                part for part in definitions
+                if part.name in shared or part.name in parameter_names
+                or first_bindings[part.name] < (part.lineno, part.col_offset)
+            }
+        # A node outside the bound source cannot borrow a first-binding fact.
+        return node not in definitions or node in definition_effects or _python_possible_call(node)
+
+    return possible_call
 
 
 def _python_evaluation_dispatch(node: ast.AST) -> bool:
@@ -1866,10 +1904,11 @@ def _variable_reassigned_between(
     missed silently.
     """
     scope_root = _function_containing(tree, before_line) or tree
+    possible_call = _python_scope_possible_calls(scope_root)
     if not _python_name_has_local_slot(scope_root, var_name) and any(
         (_python_suspension(node)
          and after_line <= (getattr(node, "lineno", None) or -1) <= before_line)
-        or (_python_possible_call(node, scope_root=scope_root)
+        or (possible_call(node)
             and after_line < (getattr(node, "lineno", None) or -1) < before_line)
         or (_python_evaluation_dispatch(node)
             and after_line < (getattr(node, "lineno", None) or -1) <= before_line)
@@ -1967,6 +2006,7 @@ def _rebound_in_loop_containing_sink(
     too — the sound direction; Tier 2 takes those cases.
     """
     scope_root = _function_containing(tree, sink_line) or tree
+    possible_call = _python_scope_possible_calls(scope_root)
     externally_owned = not _python_name_has_local_slot(scope_root, var_name)
     for loop in ast.walk(tree):
         if not isinstance(loop, (ast.For, ast.AsyncFor, ast.While)):
@@ -1975,7 +2015,7 @@ def _rebound_in_loop_containing_sink(
         if end is None or not (loop.lineno <= sink_line <= end):
             continue
         if externally_owned and not loop.lineno <= validator_line <= end and any(
-            _python_possible_call(node, scope_root=scope_root) or _python_suspension(node)
+            possible_call(node) or _python_suspension(node)
             for node in _walk_same_scope(loop)
         ):
             return True  # The next iteration cannot reuse an outer shared-slot fact.
@@ -2929,6 +2969,7 @@ def _python_chain_reaches_sink(
     # straight-line same-scope code and extended the validated chain
     # across scopes (false SOUND).  Walk only the sink's own scope.
     scope_root = _function_containing(tree, sink_line) or tree
+    possible_call = _python_scope_possible_calls(scope_root)
     # ONE ordered pass over the whole window — Assign-family chain
     # grow/kill AND the non-Assign rebind-KILL interleaved by source
     # position.  A separate position-insensitive kill pass ran AFTER
@@ -2972,7 +3013,7 @@ def _python_chain_reaches_sink(
                         chain.discard(var)
         if class_decls is None and not _python_unpack_assignment(node) and (
             _python_suspension(node)
-            or (_python_possible_call(node, scope_root=scope_root)
+            or (possible_call(node)
                 and not isinstance(node, (ast.Assign, ast.AnnAssign))
                 and validator_line < node.lineno < sink_line)
             or (_python_evaluation_dispatch(node) and validator_line < node.lineno <= sink_line)
@@ -3026,7 +3067,7 @@ def _python_chain_reaches_sink(
         # must not capture an external slot before a nested condition or
         # protocol dispatch has had a chance to rebind it.
         if not at_validator and any(
-            _python_possible_call(part, scope_root=scope_root) or _python_suspension(part)
+            possible_call(part) or _python_suspension(part)
             for part in _walk_same_scope(ast.Expr(value=node.value))
         ):
             for var in list(chain):
@@ -3084,7 +3125,7 @@ def _python_chain_reaches_sink(
         if any(
             node.lineno == validator_line and node not in certified_nodes
             and not isinstance(node, (ast.Assign, ast.AnnAssign))
-            and _python_possible_call(node, scope_root=scope_root)
+            and possible_call(node)
             for node in _walk_same_scope(scope_root)
             if hasattr(node, "lineno")
         ):
