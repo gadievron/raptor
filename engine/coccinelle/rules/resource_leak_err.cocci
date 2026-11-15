@@ -288,9 +288,10 @@ import json, sys
 # leaks across targets.
 _first = min(int(_a.line) for _a in p_alloc)
 for _p in p_ret:
-    _alloc_keys = list(_rl_pairs(p_alloc, [_p]))
-    if _alloc_keys and all(_rl_proven_cleanup(_key, ptr) for _key in _alloc_keys):
-        continue
+    if _rl_safe:
+        _alloc_keys = list(_rl_pairs(p_alloc, [_p]))
+        if _alloc_keys and all(_rl_proven_cleanup(_key, ptr) for _key in _alloc_keys):
+            continue
     _key = (_p.file, int(_p.line), int(_p.column))
     if _key in _rl_seen:
         continue
