@@ -297,6 +297,8 @@ def parse_literal_value(
     stores ``outer_text`` in ``Rejection.text`` and folds the token
     into the detail message, removing the propagate dependency.
     """
+    # Interpret the stored source characters, not subclass conversion hooks.
+    tok = str.__str__(tok)
     # Text anchor: prefer caller-supplied outer expression when
     # provided, otherwise the bare token. Conversion-budget refusals retain
     # this anchor without repeating an oversized token in their detail.
