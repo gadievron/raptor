@@ -1757,6 +1757,8 @@ def _python_possible_call(node: ast.AST, *, scope_root: ast.AST | None = None) -
         return _python_scope_possible_calls(scope_root)(node)
     if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
         return True
+    if isinstance(node, ast.ExceptHandler) and node.name is not None:
+        return True  # Binding/clearing the handler target can release old values.
     return (_python_operator_dispatch(node) or _python_iteration_dispatch(node)
             or _python_unpack_assignment(node) or _python_unpack_load(node)
             or _python_collection_key_dispatch(node) or _python_match_dispatch(node)) or isinstance(
