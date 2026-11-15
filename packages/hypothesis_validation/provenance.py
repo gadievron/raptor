@@ -7,8 +7,8 @@ Two pieces:
 
 Stability is the contract: the same hypothesis content must produce the
 same hash across processes, machines, and Python versions. We get that
-by serialising to JSON with sorted keys, normalising whitespace in every
-string field, and pure-text path-normalising fields that hold filesystem
+by serialising to JSON with sorted keys, normalising whitespace in free-text
+fields, and pure-text path-normalising fields that hold filesystem
 paths (`target`, and the `file` attribute of nested locations / flow
 steps).
 
@@ -52,7 +52,7 @@ class ProvenanceMismatch(ValueError):
 _WS_RE = re.compile(r"\s+")
 
 # Keys whose string values are filesystem paths and so receive
-# `os.path.normpath` in addition to whitespace normalisation. Listed
+# `posixpath.normpath` with their whitespace preserved. Listed
 # explicitly rather than detected heuristically because path-shaped
 # strings appear elsewhere (e.g. in match `message` fields) where we
 # do *not* want to mangle them.
@@ -60,20 +60,17 @@ _PATH_KEYS = frozenset({"target", "file"})
 
 
 def _normalise_string(s: str, *, is_path: bool = False) -> str:
-    r"""Collapse runs of whitespace into one space; strip ends.
+    r"""Normalise free-text whitespace or fold lexical path segments.
 
-    When `is_path` is set, additionally apply `posixpath.normpath` to
-    fold redundant separators and `.`/`..` segments. We use `posixpath`
-    explicitly so the result is platform-independent: `os.path.normpath`
-    rewrites `/` to `\` on Windows, which would make hashes diverge
-    across machines. The empty string is preserved as-is —
-    `normpath("")` returns `"."`, which would change the hash for an
-    unset path field.
+    Path whitespace is significant: distinct filenames must not acquire
+    the same provenance. Preserve it while using `posixpath.normpath`
+    to fold redundant separators and `.`/`..` segments consistently
+    across platforms. Preserve the empty path too, since `normpath("")`
+    would turn an unset field into `"."`.
     """
-    out = _WS_RE.sub(" ", s).strip()
-    if is_path and out:
-        out = posixpath.normpath(out)
-    return out
+    if is_path:
+        return posixpath.normpath(s) if s else s
+    return _WS_RE.sub(" ", s).strip()
 
 
 def _normalise(value: Any, key: Any = None) -> Any:
@@ -97,15 +94,17 @@ def hash_hypothesis(h: Hypothesis) -> HypothesisHash:
 
     Steps (each chosen so the hash is unaffected by superficial changes):
       1. Serialise via h.to_dict() so the field set is canonical.
-      2. Normalise whitespace in every string field; additionally apply
-         os.path.normpath to known path-bearing fields (`target`, nested
-         `file`).
+      2. Normalise free-text whitespace; preserve path whitespace and
+         apply posixpath.normpath to known path-bearing fields (`target`,
+         nested `file`).
       3. JSON-encode with sort_keys=True (stable key order across
          Python releases) and minimal separators (no whitespace at all
          in the encoded form).
       4. SHA-256 the bytes.
 
     The output is 64 hex chars suitable for use as Evidence.refers_to.
+    Correcting previously conflated path whitespace changes affected
+    identities; this helper does not rewrite stored evidence references.
     """
     payload = _normalise(h.to_dict())
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
