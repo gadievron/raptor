@@ -314,9 +314,11 @@ def test_parse_rpm_sqlite_no_packages_table_returns_empty():
         path = Path(fp.name)
     try:
         conn = sqlite3.connect(str(path))
-        conn.execute("CREATE TABLE Other (x INTEGER)")
-        conn.commit()
-        conn.close()
+        try:
+            conn.execute("CREATE TABLE Other (x INTEGER)")
+            conn.commit()
+        finally:
+            conn.close()
         content = path.read_bytes()
     finally:
         try:
@@ -337,12 +339,14 @@ def test_parse_rpm_sqlite_invalid_blob_skipped():
         fp.write(sqlite_bytes)
     try:
         conn = sqlite3.connect(str(path))
-        conn.execute(
-            "INSERT INTO Packages VALUES (?, ?)",
-            (99, b"not a valid rpm header"),
-        )
-        conn.commit()
-        conn.close()
+        try:
+            conn.execute(
+                "INSERT INTO Packages VALUES (?, ?)",
+                (99, b"not a valid rpm header"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
         content = path.read_bytes()
     finally:
         try:
