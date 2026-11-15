@@ -95,9 +95,14 @@ def test_actual_pipeline_keeps_runtime_open_through_deepen(tmp_path, monkeypatch
     monkeypatch.setattr(capabilities, "probe_capabilities", lambda *a, **k: capabilities.AuditCapabilities())
     prompts = []
     class Client:
+        _attempt_admission_protocol = 1
+
         def is_budget_exhausted(self):
             return False
         def generate_structured(self, prompt, schema, **kwargs):
+            admit = kwargs.pop("accounting_attempt_admission", None)
+            if admit is not None:
+                assert admit() is True
             prompts.append(prompt)
             return StructuredResponse(result={"status": "suspicious", "body": "Unresolved concern",
                 "hypothesis": "Validation needs inspection"}, raw="", cost=0, model="scripted")

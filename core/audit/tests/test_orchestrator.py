@@ -4449,10 +4449,15 @@ class TestIterativeReReview:
 
         current = {}
         class Client:
+            _attempt_admission_protocol = 1
+
             def is_budget_exhausted(self):
                 return False
 
             def generate_structured(self, prompt, schema, **kwargs):
+                admit = kwargs.pop("accounting_attempt_admission", None)
+                if admit is not None:
+                    assert admit() is True
                 ctx = current["ctx"]
                 concern = ctx["function"] == "dangerous" or bool(ctx.get("callee_contract_violation"))
                 return StructuredResponse(result={
@@ -4464,6 +4469,8 @@ class TestIterativeReReview:
         client = Client()
         rendered = make_review_fn(client, escalate_clean=False)
         monkeypatch.setattr(orch, "_run_llm_client", lambda cfg: client)
+        import core.audit.llm_summaries as llm_summaries
+        monkeypatch.setattr(llm_summaries, "run_llm_summary_pass", lambda *a, **k: {})
 
         def review_fn(ctx, config):
             current["ctx"] = ctx
@@ -4791,10 +4798,15 @@ class TestDeepenSuspicious:
         from core.llm.providers import StructuredResponse
 
         class Client:
+            _attempt_admission_protocol = 1
+
             def is_budget_exhausted(self):
                 return False
 
             def generate_structured(self, prompt, schema, **kwargs):
+                admit = kwargs.pop("accounting_attempt_admission", None)
+                if admit is not None:
+                    assert admit() is True
                 call_count[0] += 1
                 return StructuredResponse(result={
                     "status": "suspicious",

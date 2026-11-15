@@ -34,9 +34,14 @@ def test_actual_pipeline_coalesces_both_callees_and_deduplicates_iterative_stage
     current = {}
     prompts = []
     class Client:
+        _attempt_admission_protocol = 1
+
         def is_budget_exhausted(self):
             return False
         def generate_structured(self, prompt, schema, **kwargs):
+            admit = kwargs.pop("accounting_attempt_admission", None)
+            if admit is not None:
+                assert admit() is True
             name = current["ctx"]["function"]
             prompts.append((name, prompt))
             response = ({"status": "clean", "body": "Caller judgment remains provisional",

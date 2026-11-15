@@ -16,11 +16,16 @@ assert hashlib.sha256(b).hexdigest()=='1885372508e8638d7f65a8d1075e492efde5f5287
 m=next(n for n in ast.parse(b).body if isinstance(n,ast.FunctionDef) and n.name=='uds_dir')
 assert len(m.decorator_list)==1;m.decorator_list=[]
 owned=[];removed=[];modes=[];requested=[]
+long_root=a.output.parent/('long-uds-parent-'+'x'*100)
+long_root.mkdir()
 primary=KeyboardInterrupt('owned directory mode interruption') if a.scenario=='interrupt' else OSError('owned directory mode refusal')
 def allocate(*args,**kwargs):
     assert not args and kwargs.get('prefix')=='raptor-joern-uds-test-'
     assert set(kwargs)<= {'prefix','dir'} and kwargs.get('dir') in (None,'/tmp') and len(owned)<2
-    name=tempfile.mkdtemp(**kwargs);owned.append(Path(name));requested.append(kwargs.get('dir'))
+    requested.append(kwargs.get('dir'))
+    actual=dict(kwargs)
+    if actual.get('dir') is None:actual['dir']=str(long_root)
+    name=tempfile.mkdtemp(**actual);owned.append(Path(name))
     return name
 def remove(path,ignore_errors=False):
     assert Path(path) in owned
@@ -51,5 +56,6 @@ finally:
     generator.close()
     for path in owned:
         if path.exists():shutil.rmtree(path)
+    long_root.rmdir()
 assert result is not None and not attempts
 a.output.write_text(json.dumps(result,indent=2)+'\n')

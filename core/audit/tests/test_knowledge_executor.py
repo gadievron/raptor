@@ -151,10 +151,15 @@ def test_actual_audit_interleaves_initial_and_knowledge_review_opportunities(tmp
     admissions = []
 
     class Client:
+        _attempt_admission_protocol = 1
+
         def is_budget_exhausted(self):
             return False
 
         def generate_structured(self, prompt, schema, **kwargs):
+            admit = kwargs.pop("accounting_attempt_admission", None)
+            if admit is not None:
+                assert admit() is True
             return StructuredResponse(result={'status': 'suspicious', 'body': 'Unresolved scripted concern',
                 'hypothesis': 'The caller-dependent condition needs review',
                 'caller_context_requests': [{'file': 'caller.py', 'function': 'caller', 'line_start': 1,

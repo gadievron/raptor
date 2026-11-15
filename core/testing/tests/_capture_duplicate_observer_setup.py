@@ -85,7 +85,7 @@ if mode in CONTROLS:
             assert not exercise.decorator_list
             assert all(isinstance(n, ast.Constant) for n in exercise.args.defaults)
             companion = ModuleType('owned_capture_pipe_companion')
-            vars(companion).update(contextmanager=contextmanager, os=os, FunctionType=FunctionType, ModuleType=ModuleType, pytest=pytest, _spawn=_spawn, capture=capture, native=owner, pipes_for_setup=canonical.pipes_for_setup)
+            vars(companion).update(ExitStack=ExitStack, contextmanager=contextmanager, os=os, FunctionType=FunctionType, ModuleType=ModuleType, pytest=pytest, _spawn=_spawn, capture=capture, native=owner, pipes_for_setup=canonical.pipes_for_setup)
             exec(compile(ast.Module(body=[exercise], type_ignores=[]), str(companion_path), 'exec'), vars(companion))
             error_type = {None: None, 'RuntimeError': RuntimeError, 'KeyboardInterrupt': KeyboardInterrupt, 'SystemExit': SystemExit}[case['error']]
             companion._exercise(control_patch, case['caller'], case['phase'], error_type, case['after'])

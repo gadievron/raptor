@@ -83,7 +83,7 @@ def _metadata(path: Path, root: Path) -> tuple[str, tuple]:
 
 def _field(text: str, name: str, *, separator: str = ':') -> str:
     values = []
-    for line in text.split('\n'):
+    for line in text.split('\n'):  # line-model: field values strip CR below; metadata records split only at LF.
         key, found, value = line.partition(separator)
         if found and key.rstrip(' \t') == name:
             values.append(value.strip(' \t\r'))

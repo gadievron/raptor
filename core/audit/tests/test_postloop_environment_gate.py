@@ -1085,8 +1085,16 @@ class TestRunLevelGateBindings:
         self, tmp_path, monkeypatch,
     ):
         def seed_synthesis(config, result, shared, checklist):
+            # Select a newly produced occurrence: this gate-binding fake
+            # reviewer has no owned model attempt to continue on auth.c.
+            (config.target_path / "src" / "generated.c").write_text(
+                "int generated(void) {\n  return 0;\n}\n")
+            checklist["files"].append({
+                "path": "src/generated.c", "items": [
+                    {"name": "generated", "line_start": 1, "line_end": 3}],
+            })
             shared.synthesis_queue.append({
-                "file": "src/auth.c", "line": 2, "rule_id": "bind-test",
+                "file": "src/generated.c", "line": 2, "rule_id": "bind-test",
             })
             return 1
 

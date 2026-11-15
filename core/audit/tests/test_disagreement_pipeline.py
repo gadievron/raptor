@@ -31,9 +31,14 @@ def test_actual_pipeline_keeps_owner_through_disagreement(tmp_path, monkeypatch)
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     prompts = []
     class Client:
+        _attempt_admission_protocol = 1
+
         def is_budget_exhausted(self):
             return False
         def generate_structured(self, prompt, schema, **kwargs):
+            admit = kwargs.pop("accounting_attempt_admission", None)
+            if admit is not None:
+                assert admit() is True
             prompts.append(prompt)
             return StructuredResponse(result={"status": "clean" if len(prompts) == 1 else "suspicious",
                 "body": "Independent scripted assessment", "hypothesis": "Unresolved validation concern"},

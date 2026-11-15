@@ -12,7 +12,6 @@ from pathlib import Path
 
 import pytest
 
-from core.dataflow.label import VERDICT_FALSE_POSITIVE, VERDICT_TRUE_POSITIVE
 
 # Module-level marker — every test in this file spawns real Python
 # subprocesses against the corpus shims (raptor-corpus-run +
@@ -86,8 +85,10 @@ def test_corpus_run_shim_then_metrics_shim_succeeds(tmp_path: Path):
     out = proc.stdout
     assert "Total findings:" in out
     assert "Precision:" in out
-    assert VERDICT_TRUE_POSITIVE in out or "True positives" in out
-    assert VERDICT_FALSE_POSITIVE in out or "False positives" in out
+    assert "Classified true-positive labels:" in out
+    assert "Classified false-positive labels:" in out
+    assert "validator-confirmed:" in out and "missed:" in out
+    assert "suppressed:" in out and "leaked:" in out
 
 
 def test_metrics_shim_pivot_gate_passes_on_seed_corpus(tmp_path: Path):

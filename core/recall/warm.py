@@ -38,7 +38,7 @@ def load_suppression_records(path: Path) -> list[dict[str, Any]]:
         text = path.read_text(encoding="utf-8", errors="surrogateescape")
     except OSError:
         return records
-    for line in text.split("\n"):
+    for line in text.split("\n"):  # line-model: strip below removes CR; JSONL records split only at LF.
         line = line.strip()
         if not line:
             continue

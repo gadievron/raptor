@@ -54,9 +54,14 @@ def test_actual_live_sink_review_waits_for_ack_and_books_spend(tmp_path, monkeyp
     config = setup_pipeline(tmp_path, monkeypatch)
     prompts = []
     class Client:
+        _attempt_admission_protocol = 1
+
         def is_budget_exhausted(self):
             return False
         def generate_structured(self, prompt, schema, **kwargs):
+            admit = kwargs.pop("accounting_attempt_admission", None)
+            if admit is not None:
+                assert admit() is True
             prompts.append(prompt)
             later = "Advisory live-sink classification leads" in prompt
             return StructuredResponse(result={"status": "suspicious" if later else "clean",
@@ -93,9 +98,14 @@ def test_actual_ready_callee_live_and_disagreement_share_one_review(tmp_path, mo
     current = {}
     prompts = []
     class Client:
+        _attempt_admission_protocol = 1
+
         def is_budget_exhausted(self):
             return False
         def generate_structured(self, prompt, schema, **kwargs):
+            admit = kwargs.pop("accounting_attempt_admission", None)
+            if admit is not None:
+                assert admit() is True
             name = current["ctx"]["function"]
             prompts.append((name, prompt))
             response = ({"status": "suspicious", "body": "Prior callee concern", "hypothesis": "Unresolved callee condition"}
@@ -127,9 +137,14 @@ def test_parallel_paid_live_reviews_are_all_harvested_after_budget_stop(tmp_path
     paid = threading.Barrier(2, timeout=5)
     exhausted = threading.Event()
     class Client:
+        _attempt_admission_protocol = 1
+
         def is_budget_exhausted(self):
             return exhausted.is_set()
         def generate_structured(self, prompt, schema, **kwargs):
+            admit = kwargs.pop("accounting_attempt_admission", None)
+            if admit is not None:
+                assert admit() is True
             later = "Advisory live-sink classification leads" in prompt
             if later:
                 paid.wait()
