@@ -45,6 +45,8 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message": "Candidate: a popen stream is passed to fclose rather than pclose; review ownership, target libc behavior and command-status handling (CWE-404)."
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -77,6 +79,8 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message": "Candidate: a popen stream is passed to fclose rather than pclose; review ownership, target libc behavior and command-status handling (CWE-404)."
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -97,6 +101,8 @@ msg = {
     "file": p[0].file,
     "line": int(p[0].line),
     "col": int(p[0].column),
+    "line_end": int(p[0].line_end),
+    "col_end": int(p[0].column_end),
     "message": "Candidate: popen result is closed immediately with fclose; review the pclose ownership/status contract and open failure handling (CWE-404)",
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -134,6 +140,8 @@ msg = {
     "file": p[0].file,
     "line": int(p[0].line),
     "col": int(p[0].column),
+    "line_end": int(p[0].line_end),
+    "col_end": int(p[0].column_end),
     "message": "Candidate: a popen stream slot reaches fclose rather than pclose; review ownership, target libc behavior and command-status handling (CWE-404)",
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -177,6 +185,8 @@ msg = {
     "file": p[0].file,
     "line": int(p[0].line),
     "col": int(p[0].column),
+    "line_end": int(p[0].line_end),
+    "col_end": int(p[0].column_end),
     "message": "Candidate: an indexed popen stream reaches fclose rather than pclose with no recognized slot/index change; review ownership and command-status handling (CWE-404)",
 }
 print("COCCIRESULT:" + json.dumps(msg))

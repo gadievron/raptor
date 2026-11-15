@@ -45,6 +45,11 @@ _SCRIPTS = [
     ("snprintf_truncation_boundary", 0), ("snprintf_truncation_boundary", 1),
     ("snprintf_advance", 0), ("snprintf_advance", 1), ("snprintf_advance", 2),
     ("strncpy_no_nul", 0), ("strncpy_no_nul", 1),
+    ("popen_fclose", 0),
+    ("popen_fclose", 1),
+    ("popen_fclose", 2),
+    ("popen_fclose", 3),
+    ("popen_fclose", 4),
 ]
 
 
