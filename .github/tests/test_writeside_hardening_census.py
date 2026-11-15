@@ -71,6 +71,7 @@ shared wrappers they route through are hardened at the source.
 from __future__ import annotations
 
 import ast
+import hashlib
 import sys
 import unicodedata
 from collections import Counter
@@ -306,6 +307,27 @@ def _flagged_calls(text: str) -> list[tuple[ast.Call, str]]:
     ]
 
 
+# One adjudicated custom-opener call. The complete producer and hardened
+# dependency are pinned: a renamed/misbound opener, changed lambda, extra
+# unreviewed call, or helper modification must return to the hazard census.
+# Builtin open owns descriptor cleanup if text wrapping fails; the delegating
+# opener supplies core.atomic_fs nofollow/nonblock/regular-file admission.
+_TELEMETRY_APPEND_SOURCE = "12f53d3095eb4b1971939681425c4620c6e8ac87db567f7f1d06fecbd5823702"
+_TELEMETRY_APPEND_AST = "b92265c762a9e73fe57289b1fef587567d627fd6c02ae028392fae6cb0b70861"
+_TELEMETRY_APPEND_DEPENDENCY = "1321d4a8a54c21fbb7c6a50778c3ce6e14c7c753385b40a3cfdf228b5039650a"
+
+
+def _reviewed_hardened_append(rel, source, node, root):
+    return (
+        rel == "packages/fuzzing/telemetry.py"
+        and hashlib.sha256(source.encode()).hexdigest() == _TELEMETRY_APPEND_SOURCE
+        and hashlib.sha256(ast.dump(node, include_attributes=False).encode()).hexdigest()
+            == _TELEMETRY_APPEND_AST
+        and hashlib.sha256((root / "core/atomic_fs/__init__.py").read_bytes()).hexdigest()
+            == _TELEMETRY_APPEND_DEPENDENCY
+    )
+
+
 def _census() -> tuple[list[tuple[str, str, int, str]], Counter]:
     """All flagged sites: (relpath, stripped line, lineno, why)."""
     root = repo_root()
@@ -322,6 +344,8 @@ def _census() -> tuple[list[tuple[str, str, int, str]], Counter]:
             continue
         lines = text.splitlines()
         for node, why in calls:
+            if _reviewed_hardened_append(rel, text, node, root):
+                continue
             line = (
                 lines[node.lineno - 1].strip()
                 if node.lineno <= len(lines) else ""
@@ -359,6 +383,35 @@ def test_no_unadjudicated_write_side_sites(write_census) -> None:
 def _flags_of(snippet: str) -> list[str]:
     """Self-test helper: every _flag verdict in a parsed snippet."""
     return [why for _node, why in _flagged_calls(snippet)]
+
+
+def test_custom_append_adjudication_is_source_ast_and_dependency_bound(tmp_path):
+    root = repo_root()
+    rel = "packages/fuzzing/telemetry.py"
+    source = (root / rel).read_text()
+    node = next(node for node, _why in _flagged_calls(source)
+                if hashlib.sha256(ast.dump(node, include_attributes=False).encode()).hexdigest()
+                == _TELEMETRY_APPEND_AST)
+    assert _reviewed_hardened_append(rel, source, node, root)
+    assert not _reviewed_hardened_append("packages/fuzzing/other.py", source, node, root)
+    for changed in (
+        source.replace("opener=lambda path, _flags: open_hardened_append(path)", "opener=None"),
+        source.replace("open_hardened_append(path)", "open_hardened_append(other_path)"),
+        source.replace("from core.atomic_fs import open_hardened_append",
+                       "from unsafe_module import open_hardened_append"),
+        source.replace("open_hardened_append(path)", "unsafe_append(path)"),
+        source.replace('str(self.events_path), "a"', 'str(self.events_path), "w"'),
+    ):
+        assert changed != source
+        hazards = _flagged_calls(changed)
+        assert hazards
+        assert all(not _reviewed_hardened_append(rel, changed, call, root)
+                   for call, _why in hazards)
+    helper = tmp_path / "core/atomic_fs/__init__.py"
+    helper.parent.mkdir(parents=True)
+    helper.write_text("# altered hardened dependency\n")
+    assert not _reviewed_hardened_append(rel, source, node, tmp_path)
+    assert _flags_of('open(path, "a")')
 
 
 def test_flagger_catches_bypass_spellings() -> None:
