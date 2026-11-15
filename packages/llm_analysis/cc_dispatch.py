@@ -23,7 +23,7 @@ from core.llm.cc_adapter import (
     parse_cc_structured,
     system_prompt_file_for,
 )
-from core.llm.cost import sanitize_cost
+from core.llm.cost import sanitize_cost, sanitize_iterations
 from core.security.log_sanitisation import escape_nonprintable
 from core.security.redaction import redact_secrets
 from packages.llm_analysis.dispatch import DispatchResult
@@ -208,7 +208,21 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
         result = {"error": f"exit code {proc.returncode}: {stderr_excerpt}"}
         write_debug(out_dir, f"dispatch_{_debug_tag}", proc.stdout,
                     proc.stderr, result)
-        return DispatchResult(result=result)
+        # Read only outer-envelope usage, never fields from failed analysis.
+        try:
+            metadata = parse_cc_freeform(proc.stdout, proc.stderr)
+        except (ValueError, KeyError, TypeError, OverflowError, RecursionError):
+            metadata = {}
+        try:
+            cost = sanitize_cost(metadata.get("cost_usd", 0))
+        except OverflowError:
+            cost = 0.0
+        model = metadata.get("analysed_by", "")
+        return DispatchResult(
+            result=result, cost=cost,
+            tokens=sanitize_iterations(metadata.get("_tokens", 0)),
+            model=model if isinstance(model, str) else "",
+        )
 
     # Parse with debug-on-failure. Pre-fix `parse_cc_structured` /
     # `parse_cc_freeform` exceptions (malformed JSON, missing
