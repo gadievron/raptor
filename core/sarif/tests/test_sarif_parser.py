@@ -1306,6 +1306,7 @@ class TestExtensionRules(unittest.TestCase):
         with tempfile.NamedTemporaryFile(
             "w", suffix=".sarif", delete=False,
         ) as fh:
+            self.addCleanup(Path(fh.name).unlink, missing_ok=True)
             json.dump(sarif, fh)
             path = Path(fh.name)
         try:
