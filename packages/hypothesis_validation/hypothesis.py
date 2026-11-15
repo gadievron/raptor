@@ -33,7 +33,7 @@ def _coerce_line(value) -> int:
     """
     try:
         return int(value or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 
