@@ -5,13 +5,13 @@ callback fired under ``ctx->lock`` (no crisp public CVE for this
 exact class; the in-tree flush comment is the anchor, stated as such
 rather than inventing one). Fixture pairs assert full receipts on the
 deviant form and the exact enumerated reason string on the twin.
-Hermetic: the cocci corroboration leg is stubbed (one optional live
-test runs only when spatch is installed).
+Coccinelle corroboration is withheld without native discovery or execution.
+Grammar-dependent channel tests retain their separate tree-sitter gate;
+inert corroboration qualification lives in test_lock_region_corroboration_unavailable.py.
 """
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 import pytest
@@ -307,34 +307,35 @@ class TestCocciCorroboration:
             outcome="confirmed",
             reason="r",
             lock={"acquire": "my_lock", "release": "my_unlock"},
+            region={"file": "owned.c", "span": [1, 5]},
+            callback={"shape": "indirect_field", "expr": "p->cb", "line": 3},
         )
 
-    def test_stub_match_returns_independent_namespace_stamp(
+    def test_span_only_match_cannot_supply_callback_identity(
         self, monkeypatch, tmp_path,
     ):
         import packages.coccinelle.runner as runner
 
-        class _Res:
-            matches = [object()]
+        from packages.coccinelle.models import SpatchMatch, SpatchResult
 
-        monkeypatch.setattr(runner, "is_available", lambda: True)
-        monkeypatch.setattr(
-            runner, "run_rule", lambda *a, **kw: _Res(),
-        )
-        stamp = cocci_corroboration(tmp_path, self._confirmed())
-        assert stamp == COCCI_STAMP
-        assert stamp.split(":")[0] == "coccinelle"
+        supplied = SpatchResult(rule="callback_under_lock", matches=[
+            SpatchMatch(file="owned.c", line=3, column=8, line_end=3,
+                        column_end=10, rule="callback_under_lock", message="candidate"),
+        ])
+        calls = []
+        monkeypatch.setattr(runner, "is_available", lambda: calls.append("available") or True)
+        monkeypatch.setattr(runner, "run_rule", lambda *a, **kw: calls.append("run") or supplied)
+        assert cocci_corroboration(tmp_path, self._confirmed()) is None
+        assert calls == []
 
     def test_stub_no_match_returns_none(self, monkeypatch, tmp_path):
         import packages.coccinelle.runner as runner
 
-        class _Res:
-            matches = []
+        from packages.coccinelle.models import SpatchResult
 
+        supplied = SpatchResult(rule="callback_under_lock")
         monkeypatch.setattr(runner, "is_available", lambda: True)
-        monkeypatch.setattr(
-            runner, "run_rule", lambda *a, **kw: _Res(),
-        )
+        monkeypatch.setattr(runner, "run_rule", lambda *a, **kw: supplied)
         assert cocci_corroboration(tmp_path, self._confirmed()) is None
 
     def test_never_runs_on_non_confirmed(self, monkeypatch, tmp_path):
@@ -366,8 +367,7 @@ class TestCocciCorroboration:
             _is_detection_only,
         )
         # The stock rule is @role: detection — the stamp corroborates
-        # but never promotes alone; naming-variant channel receipt +
-        # cocci stamp = two independent namespaces ⇒ aggregation.
+        # but never promotes; namespace aggregation grants no authority.
         assert _is_detection_only(COCCI_STAMP)
         channels, _ = _aggregate_channel_confirmations([
             RULE_CALLBACK_UNDER_LOCK + DETECTION_VARIANT_SUFFIX,
@@ -375,10 +375,7 @@ class TestCocciCorroboration:
         ])
         assert channels == []
 
-    @pytest.mark.skipif(
-        shutil.which("spatch") is None, reason="spatch not installed",
-    )
-    def test_live_spatch_match(self, tmp_path):
+    def test_callback_shaped_source_still_has_no_corroboration(self, tmp_path):
         (tmp_path / "s.c").write_text(
             "void f(struct s *p, void *l) {\n"
             "    my_lock(l);\n"
@@ -388,12 +385,9 @@ class TestCocciCorroboration:
         )
         assert cocci_corroboration(
             tmp_path, self._confirmed(),
-        ) == COCCI_STAMP
+        ) is None
 
-    @pytest.mark.skipif(
-        shutil.which("spatch") is None, reason="spatch not installed",
-    )
-    def test_live_spatch_no_match_after_release(self, tmp_path):
+    def test_released_source_still_has_no_corroboration(self, tmp_path):
         (tmp_path / "s.c").write_text(
             "void f(struct s *p, void *l) {\n"
             "    my_lock(l);\n"

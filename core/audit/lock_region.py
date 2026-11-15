@@ -18,11 +18,10 @@ reentrancy corruption. Pure composition, no new vocabulary:
 * **Registrable-by-application witness** (the severity discriminator):
   the callback member has a setter assigning it from a parameter, and
   the setter is exported (non-static).
-* **Cocci corroboration leg**:
-  ``engine/coccinelle/rules/callback_under_lock.cocci`` (parametric
-  ``-D lock -D unlock`` from the learned pairs, the
-  ``unchecked_return.cocci`` precedent) — an independent
-  ``coccinelle`` namespace for aggregation.
+* **Cocci corroboration withheld**: the current report supplies only
+  a field-invocation span, without bound callback or lock-object identity.
+  The compatibility helper returns no stamp and runs no whole-target
+  query; a separate namespace does not confer promotion authority.
 
 Grade / status discipline: registry ``lock_region:callback-under-lock``
 only when the lock pair is learned/pack/seed (registry vocabulary) AND
@@ -41,9 +40,7 @@ smt check-lock-discipline (CWE-667 chain); the struct-field
 lock-discipline context stays ``struct_accessor_index``. This channel
 owns only invoke-callback-while-held.
 
-No LLM calls; the phase-1 legs spawn no subprocesses (the cocci leg
-runs only as post-confirmation corroboration under the runner's
-timeout).
+No LLM calls or subprocesses; Coccinelle corroboration is withheld.
 """
 
 from __future__ import annotations
@@ -865,39 +862,14 @@ def cocci_corroboration(
     target_path: Path,
     result: LockRegionEvidence,
 ) -> str | None:
-    """Post-confirmation corroboration: run the parametric
-    ``callback_under_lock.cocci`` rule with ``-D lock -D unlock`` from
-    the confirmed pair. Returns the independent ``coccinelle``
-    namespace stamp on a match, else None. Never load-bearing — any
-    failure degrades to the single-namespace receipt."""
-    if result.outcome != "confirmed" or not result.lock:
-        return None
-    lock = result.lock.get("acquire", "")
-    unlock = result.lock.get("release", "")
-    ident = re.compile(r"\A[A-Za-z_]\w*\Z")
-    if not (ident.match(lock) and ident.match(unlock)):
-        return None
-    try:
-        from packages.coccinelle.runner import is_available, run_rule
-        if not is_available():
-            return None
-        rule_path = Path(__file__).resolve().parents[2] \
-            / "engine" / "coccinelle" / "rules" \
-            / f"{COCCI_RULE_NAME}.cocci"
-        if not rule_path.is_file():
-            return None
-        res = run_rule(
-            Path(target_path),
-            Path(rule_path),
-            defines={"lock": lock, "unlock": unlock},
-            timeout=120,
-            allow_scripting=True,
-        )
-        if res.matches:
-            return COCCI_STAMP
-    except Exception:
-        logger.debug("lock_region: cocci corroboration failed",
-                     exc_info=True)
+    """Withhold corroboration until the producer can identify this claim.
+
+    The current Coccinelle report carries a field-invocation span, but
+    no bound callback expression or lock-object identity. Even contained
+    file/region overlap cannot establish the same callback mechanism.
+    This API has no independent attribution receipt, so an unscoped
+    whole-target match cannot supply a corroboration stamp.
+    """
     return None
 
 
