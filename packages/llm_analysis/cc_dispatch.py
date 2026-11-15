@@ -250,6 +250,8 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
         metadata = parse_cc_freeform(proc.stdout, proc.stderr)
     except (ValueError, KeyError, TypeError, OverflowError, RecursionError):
         metadata = {}
+    if "error" in metadata:
+        parsed = {"error": metadata["error"]}
     try:
         cost = sanitize_cost(metadata.get("cost_usd", 0))
     except OverflowError:
