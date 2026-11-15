@@ -5,10 +5,7 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.tls.skip-verify.python
     message: >-
-      TLS certificate verification is disabled via verify=False (or
-      ssl=False for aiohttp). An attacker in a network position can
-      intercept and modify traffic. Always verify certificates against
-      a trusted CA bundle.
+      TLS-verification bypass syntax appears in a request, client or connector configuration. Confirm the API, effective configuration and whether it is used for HTTPS traffic. Keep certificate verification enabled against the intended trust roots.
     languages: [python]
     severity: HIGH
     pattern-either:
@@ -88,9 +85,7 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.tls.skip-verify.java
     message: >-
-      Default TLS hostname verifier overridden globally. This typically
-      disables hostname verification for all HTTPS connections in the JVM.
-      Use the default verifier or configure per-connection verification.
+      The default HTTPS hostname verifier is configured. Review the supplied verifier and where it is used; installing a verifier does not by itself establish that hostname checks are disabled. Reject mismatched hostnames or retain the default verifier.
     languages: [java]
     severity: HIGH
     pattern: HttpsURLConnection.setDefaultHostnameVerifier($X)
@@ -104,10 +99,7 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.tls.skip-verify.javascript
     message: >-
-      TLS certificate verification is disabled. An attacker in a network
-      position can intercept and modify traffic. Do not set
-      rejectUnauthorized to false or NODE_TLS_REJECT_UNAUTHORIZED to "0"
-      in production.
+      A TLS-verification bypass setting or matching Agent option appears in this code. Confirm the API and effective connection configuration before treating verification as disabled. Keep rejectUnauthorized enabled and avoid setting NODE_TLS_REJECT_UNAUTHORIZED to "0".
     languages: [javascript, typescript]
     severity: HIGH
     pattern-either:
