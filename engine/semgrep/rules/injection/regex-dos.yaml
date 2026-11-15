@@ -2,8 +2,8 @@ rules:
   # ---------------------------------------------------------------------------
   # Python — taint: web framework sources → regex pattern position
   # CWE-1333: Regular Expression Denial of Service (ReDoS).
-  # Only fires when the PATTERN comes from user input — using a constant
-  # regex against user-supplied input strings is safe.
+  # This taint rule covers user-derived PATTERN arguments. Constant patterns
+  # still require independent review of input bounds and matching cost.
   # ---------------------------------------------------------------------------
   - id: raptor.injection.regex-dos.taint.python
     message: >-
