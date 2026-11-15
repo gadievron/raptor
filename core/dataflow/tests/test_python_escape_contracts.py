@@ -30,22 +30,22 @@ def test_untyped_protocol_inputs_cannot_earn_library_certificates(tmp_path: Path
     required = {ksc.EXACT_STR_DEFAULT_CALL}
     if sink_class == "xss":
         required.add(ksc.HTML_OUTPUT_POLICY)
+    else:
+        required.add(ksc.POSIX_SHELL_ARGUMENT_CONTEXT)
     assert result.extras["unverified_source_contracts"] == sorted(required)
     assert result.artifact is None
     source = source.replace(line, "    if type(raw) is not str: return\n" + line)
     (tmp_path / "app.py").write_text(source)
     result = review()
-    if sink_class == "xss":
-        assert result.status is Tier0Status.NOT_APPLICABLE
-        assert result.artifact is None
-        assert result.extras["unverified_source_contracts"] == [ksc.HTML_OUTPUT_POLICY]
-        from core.dataflow.string_type_evidence import exact_str_default_call_evidence
+    assert result.status is Tier0Status.NOT_APPLICABLE
+    assert result.artifact is None
+    context = ksc.HTML_OUTPUT_POLICY if sink_class == "xss" else ksc.POSIX_SHELL_ARGUMENT_CONTEXT
+    assert result.extras["unverified_source_contracts"] == [context]
+    from core.dataflow.string_type_evidence import exact_str_default_call_evidence
 
-        receipt = exact_str_default_call_evidence(source, 4, "raw", library)
-        assert receipt is not None and receipt.origin == "adjacent-exact-type-guard"
-    else:
-        assert result.status is Tier0Status.SOUND
-        assert result.extras["input_type_evidence"]["origin"] == "adjacent-exact-type-guard"
+    receipt = exact_str_default_call_evidence(source, 4, "raw", library)
+    assert receipt is not None and receipt.origin == "adjacent-exact-type-guard"
+
 
 
 @pytest.mark.parametrize("library,cwe", [("markupsafe.escape", "CWE-79"), ("shlex.quote", "CWE-78"), ("django.utils.html.escape", "CWE-79")])
@@ -59,6 +59,8 @@ def test_graph_and_wrapper_candidates_keep_the_same_unverified_contract(library,
     required = {ksc.EXACT_STR_DEFAULT_CALL}
     if cwe == "CWE-79":
         required.add(ksc.HTML_OUTPUT_POLICY)
+    else:
+        required.add(ksc.POSIX_SHELL_ARGUMENT_CONTEXT)
     assert binding.unverified_source_contracts == frozenset(required)
     sink = next(node for node in graph.nodes() if "consume" in node.calls)
     result = evaluate_finding(graph, [graph.entry_node], sink, cwe=cwe, language="python",

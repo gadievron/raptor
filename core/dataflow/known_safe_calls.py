@@ -41,6 +41,7 @@ PATH_JOIN_CONTAINMENT = "trusted_path_base_components_and_containment"
 HTML_TEXT_CONTENT_CONTEXT = "html_text_content_sink_context"
 HTML_ATTRIBUTE_POLICY = "html_quoted_attribute_sink_context_and_policy"
 HTML_OUTPUT_POLICY = "html_text_or_quoted_attribute_sink_context_and_policy"
+POSIX_SHELL_ARGUMENT_CONTEXT = "posix_shell_argument_sink_context"
 
 
 @dataclass(frozen=True)
@@ -207,9 +208,11 @@ _TABLE: tuple[KnownSafeCall, ...] = (
         languages=("python",),
         input_arg_kind="transform",
         requires_exact_str=True,
+        required_source_contracts=frozenset({POSIX_SHELL_ARGUMENT_CONTEXT}),
         soundness_note=(
             "For an exact builtin str using defaults, shlex.quote returns a shell-escaped string safe to "
-            "interpolate into a shell command (single-quoted, with "
+            "use as a complete argument token in a POSIX shell command "
+            "(single-quoted, with "
             "embedded single quotes escaped).  Sound for shell=True "
             "subprocess invocations ONLY — quoting does not neutralize "
             "argument-position injection (CWE-88): a quoted value used "
