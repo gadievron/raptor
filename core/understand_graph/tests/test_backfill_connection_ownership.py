@@ -57,9 +57,13 @@ def _exercise(tmp_path, stage, error, after):
 
     def connect(path):
         connection = sqlite3.connect(path)
-        records.append((connection, path, connection.execute(
-            "SELECT props_json FROM nodes WHERE kind='entry_point' LIMIT 1",
-        ).fetchone()[0]))
+        try:
+            records.append((connection, path, connection.execute(
+                "SELECT props_json FROM nodes WHERE kind='entry_point' LIMIT 1",
+            ).fetchone()[0]))
+        except BaseException:
+            connection.close()
+            raise
         return Connection(connection)
 
     method = native.test_context_map_backfills_name_from_graph_row
