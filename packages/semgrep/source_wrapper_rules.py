@@ -232,8 +232,9 @@ def generate_rules_yaml(summaries: Iterable) -> str | None:
         ),
         _taint_rule(
             "raptor.generated.source-wrapper.trust-boundary",
-            "Untrusted data from a project source-wrapper is stored into "
-            "a trusted context (session/servlet context).",
+            "Data from a project source-wrapper reaches a session or "
+            "servlet-context attribute write. Review validation, the attribute "
+            "key and value, and downstream readers before treating it as trusted.",
             "CWE-501", sources, TRUST_BOUNDARY_SINKS, (),
         ),
         _taint_rule(
@@ -245,8 +246,9 @@ def generate_rules_yaml(summaries: Iterable) -> str | None:
         ),
         _taint_rule(
             "raptor.generated.source-wrapper.sqli",
-            "Untrusted data from a project source-wrapper flows into SQL "
-            "execution. Use parameterised queries.",
+            "Data from a project source-wrapper reaches SQL-shaped text "
+            "or a SQL API. Review input origin, query structure, bindings "
+            "and execution context before concluding SQL injection.",
             "CWE-89", sources, (), (),
             sink_blocks=SQLI_SINK_BLOCKS,
         ),
