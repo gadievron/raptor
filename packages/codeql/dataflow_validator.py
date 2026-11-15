@@ -527,11 +527,17 @@ class DataflowValidator:
                     and (not isinstance(message_value, dict) or "text" in message_value)):
                 self.logger.warning("Invalid SARIF flow label; using empty text")
 
+            snippet_value = region.get("snippet")
+            snippet = _text_value(snippet_value)
+            if (snippet is None and snippet_value is not None
+                    and (not isinstance(snippet_value, dict) or "text" in snippet_value)):
+                self.logger.warning("Invalid SARIF flow snippet; using empty text")
+
             step = DataflowStep(
                 file_path=unquote(artifact.get("uri", ""), errors="strict"),
                 line=line or 0,
                 column=column or 0,
-                snippet=(region.get("snippet") or {}).get("text", ""),
+                snippet=snippet or "",
                 label=label or ""
             )
             steps.append(step)
