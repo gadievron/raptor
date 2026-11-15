@@ -48086,10 +48086,10 @@
     {
       "path": "core/testing/tests/test_audit_fresh_file_ownership.py",
       "scope": "test_audit_fresh_file_is_owned_before_write",
-      "signature": "25c241c4bd6fb6e3c3b04b5f6279d24c3dbb585ae1d8d644c9afb07449c449fc",
+      "signature": "335a7f4085be0787ed6d5c8cc98b53c1f106e561a2cad189daa4e6585e6f957c",
       "count": 1,
       "contract": "owned-custom-launch",
-      "purpose": "audit fresh file is owned before write: Launches fixed sys.executable -I owned Python proof child through process-group owner with explicit timeout and return/success-token assertions. Child source(s): core/testing/tests/_audit_fresh_file_ownership.py. Exact launch arguments/timeout, child guard/source hashes and predecessor owner subjects are retained in Herm217 mapping; no product/native/provider/whole-test acceptance is inferred merely from this catalogue label."
+      "purpose": "audit fresh file is owned before write: Launches fixed sys.executable -I -B owned Python proof child through process-group owner with explicit timeout and return/success-token assertions. Child source(s): core/testing/tests/_audit_fresh_file_ownership.py. Exact launch arguments/timeout, child guard/source hashes and predecessor owner subjects are retained in Herm217 mapping; no product/native/provider/whole-test acceptance is inferred merely from this catalogue label."
     },
     {
       "path": "core/testing/tests/test_audit_multi_worker_start_rescue_ownership.py",
@@ -49182,10 +49182,10 @@
     {
       "path": "core/testing/tests/test_observation_log_setup_ownership.py",
       "scope": "test_observation_log_is_owned_before_return",
-      "signature": "25c241c4bd6fb6e3c3b04b5f6279d24c3dbb585ae1d8d644c9afb07449c449fc",
+      "signature": "335a7f4085be0787ed6d5c8cc98b53c1f106e561a2cad189daa4e6585e6f957c",
       "count": 1,
       "contract": "owned-custom-launch",
-      "purpose": "observation log is owned before return: Launches fixed sys.executable -I owned Python proof child through process-group owner with explicit timeout and return/success-token assertions. Child source(s): core/testing/tests/_observation_log_setup_ownership.py. Exact launch arguments/timeout, child guard/source hashes and predecessor owner subjects are retained in Herm217 mapping; no product/native/provider/whole-test acceptance is inferred merely from this catalogue label."
+      "purpose": "observation log is owned before return: Launches fixed sys.executable -I -B owned Python proof child through process-group owner with explicit timeout and return/success-token assertions. Child source(s): core/testing/tests/_observation_log_setup_ownership.py. Exact launch arguments/timeout, child guard/source hashes and predecessor owner subjects are retained in Herm217 mapping; no product/native/provider/whole-test acceptance is inferred merely from this catalogue label."
     },
     {
       "path": "core/testing/tests/test_outer_pipe_tracker_setup_ownership.py",
