@@ -618,12 +618,13 @@ def test_only_complete_capped_lines_establish_suppression(tmp_path, monkeypatch,
 
     source = tmp_path / "case.py"
     source.write_text(text)
-    read = nosemgrep.read_text_capped
+    reader_name = "read_text_capped" if mode == "standalone" else "read_contained_text_capped"
+    read = getattr(nosemgrep, reader_name)
 
-    def bounded(path, **kwargs):
-        return read(path, max_chars=cap, **kwargs)
+    def bounded(*args, **kwargs):
+        return read(*args, max_chars=cap, **kwargs)
 
-    monkeypatch.setattr(nosemgrep, "read_text_capped", bounded)
+    monkeypatch.setattr(nosemgrep, reader_name, bounded)
     if mode == "standalone":
         info = extract_nosemgrep(source, line, rule_id="test.rule")
         assert bool(info) is applies

@@ -22,17 +22,17 @@ def test_reader_cwd_change_does_not_rebind_repository_root(tmp_path, monkeypatch
     (first / "a.c").write_text("// nosemgrep\n")
     (first / "b.c").write_text("owned\n")
     (second / "b.c").write_text("// nosemgrep\n")
-    original = nosemgrep._read_source_lines
+    original = nosemgrep.read_contained_text_capped
     reads = []
 
-    def read(path):
+    def read(root, path, **kwargs):
         reads.append(Path(path))
-        lines = original(path)
+        lines = original(root, path, **kwargs)
         if Path(path) == first / "a.c":
             monkeypatch.chdir(second)
         return lines
 
-    monkeypatch.setattr(nosemgrep, "_read_source_lines", read)
+    monkeypatch.setattr(nosemgrep, "read_contained_text_capped", read)
     monkeypatch.chdir(first)
     doc = document()
     assert nosemgrep.annotate_sarif(doc, "." if relative else first) == 1
@@ -47,11 +47,11 @@ def test_unknown_root_identity_does_not_read_or_annotate(monkeypatch):
         def absolute(self):
             raise PermissionError("owned root-location refusal")
 
-    def forbidden(path):
+    def forbidden(*args, **kwargs):
         pytest.fail("unknown root identity must not authorise a source read")
 
     monkeypatch.setattr(nosemgrep, "Path", RefusedRoot)
-    monkeypatch.setattr(nosemgrep, "_read_source_lines", forbidden)
+    monkeypatch.setattr(nosemgrep, "read_contained_text_capped", forbidden)
     doc = document()
     before = deepcopy(doc)
     assert nosemgrep.annotate_sarif(doc, ".") == 0
