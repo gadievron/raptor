@@ -57,6 +57,8 @@ msg = {
     "file": p[0].file,
     "line": int(p[0].line),
     "col": int(p[0].column),
+    "line_end": int(p[0].line_end),
+    "col_end": int(p[0].column_end),
     "message": "Candidate: stdio operation follows fclose/pclose on an unrebound stream value; review stream lifetime, aliases and reachability (CWE-416)",
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -101,6 +103,8 @@ msg = {
     "file": p[0].file,
     "line": int(p[0].line),
     "col": int(p[0].column),
+    "line_end": int(p[0].line_end),
+    "col_end": int(p[0].column_end),
     "message": "Candidate: stdio operation follows fclose/pclose through an unrebound stream slot; review lifetime, aliases and reachability (CWE-416)",
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -149,6 +153,8 @@ msg = {
     "file": p[0].file,
     "line": int(p[0].line),
     "col": int(p[0].column),
+    "line_end": int(p[0].line_end),
+    "col_end": int(p[0].column_end),
     "message": "Candidate: stdio operation follows fclose/pclose through an unchanged indexed stream slot; review lifetime, aliases and reachability (CWE-416)",
 }
 print("COCCIRESULT:" + json.dumps(msg))

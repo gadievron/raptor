@@ -77,6 +77,8 @@ msg = {
     "file": p[0].file,
     "line": int(p[0].line),
     "col": int(p[0].column),
+    "line_end": int(p[0].line_end),
+    "col_end": int(p[0].column_end),
     "message": "Candidate: descriptor operation follows close without recognized replacement; review validity, close/dup results, aliases and descriptor reuse (CWE-672)",
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -120,6 +122,8 @@ msg = {
     "file": p[0].file,
     "line": int(p[0].line),
     "col": int(p[0].column),
+    "line_end": int(p[0].line_end),
+    "col_end": int(p[0].column_end),
     "message": "Candidate: descriptor operation follows close without recognized replacement; review validity, close/dup results, aliases and descriptor reuse (CWE-672)",
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -169,6 +173,8 @@ msg = {
     "file": p[0].file,
     "line": int(p[0].line),
     "col": int(p[0].column),
+    "line_end": int(p[0].line_end),
+    "col_end": int(p[0].column_end),
     "message": "Candidate: descriptor operation follows close without recognized replacement; review validity, close/dup results, aliases and descriptor reuse (CWE-672)",
 }
 print("COCCIRESULT:" + json.dumps(msg))
