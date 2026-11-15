@@ -73,6 +73,8 @@ if _fcntl_wrong:
       "file": p[0].file,
       "line": int(p[0].line),
       "col": int(p[0].column),
+      "line_end": int(p[0].line_end),
+      "col_end": int(p[0].column_end),
       "message": "fcntl-family call mixes file-descriptor and file-status flag domains (CWE-688). Use F_SETFD for FD_CLOEXEC and F_SETFL for file-status flags."
     }
     print("COCCIRESULT:" + json.dumps(msg))
