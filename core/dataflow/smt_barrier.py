@@ -1745,11 +1745,15 @@ def _python_match_dispatch(node: ast.AST) -> bool:
 
 
 def _python_possible_call(node: ast.AST) -> bool:
-    """Negative effect boundary; this never certifies purity or a callee."""
+    """Negative effect boundary; this never certifies purity or a callee.
+
+    Deleting a last reference can run finalisation code that replaces an
+    externally owned slot, even when the deleted name is unrelated.
+    """
     return (_python_operator_dispatch(node) or _python_iteration_dispatch(node)
             or _python_unpack_assignment(node) or _python_unpack_load(node)
             or _python_collection_key_dispatch(node) or _python_match_dispatch(node)) or isinstance(
-        node, (ast.Call, ast.ClassDef, ast.Attribute, ast.Subscript, ast.If, ast.While,
+        node, (ast.Call, ast.ClassDef, ast.Delete, ast.Attribute, ast.Subscript, ast.If, ast.While,
                ast.With, ast.FormattedValue, ast.Import, ast.ImportFrom, ast.Assert)
     ) or bool(
         getattr(node, "decorator_list", [])

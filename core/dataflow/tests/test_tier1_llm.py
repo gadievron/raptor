@@ -1883,3 +1883,30 @@ def test_validator_row_descriptor_external_slot(tmp_path):
                               sink_uri="app.py", sink_line=len(source.splitlines()),
                               sink_class="xss", language="python", complete=lambda *_: reply)
         assert result.status is (Tier0Status.NOT_APPLICABLE if shared else Tier0Status.SOUND), (shared, seen, result)
+
+
+def test_owned_last_reference_deletion_external_slot(tmp_path):
+    import platform
+    from core.dataflow.smt_barrier import Tier0Status
+
+    if platform.python_implementation() != "CPython":
+        pytest.skip("owned last-reference timing control requires CPython")
+    for shared in (False, True):
+        line = "    safe = html.escape('<input>'); del trigger"
+        source = ("import html\nsafe = ''\nclass Trigger:\n    def __del__(self):\n        global safe\n        safe = '<raw marker>'\n        events.append('finalized')\ndef process():\n"
+                  + ("    global safe\n" if shared else "")
+                  + "    trigger = Trigger()\n" + line + "\n    sink(safe)\n")
+        seen, events = [], []
+        namespace = {"sink": seen.append, "events": events}
+        exec(compile(source, "owned-finalizer.py", "exec"), namespace)
+        namespace["process"]()
+        assert events == ["finalized"]
+        assert seen == (["<raw marker>"] if shared else ["&lt;input&gt;"])
+        (tmp_path / "app.py").write_text(source)
+        reply = json.dumps({"kind": "known_safe_call", "validator_source_line": line,
+                            "variable_name": "safe", "charset": "", "forbidden": "",
+                            "library_call": "html.escape", "exact_type": "str"})
+        result = t1.try_tier1b(fix_diff="+" + line + "\n", repo_root=tmp_path,
+                              sink_uri="app.py", sink_line=len(source.splitlines()),
+                              sink_class="xss", language="python", complete=lambda *_: reply)
+        assert result.status is (Tier0Status.NOT_APPLICABLE if shared else Tier0Status.SOUND), (shared, seen, events, result)
