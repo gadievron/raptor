@@ -57,6 +57,9 @@ class CostTracker:
     def add_cost(self, model_name: str, cost: float, tokens: int = 0,
                  thinking_tokens: int = 0) -> None:
         """Record cost and tokens from any source (thread-safe)."""
+        from core.llm.cost import sanitize_cost
+
+        cost = sanitize_cost(cost)
         with self._lock:
             self._total_cost += cost
             self._total_tokens += tokens
