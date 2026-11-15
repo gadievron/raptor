@@ -25,6 +25,12 @@ def state(tmp_path, monkeypatch):
         name: logging.Logger(name, logging.ERROR)
         for name in ["raptor", "packages.sca.discovery"]
     }
+    manager = logging.Manager(root)
+    manager.disable = root.manager.disable
+    root.manager = manager
+    for logger in (*sdk.values(), *named.values()):
+        logger.manager = manager
+        manager.loggerDict[logger.name] = logger
     originals = (root.handlers, tuple(root.handlers), root.level, borrowed.level)
     created = []
 
