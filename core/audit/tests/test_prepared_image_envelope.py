@@ -27,6 +27,7 @@ def test_synthetic_envelope_never_grants_filesystem_authority():
     assert isinstance(value, module.EnvelopeOnly)
     assert value.declared_bytes == 512 and value.trailing_bytes == 0
     assert value.table_offsets[:2] == (96, 200)
+    assert value.root_inode == 0 and value.id_count == 1
     assert not value.namespace_complete
     assert not value.authenticated_build and not value.observed_child_context
 
@@ -222,3 +223,20 @@ def test_metadata_cancellation_preserves_budget_and_close_ownership(backing_case
     assert owner._read_bytes_remaining == remaining and not owner._entries
     assert list(kernel.data) == [9]
     assert [event for event in kernel.events if event[0] == 'close'] == [('close', 100)]
+
+
+def test_header_retains_nondefault_root_reference_and_id_count():
+    value = inspect(header(root_inode=(2 << 16) | 16, ids=3))
+    assert type(value) is module.EnvelopeOnly
+    assert value.root_inode == (2 << 16) | 16 and value.id_count == 3
+    assert not value.namespace_complete and not value.authenticated_build
+
+
+def test_high_root_reference_bits_are_refused_without_large_allocation():
+    declared_bytes = (1 << 32) + 512
+    data = header(root_inode=1 << 48, used=declared_bytes,
+                  directory_table=(1 << 32) + 200, id_table=(1 << 32) + 400)
+    value = module.inspect_header(data, declared_bytes,
+        max_artifact_bytes=declared_bytes, max_inodes=16, max_ids=16)
+    assert type(value) is module.EnvelopeRefusal
+    assert value.reason == 'unsupported root inode reference bits'
