@@ -59,6 +59,8 @@ if _open_requires_mode:
       "file": p[0].file,
       "line": int(p[0].line),
       "col": int(p[0].column),
+      "line_end": int(p[0].line_end),
+      "col_end": int(p[0].column_end),
       "message": "open-family call with O_CREAT/O_TMPFILE but no mode argument — missing creation permissions (CWE-732). Add the mode parameter."
     }
     print("COCCIRESULT:" + json.dumps(msg))

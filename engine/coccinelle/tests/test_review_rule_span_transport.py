@@ -50,6 +50,7 @@ _SCRIPTS = [
     ("popen_fclose", 2),
     ("popen_fclose", 3),
     ("popen_fclose", 4),
+    ("open_creat_no_mode", 0),
 ]
 
 
@@ -80,8 +81,9 @@ def _report(name, index, position, **bindings):
 def test_report_spans_survive_parser_and_deduplication(name, index):
     first = SimpleNamespace(file="owned.c", line="4", column="2", line_end="5", column_end="18")
     second = SimpleNamespace(file="owned.c", line="4", column="2", line_end="6", column_end="23")
-    first_output = _report(name, index, first)
-    second_output = _report(name, index, second)
+    bindings = {"FLAGS": "O_CREAT"} if name == "open_creat_no_mode" else {}
+    first_output = _report(name, index, first, **bindings)
+    second_output = _report(name, index, second, **bindings)
     # Plain-prefix parsing is an owned transport control, not a nonce-authentication test.
     matches = _parse_results(first_output + second_output + first_output, name)
     assert len(matches) == 3
@@ -167,3 +169,10 @@ def test_unknown_strncpy_format_remains_candidate():
     assert len(rows) == 1
     assert (rows[0].line_end, rows[0].column_end) == (5, 18)
     assert "unknown format" in rows[0].message
+
+
+@pytest.mark.parametrize("flags", ["0x40", "O_CREAT & 0", "flags()"],
+                         ids=["numeric-only", "masked-out", "unsupported-call"])
+def test_open_mode_flag_filters_stay_quiet(flags):
+    position = SimpleNamespace(file="owned.c", line=4, column=2, line_end=5, column_end=18)
+    assert _report("open_creat_no_mode", 0, position, FLAGS=flags) == ""
