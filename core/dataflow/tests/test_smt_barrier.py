@@ -1473,7 +1473,7 @@ def test_try_tier0_declines_java_path_builder_without_transfer_contract(tmp_path
 
 
 @_requires_z3
-def test_try_tier0_sound_on_ruby_archetype(tmp_path: Path):
+def test_try_tier0_ruby_archetype_requires_receiver_dispatch(tmp_path: Path):
     (tmp_path / "app.rb").write_text(
         "def get_config(name)\n"                                           # line 1
         "  raise ArgumentError unless name =~ /\\A[A-Za-z0-9_+-]+\\z/\n"   # line 2
@@ -1491,7 +1491,11 @@ def test_try_tier0_sound_on_ruby_archetype(tmp_path: Path):
         sink_uri="app.rb", sink_line=3, sink_class="pathtrav",
         language="ruby",
     )
-    assert r.status is sb.Tier0Status.SOUND
+    assert r.status is sb.Tier0Status.NOT_APPLICABLE
+    assert r.artifact is None
+    assert r.extras["unverified_source_contracts"] == [sb.RUBY_CHARSET_DISPATCH_CONTRACT]
+    assert r.extras["smt_character_model"]["source_bound"] is False
+    assert sb.prove_neutralizes(r.spec, "pathtrav").sound
 
 
 def test_try_tier0_declines_line_anchored_ruby_guard(tmp_path: Path):

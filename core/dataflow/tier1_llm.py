@@ -50,6 +50,7 @@ from pathlib import Path
 
 from core.dataflow import known_safe_calls
 from core.dataflow.smt_barrier import (
+    RUBY_CHARSET_DISPATCH_CONTRACT,
     Tier0Result,
     Tier0Status,
     ValidatorSpec,
@@ -944,6 +945,17 @@ def try_tier1b(
                 spec=mech,
                 extras={"validator_line": validator_line, "var_name": mech.var_name,
                         "llm_extracted": True,
+                        "smt_character_model": {"sound": True, "source_bound": False,
+                                                "reasoning": verdict.reasoning}},
+            )
+        if language == "ruby":
+            return Tier0Result(
+                Tier0Status.NOT_APPLICABLE,
+                "Ruby regex receiver dispatch is unverified; character model is conditional",
+                spec=mech,
+                extras={"validator_line": validator_line, "var_name": mech.var_name,
+                        "llm_extracted": True,
+                        "unverified_source_contracts": [RUBY_CHARSET_DISPATCH_CONTRACT],
                         "smt_character_model": {"sound": True, "source_bound": False,
                                                 "reasoning": verdict.reasoning}},
             )

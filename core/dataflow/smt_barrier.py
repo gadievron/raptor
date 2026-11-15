@@ -25,6 +25,8 @@ Successful XSS, SQL and command character proofs remain conditional diagnostics
 with NOT_APPLICABLE status and no barrier artifact: HTML interpretation,
 query/output composition and command identity/position are not verified by
 these character sets. They cannot authorize suppression of those findings.
+Ruby receiver-based regex guards also require verified receiver dispatch;
+a matching source expression does not establish which method ran.
 Unsupported source shapes and missing obligations fall through to later
 adjudication. No LLM assertion supplies a missing proof obligation.
 
@@ -177,6 +179,9 @@ def danger_chars_for(sink_class: str):
     decide per element with the same chars the regex-intersection
     proof uses — the finite-language specialisation of one model."""
     return _DANGER_CHARS.get(sink_class)
+
+
+RUBY_CHARSET_DISPATCH_CONTRACT = "ruby_match_receiver_and_method_origin"
 
 
 # --------------------------------------------------------------------------
@@ -3845,6 +3850,16 @@ def try_tier0(
                 "and output composition are unverified",
                 spec=spec,
                 extras={"validator_line": line, "var_name": spec.var_name,
+                        "smt_character_model": {"sound": True, "source_bound": False,
+                                                "reasoning": verdict.reasoning}},
+            )
+        if language == "ruby":
+            return Tier0Result(
+                Tier0Status.NOT_APPLICABLE,
+                "Ruby regex receiver dispatch is unverified; character model is conditional",
+                spec=spec,
+                extras={"validator_line": line, "var_name": spec.var_name,
+                        "unverified_source_contracts": [RUBY_CHARSET_DISPATCH_CONTRACT],
                         "smt_character_model": {"sound": True, "source_bound": False,
                                                 "reasoning": verdict.reasoning}},
             )
