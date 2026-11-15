@@ -103,15 +103,18 @@ def test_parse_failures_keep_the_borrowed_descriptor_open(tmp_path, payload):
 def test_non_regular_descriptor_is_refused_before_read():
     read_fd, write_fd = os.pipe()
     try:
-        os.write(write_fd, b'{}')
+        try:
+            os.write(write_fd, b'{}')
+        finally:
+            os.close(write_fd)
+        with os.fdopen(read_fd, "rb", closefd=False) as raw:
+            borrowed = _Borrowed(raw)
+            with pytest.raises(ValueError, match="not a regular file"):
+                _api().load_json_stream_bounded(borrowed, max_bytes=16)
+            assert borrowed.read_sizes == [] and borrowed.close_calls == 0
+            assert not raw.closed
     finally:
-        os.close(write_fd)
-    with os.fdopen(read_fd, "rb") as raw:
-        borrowed = _Borrowed(raw)
-        with pytest.raises(ValueError, match="not a regular file"):
-            _api().load_json_stream_bounded(borrowed, max_bytes=16)
-        assert borrowed.read_sizes == [] and borrowed.close_calls == 0
-        assert not raw.closed
+        os.close(read_fd)
 
 
 def test_primary_interruption_is_not_swallowed_or_closed(tmp_path):
