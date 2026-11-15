@@ -1,5 +1,7 @@
 """Validation references belong to one target and its current producer snapshot."""
 
+from contextlib import closing
+
 import pytest
 
 from core.json import save_json
@@ -51,7 +53,7 @@ def test_reused_ids_bind_only_the_outcomes_target(tmp_path):
     # it cannot be correct for both references to the same display id.
     _validate(first_run, first, graph)
     _validate(second_run, second, graph)
-    with open_graph(graph) as conn:
+    with closing(open_graph(graph)) as conn, conn:
         rows = conn.execute(
             "SELECT vs.target_path AS outcome_target, fs.target_path AS finding_target "
             "FROM edges v JOIN nodes n ON n.id=v.dst_id "
@@ -74,7 +76,7 @@ def test_validation_uses_latest_snapshot_without_historical_fallback(tmp_path, r
         conn.execute("UPDATE snapshots SET created_at='2001-01-01' WHERE producer_run=?",
                      (str(new_run.resolve()),))
     _validate(new_run, target, graph)
-    with open_graph(graph) as conn:
+    with closing(open_graph(graph)) as conn, conn:
         rows = conn.execute(
             "SELECT s.producer_run FROM edges v JOIN nodes n ON n.id=v.dst_id "
             "JOIN snapshots s ON s.id=n.snapshot_id WHERE v.kind='VALIDATES'"
@@ -94,13 +96,13 @@ def test_non_understand_producer_identity_still_joins(tmp_path, kind):
     else:
         _write_sarif(run)
         ingest_codeql_sarif(run, str(target), graph_path=graph)
-    with open_graph(graph) as conn:
+    with closing(open_graph(graph)) as conn, conn:
         node = conn.execute("SELECT id, stable_key FROM nodes WHERE kind=?", (kind,)).fetchone()
         assert node is not None
         node_id, ref = node["id"], node["stable_key"].split("://", 1)[1]
     save_json(run / "validation-outcomes.json", [{"finding_id": ref, "status": "exploitable"}])
     ingest_validation_outcomes(run, str(target), graph_path=graph)
-    with open_graph(graph) as conn:
+    with closing(open_graph(graph)) as conn, conn:
         assert [row["dst_id"] for row in conn.execute(
             "SELECT dst_id FROM edges WHERE kind='VALIDATES'",
         )] == [node_id]
