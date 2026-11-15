@@ -31,8 +31,9 @@ rules:
     languages: [php]
     severity: HIGH
     message: >
-      Request data is concatenated into a shell command string without
-      escapeshellarg. Even under escapeshellcmd, spaces and leading
+      Candidate: request data reaches a process API's command argument.
+      Review the command form and program's argument/option contract.
+      Even under escapeshellcmd, spaces and leading
       dashes survive, so the attacker can append extra arguments or
       options to the invoked program (argument injection). Quote each
       value with escapeshellarg or avoid the shell (proc_open with an
