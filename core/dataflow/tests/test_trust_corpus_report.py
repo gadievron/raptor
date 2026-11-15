@@ -71,8 +71,10 @@ def test_sqlite_uri_reserved_characters_are_literal_read_only_filename(tmp_path:
 def test_missing_table_is_unavailable_read_not_completed_empty_query(tmp_path: Path):
     source = tmp_path / "no-table.db"
     con = sqlite3.connect(source)
-    con.execute("CREATE TABLE unrelated (value TEXT)")
-    con.close()
+    try:
+        con.execute("CREATE TABLE unrelated (value TEXT)")
+    finally:
+        con.close()
     before = source.read_bytes()
     rep = r.analyze(source)
     assert rep.processed == 0 and rep.read_rows is None
