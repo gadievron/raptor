@@ -58,17 +58,31 @@ def bv_to_int(raw: int, width: int, signed: bool) -> int:
     return raw
 
 
+def _named_entries(mapping: Mapping[Any, Any], *, argument: str) -> tuple[tuple[str, Any], ...]:
+    """Snapshot textual identities before hashing or model evaluation."""
+    entries: list[tuple[str, Any]] = []
+    names: set[str] = set()
+    for name, value in mapping.items():
+        if not isinstance(name, str):
+            raise ValueError(f"{argument} names must be strings")
+        name = str.__str__(name)
+        if name in names:
+            raise ValueError(f"duplicate {argument} name {name!r}")
+        names.add(name)
+        entries.append((name, value))
+    return tuple(entries)
+
+
 def _signedness_context(signed):
     """Snapshot explicit flags, including entries absent from this model."""
     if type(signed) is bool:
         return signed
     if not isinstance(signed, Mapping):
         raise ValueError("signed must be a boolean or a mapping of names to booleans")
-    context = dict(signed)
-    for name, value in context.items():
-        if not isinstance(name, str):
-            raise ValueError("signedness map names must be strings")
+    context = {}
+    for name, value in _named_entries(signed, argument="signedness map"):
         require_bool(value, argument=f"signed[{name!r}]")
+        context[name] = value
     return context
 
 
@@ -150,7 +164,8 @@ def format_vars(
 ) -> dict[str, int]:
     """Render named bitvector expressions from a model without mutating it.
 
-    Registry keys are output identities and signedness-map keys. Expressions
+    Registry keys are output identities and signedness-map keys. Stored text
+    defines name identity; duplicate textual names are rejected. Expressions
     may be variables, constants, or derived terms in the model's context.
     Unmapped signedness keys retain unsigned rendering.
 
@@ -165,10 +180,8 @@ def format_vars(
         raise ValueError("model must be a Z3 model")
     if not isinstance(vars_, Mapping):
         raise ValueError("variable registry must be a mapping")
-    registry = tuple(vars_.items())
+    registry = _named_entries(vars_, argument="variable registry")
     for name, expression in registry:
-        if not isinstance(name, str):
-            raise ValueError("variable registry names must be strings")
         require_bv(expression, argument=f"expression for {name!r}")
         if expression.ctx != model.ctx:
             raise ValueError("variable expressions must share the model's Z3 context")
