@@ -23,7 +23,8 @@ from core.audit import callback_lifetime as cb
     pytest.param('kfree_rcu(d, rcu);', True,
                  'RCU-deferred reclamation', id='rcu-is-its-own-barrier'),
     pytest.param('d = container_of(w, struct dev, work);\ndel_timer(&d->timer);\nkfree(d);',
-                 True, 'self-handler teardown', id='self-handler-priority'),
+                 False, 'async cancel at line 2 precedes a free at line 3',
+                 id='unproven-self-handler-keeps-async-priority'),
 ])
 def test_safe_teardown_keeps_flags_and_first_reason(source, safe, reason):
     result = cb.check_safe_teardown(source)
@@ -73,15 +74,14 @@ def test_custom_split_keeps_original_rcu_walk():
     assert cb.check_callback_lifetime_local(Source('custom view')).rcu_kfree_mismatch
 
 
-@pytest.mark.parametrize('source', ['kfree(d);', 'del_timer(&d->timer);'],
-                         ids=['free-only', 'async-only'])
-def test_self_handler_walk_requires_both_event_types(monkeypatch, source):
-    class UnexpectedSearch:
-        def search(self, line):
-            pytest.fail('Self-handler walk cannot affect this result')
-
-    monkeypatch.setattr(cb, '_SELF_HANDLER_RE', UnexpectedSearch())
-    cb.check_safe_teardown(source)
+@pytest.mark.parametrize(('source', 'safe', 'no_dealloc'), [
+    ('d = container_of(w, struct dev, work); kfree(d);', False, False),
+    ('d = container_of(w, struct dev, work); del_timer(&d->timer);', True, True),
+], ids=['free-only', 'async-only'])
+def test_container_syntax_preserves_event_outcomes(source, safe, no_dealloc):
+    result = cb.check_safe_teardown(source)
+    assert result.safe is safe
+    assert result.no_dealloc is no_dealloc
 
 
 def test_call_free_lines_skip_call_patterns(monkeypatch):
