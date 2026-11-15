@@ -5,7 +5,7 @@ from itertools import product
 
 import pytest
 
-from core.source import read_text_capped, split_lines
+from core.source import read_contained_text_capped, read_text_capped, split_lines
 from core.source.windows import read_text_line_window_capped
 from packages.codeql import dataflow_validator as module
 
@@ -21,9 +21,11 @@ def test_equivalent_windows(tmp_path, monkeypatch, caplog, raw):
     validator.logger = logging.getLogger("streaming-codeql")
     for cap in (0, 1, 3, 5, 10, 100):
         monkeypatch.setattr(module, "read_text_line_window_capped",
-            lambda path, start, end: read_text_line_window_capped(path, start, end, max_chars=cap))
+            lambda path, start, end, **kw: read_text_line_window_capped(path, start, end, max_chars=cap, **kw))
         monkeypatch.setattr(module, "read_text_capped",
             lambda path, **kw: read_text_capped(path, cap, **kw))
+        monkeypatch.setattr(module, "read_contained_text_capped",
+            lambda root, path, **kw: read_contained_text_capped(root, path, max_chars=cap, **kw))
         content, truncated = read_text_capped(path, cap, newline="")
         lines = split_lines(content)
         for line, margin in product((-10, -2, 0, 1, 3, 100), (-10, -2, 0, 1, 5)):

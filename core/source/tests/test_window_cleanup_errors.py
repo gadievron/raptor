@@ -9,7 +9,7 @@ from core.testing.module_views import module_function_view
 
 
 @pytest.mark.parametrize(('kind', 'anchored'), [
-    ('prefix', False), ('prefix', True), ('bytes', False), ('bytes', True), ('text', False),
+    ('prefix', False), ('prefix', True), ('bytes', False), ('bytes', True), ('text', False), ('text', True),
 ])
 @pytest.mark.parametrize('failure', [None, OSError, TypeError, KeyboardInterrupt])
 @pytest.mark.parametrize('close_error', [False, True])

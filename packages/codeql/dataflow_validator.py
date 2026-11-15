@@ -45,7 +45,7 @@ from core.llm.scorecard import fast_tier_model_name, run_cheap_fp_check
 from core.llm.task_types import TaskType
 from core.logging import get_logger
 from core.paths import confine
-from core.source import read_text_capped, split_lines
+from core.source import read_contained_text_capped, read_text_capped, split_lines
 from core.source.windows import read_text_line_window_capped
 from core.security.prompt_defense_profiles import CONSERVATIVE
 from core.security.prompt_envelope import (
@@ -633,10 +633,11 @@ class DataflowValidator:
             if streaming:
                 start = max(0, line - context_lines - 1)
                 got = read_text_line_window_capped(
-                    resolved, start, line + context_lines,
+                    resolved, start, line + context_lines, target_root=repo_root,
                 )
             else:
-                got = read_text_capped(resolved, newline="")
+                got = (read_text_capped(resolved, newline="") if repo_root is None
+                       else read_contained_text_capped(repo_root, resolved, newline=""))
             if got is None:
                 self.logger.warning(
                     "Failed to read source context at %s", resolved)

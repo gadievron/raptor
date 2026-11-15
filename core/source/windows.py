@@ -138,6 +138,7 @@ def _after_text_newlines(chunk: str, count: int, offset: int = 0) -> int:
 
 def read_text_line_window_capped(
     path: Path, start: int, end: int, *, max_chars: int = DEFAULT_MAX_SOURCE_CHARS,
+    target_root: str | Path | None = None,
 ) -> tuple[list[str], bool] | None:
     """Window over read_text_capped(..., newline="")'s visible prefix.
 
@@ -147,10 +148,15 @@ def read_text_line_window_capped(
     line trimming (and its no-newline exception) before splitting lines.
     Read through the character probe even after finding the window so
     later read errors and the truncation flag retain their meaning.
+    A supplied target root anchors the open beneath that directory.
     """
     if start < 0 or end < 0 or max_chars < 0:
         raise ValueError("window bounds and character cap must be nonnegative")
-    stream = open_regular(path, "r", encoding="utf-8", errors="replace", newline="")
+    stream = (
+        open_regular(path, "r", encoding="utf-8", errors="replace", newline="")
+        if target_root is None else
+        _open_contained(target_root, path, "r", encoding="utf-8", errors="replace", newline="")
+    )
     if stream is None:
         return None
     parts: list[str] = []
