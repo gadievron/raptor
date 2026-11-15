@@ -54,8 +54,10 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.deserialisation.unsafe.python.yaml
     message: >-
-      yaml.load() without SafeLoader deserialises arbitrary Python objects.
-      Use yaml.safe_load() or pass Loader=SafeLoader explicitly.
+      Candidate: data from a selected source pattern reaches a yaml.load
+      call. Review source trust, library version, the selected loader and
+      permitted object construction. Use an explicitly restricted data-only
+      loader for untrusted input.
     languages: [python]
     severity: CRITICAL
     mode: taint
