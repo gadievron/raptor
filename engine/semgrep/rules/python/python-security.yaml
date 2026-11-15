@@ -114,12 +114,11 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.python.header-url-boundary-injection
     message: >-
-      A header-derived value is interpolated directly after "://" in a
-      composed URL. A "/", "?", or "#" inside the value shifts the
-      path/query/fragment boundaries when the composite is re-parsed
-      (urlsplit/urlparse), so the parsed path diverges from the routed path
-      and path-based authorization can be bypassed. Validate the value for
-      delimiter characters (or percent-encode it) before composing.
+      URL-shaped text has interpolation-like spelling containing "header"
+      after "://". Review the value's origin and the eventual parser:
+      delimiter characters can change URL components. This syntax alone
+      does not establish a routing or authorisation bypass. Validate the
+      intended authority and components before using the composed URL.
     languages: [python]
     severity: MEDIUM
     patterns:
