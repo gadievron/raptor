@@ -109,8 +109,8 @@ def _describe_pool_completeness(*, file_count: int, truncated: bool) -> str:
     N files" so the LLM knows whether the absence of a candidate
     reflects "no validator exists" or "we didn't look at the file
     that defines it"."""
-    if file_count == 0:
-        return "no_files_in_scope"
     if truncated:
         return f"scoped_to_first_{file_count}_files_truncated"
+    if file_count == 0:
+        return "no_files_in_scope"
     return f"scoped_to_{file_count}_files"
