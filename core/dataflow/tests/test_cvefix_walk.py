@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import sqlite3
+from contextlib import closing
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -129,8 +130,9 @@ def test_walk_records_and_resumes(monkeypatch, tmp_path: Path):
     calls.clear()
     walk(meta, results, work_dir=tmp_path / "w", log=lambda *a: None)
     assert calls == []
-    with sqlite3.connect(str(results)) as con:
-        assert con.execute("SELECT count(*) FROM walk_results").fetchone()[0] == 2
+    with closing(sqlite3.connect(str(results))) as con:
+        with con:
+            assert con.execute("SELECT count(*) FROM walk_results").fetchone()[0] == 2
 
 
 def test_walk_keeps_both_cwes_of_one_commit(monkeypatch, tmp_path: Path):
@@ -159,9 +161,10 @@ def test_walk_keeps_both_cwes_of_one_commit(monkeypatch, tmp_path: Path):
         lambda pair, **kw: WalkResult(pair.fix_hash, "ok", before_count=1, after_count=1),
     )
     cvefix_walk.walk(meta, results, work_dir=tmp_path / "w", log=lambda *a: None)
-    with sqlite3.connect(str(results)) as con:
-        rows = con.execute(
-            "SELECT cwe FROM walk_results WHERE fix_hash='fixA' ORDER BY cwe").fetchall()
+    with closing(sqlite3.connect(str(results))) as con:
+        with con:
+            rows = con.execute(
+                "SELECT cwe FROM walk_results WHERE fix_hash='fixA' ORDER BY cwe").fetchall()
     assert [r[0] for r in rows] == ["CWE-79", "CWE-89"]  # both kept, not collapsed
 
 
@@ -191,9 +194,10 @@ def test_promote_updates_only_on_recovery(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(cvefix_walk, "process_pair", fake)
     summ = promote_misses(results, work_dir=tmp_path / "w", log=lambda *a: None)
     assert summ == {"candidates": 2, "promoted": 1}             # f3 not a candidate
-    with sqlite3.connect(str(results)) as con:
-        got = {r[0]: (r[1], r[2], r[3]) for r in con.execute(
-            "SELECT fix_hash, status, before_count, after_count FROM walk_results")}
+    with closing(sqlite3.connect(str(results))) as con:
+        with con:
+            got = {r[0]: (r[1], r[2], r[3]) for r in con.execute(
+                "SELECT fix_hash, status, before_count, after_count FROM walk_results")}
     assert got["f1"] == ("ok_built", 5, 3)                     # promoted
     assert got["f2"] == ("ok", 0, 0)                           # unchanged (graceful)
     assert got["f3"] == ("ok", 2, 0)                           # untouched
@@ -514,8 +518,9 @@ def test_walk_limit(monkeypatch, tmp_path: Path):
         lambda pair, **kw: WalkResult(pair.fix_hash, "ok", before_count=0, after_count=0),
     )
     walk(meta, results, work_dir=tmp_path / "w", limit=1, log=lambda *a: None)
-    with sqlite3.connect(str(results)) as con:
-        assert con.execute("SELECT count(*) FROM walk_results").fetchone()[0] == 1
+    with closing(sqlite3.connect(str(results))) as con:
+        with con:
+            assert con.execute("SELECT count(*) FROM walk_results").fetchone()[0] == 1
 
 
 # ---------------------------------------------------------------------------
