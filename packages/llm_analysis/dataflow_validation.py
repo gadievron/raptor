@@ -1032,6 +1032,7 @@ def _hypothesis_cache_key(
         "context": h.context,
         "database_path": str(database_path) if database_path is not None else "",
         "finding_scope": {
+            "prebuilt_sub_static_exemption": _taint_sub_static_exemption(finding),
             "language": _finding_language(finding),
             "file": str(finding.get("file_path") or finding.get("file") or ""),
             "line": str(finding.get("start_line") or finding.get("line") or 0),
