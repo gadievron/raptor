@@ -315,7 +315,7 @@ class TestExploitGenGate:
         """
         agent = self._agent(tmp_path)
         v = self._make_vuln()
-        v.analysis = {"dataflow_validation": {"verdict": "refuted"}}
+        v.analysis = {"dataflow_validation": {"verdict": "refuted", "tier": "iris_tier1"}}
 
         # Even with no DBs configured, the cached verdict should be
         # used directly. tier1_check_finding must NOT be called.

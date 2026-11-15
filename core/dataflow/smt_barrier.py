@@ -1115,6 +1115,18 @@ def _validator_call_error_may_reach_sink(
                 for stmt in body
             )
 
+        if isinstance(node, (ast.Try, ast.TryStar)):
+            def spans(statements, line):
+                return any(stmt.lineno <= line <= (stmt.end_lineno or stmt.lineno)
+                           for stmt in statements)
+
+            # Finally runs on exceptional edges too. A failed call in
+            # an earlier section leaves its old binding visible there,
+            # even when no handler swallows the exception.
+            preceding = [*node.body, *node.orelse,
+                         *(stmt for handler in node.handlers for stmt in handler.body)]
+            if spans(node.finalbody, sink_line) and spans(preceding, validator_line):
+                return True
         if not in_body(validator_line) or in_body(sink_line):
             continue
         if isinstance(node, (ast.With, ast.AsyncWith)):
@@ -1229,6 +1241,10 @@ def _validator_in_branch(
                 if _spans(stmt.body, target) or _spans(stmt.orelse, target):
                     return True
             elif isinstance(stmt, _TRY_NODES):
+                # Else is skipped when a body exception is handled. It
+                # cannot establish a validator for a sink outside else.
+                if _spans(stmt.orelse, target) and not _spans(stmt.orelse, sink_line):
+                    return True
                 for handler in stmt.handlers:  # type: ignore[attr-defined]
                     if _spans(handler.body, target):
                         return True

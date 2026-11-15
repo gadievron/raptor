@@ -589,10 +589,13 @@
     {
       "source": "packages/hypothesis_validation/adapters/base.py",
       "entrypoints": [
-        "make_sandbox_runner._runner"
+        "make_sandbox_runner._bind_runtime._runner"
       ],
       "contracts": [
-        "packages/hypothesis_validation/tests/test_security.py::TestMakeSandboxRunner::test_default_engages_read_restriction_and_fake_home"
+        "packages/hypothesis_validation/tests/test_security.py::TestMakeSandboxRunner::test_default_engages_read_restriction_and_fake_home",
+        "packages/semgrep/tests/test_snap_hypothesis_callback.py::test_hypothesis_runtime_adaptation_preserves_policy_and_original_closure",
+        "packages/semgrep/tests/test_snap_hypothesis_callback.py::test_hypothesis_runtime_command_mismatch_never_reaches_sandbox",
+        "packages/semgrep/tests/test_snap_hypothesis_callback.py::test_actual_input_grants_do_not_expand_the_runtime_frontend"
       ]
     },
     {
@@ -624,10 +627,12 @@
     {
       "source": "packages/llm_analysis/patch_gate.py",
       "entrypoints": [
-        "_make_runner._runner"
+        "_make_runner._bind_runtime._runner"
       ],
       "contracts": [
-        "packages/llm_analysis/tests/test_patch_gate.py::TestDegradation::test_sandbox_unavailable_fails_closed"
+        "packages/llm_analysis/tests/test_patch_gate.py::TestDegradation::test_sandbox_unavailable_fails_closed",
+        "packages/llm_analysis/tests/test_semgrep_snap_runtime.py::test_patch_gate_runtime_adapter_preserves_scoped_policy_and_original",
+        "packages/llm_analysis/tests/test_semgrep_snap_runtime.py::test_patch_gate_runtime_mismatch_refuses_before_execution"
       ]
     },
     {

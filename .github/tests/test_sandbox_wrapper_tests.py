@@ -49,6 +49,26 @@ def test_new_wrapper_and_new_entrypoint_need_review(tmp_path):
     assert any('entrypoints changed' in e for e in inventory.registry_errors(tmp_path, registry))
 
 
+def test_runtime_binding_scope_drift_still_requires_review(tmp_path):
+    registry = _fixture(tmp_path)
+    source = tmp_path / 'packages/owned.py'
+    source.write_text('from core.sandbox import run as confined\n'
+                      'def dispatch():\n'
+                      '    def bind_runtime():\n'
+                      '        def runner():\n'
+                      '            return confined(["true"])\n'
+                      '        return runner\n'
+                      '    return bind_runtime()\n')
+    assert inventory.policy_entrypoints(source) == ['dispatch.bind_runtime.runner']
+    assert any('entrypoints changed' in error
+               for error in inventory.registry_errors(tmp_path, registry))
+    registry['wrappers'][0]['entrypoints'] = ['dispatch.bind_runtime.runner']
+    assert inventory.registry_errors(tmp_path, registry) == []
+    registry['wrappers'][0]['contracts'] = ['tests/test_owned.py::test_missing']
+    assert any('missing test' in error
+               for error in inventory.registry_errors(tmp_path, registry))
+
+
 def test_missing_case_and_platform_binding_fail(tmp_path):
     registry = _fixture(tmp_path)
     row = registry['wrappers'][0]

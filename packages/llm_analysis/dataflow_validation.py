@@ -675,6 +675,8 @@ def validate_dataflow_claims(
             hypothesis,
             deep_validate=effective_deep_validate,
             tier4_inputs=_tier4_input_key(analysis),
+            finding=finding,
+            database_path=getattr(adapter, "_database_path", None),
         )
 
         cached = cache.get(cache_key)
@@ -1000,6 +1002,8 @@ def _hypothesis_cache_key(
     *,
     deep_validate: bool = False,
     tier4_inputs: "tuple[str, ...]" = (),
+    finding: dict | None = None,
+    database_path: Path | None = None,
 ) -> str:
     """Cheap content-addressed key for within-run caching.
 
@@ -1015,11 +1019,29 @@ def _hypothesis_cache_key(
     duplicate-hypothesis finding that would have run Tier 2/3/4 reused
     an earlier finding's shallow Tier 1 result, making verdicts
     iteration-order dependent.
+
+    Context, finding location/coverage inputs, and database identity also
+    distinguish results. A match or coverage check for one finding must not
+    become evidence for a different source location or database.
     """
     import hashlib
     import json
+    finding = finding or {}
     payload = {
         "claim": h.claim,
+        "context": h.context,
+        "database_path": str(database_path) if database_path is not None else "",
+        "finding_scope": {
+            "language": _finding_language(finding),
+            "file": str(finding.get("file_path") or finding.get("file") or ""),
+            "line": str(finding.get("start_line") or finding.get("line") or 0),
+            "function": str(
+                finding.get("function_name") or finding.get("function")
+                or finding.get("entry_function") or ""
+            ),
+            "cwe": str(finding.get("cwe_id") or ""),
+            "rule": str(finding.get("rule_id") or ""),
+        },
         "target": str(h.target),
         "target_function": h.target_function,
         "cwe": h.cwe,
