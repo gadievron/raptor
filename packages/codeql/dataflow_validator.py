@@ -45,6 +45,7 @@ from core.llm.scorecard import fast_tier_model_name, run_cheap_fp_check
 from core.llm.task_types import TaskType
 from core.logging import get_logger
 from core.paths import confine
+from core.sarif.parser import _coerce_line
 from core.source import read_contained_text_capped, read_text_capped, split_lines
 from core.source.windows import read_text_line_window_capped
 from core.security.prompt_defense_profiles import CONSERVATIVE
@@ -513,11 +514,17 @@ class DataflowValidator:
 
             region = physical_loc.get("region", {})
             artifact = physical_loc.get("artifactLocation", {})
+            line = _coerce_line(region.get("startLine", 0))
+            column = _coerce_line(region.get("startColumn", 0))
+            if line is None or column is None:
+                self.logger.warning(
+                    "Invalid SARIF flow coordinates; using 0 for unknown line or column",
+                )
 
             step = DataflowStep(
                 file_path=unquote(artifact.get("uri", ""), errors="strict"),
-                line=region.get("startLine", 0),
-                column=region.get("startColumn", 0),
+                line=line or 0,
+                column=column or 0,
                 snippet=(region.get("snippet") or {}).get("text", ""),
                 label=(loc.get("message") or {}).get("text", "")
             )
