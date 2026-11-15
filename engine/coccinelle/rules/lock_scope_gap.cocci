@@ -19,6 +19,7 @@
 // witness. This also bounds the candidate cross-product on large files.
 // Covers CWE-362 / CWE-667: race condition via inadequate locking scope.
 // @role: detection
+// raptor: confirm-only
 
 // spin_lock variant — field accessed under lock, then again after unlock
 @spin_scope_gap@

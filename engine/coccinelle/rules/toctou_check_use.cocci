@@ -25,6 +25,7 @@
 // too (a caller-held lock still suppresses nothing), so hits are
 // leads for review, not proofs.
 // @role: detection
+// raptor: confirm-only
 
 // Permission check followed by privileged operation without lock.
 // Only checks that BIND the object qualify (inode_permission): the
