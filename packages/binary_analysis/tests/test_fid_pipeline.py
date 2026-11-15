@@ -9,6 +9,7 @@ never recorded mints nothing (fail-closed).
 
 from __future__ import annotations
 
+from contextlib import closing
 import json
 import sqlite3
 from pathlib import Path
@@ -185,17 +186,19 @@ class TestPipelineFids:
 
     def test_graph_function_nodes_carry_fid(self, tmp_path, monkeypatch):
         result, _out = self._run(tmp_path, monkeypatch)
-        with sqlite3.connect(result.graph_path) as conn:
-            rows = conn.execute(
-                "SELECT name, props_json FROM nodes WHERE kind='function'",
-            ).fetchall()
+        with closing(sqlite3.connect(result.graph_path)) as conn:
+            with conn:
+                rows = conn.execute(
+                    "SELECT name, props_json FROM nodes WHERE kind='function'",
+                ).fetchall()
         props = {name: json.loads(blob) for name, blob in rows}
         assert props["main"]["fid"] == f"{ANCHOR16}:0x1000"
         # ...and the binary node carries the identity legs.
-        with sqlite3.connect(result.graph_path) as conn:
-            blob = conn.execute(
-                "SELECT props_json FROM nodes WHERE kind='binary'",
-            ).fetchone()[0]
+        with closing(sqlite3.connect(result.graph_path)) as conn:
+            with conn:
+                blob = conn.execute(
+                    "SELECT props_json FROM nodes WHERE kind='binary'",
+                ).fetchone()[0]
         binary_props = json.loads(blob)
         assert binary_props["build_id"] == BUILD_ID
         assert binary_props["image_base"] == 0x400000
