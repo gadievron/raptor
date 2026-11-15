@@ -12,7 +12,7 @@ from core.testing.tempdirs import private_tempfile_module
 from core.testing.module_views import module_function_view
 source = root / "core/testing/tests/test_tempfile_views.py"
 data = source.read_bytes()
-assert hashlib.sha256(data).hexdigest() == "0514a96b94697e53bfab082d1e1c295446b86ea0bd0d46502b4eb1551210c7cd"
+assert hashlib.sha256(data).hexdigest() == "e7ca53ee28e5c30ab22b0d23de1c2c8f78c7c2551934e84b3f5abc6cb5896b2d"
 tree = ast.parse(data)
 node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "test_real_factory_obeys_private_root_and_releases_resources")
 node.decorator_list = []
