@@ -2921,6 +2921,10 @@ def _sink_reads_chain_directly(
     if len(statements) != 1:
         return False
     statement = statements[0]
+    # This fallback tracks effects only through the reported row. A later
+    # callee/operand row can dispatch before the sink reads a shared value.
+    if statement.end_lineno != sink_line:
+        return False
     if not isinstance(statement, (ast.Return, ast.Expr, ast.Assign, ast.AnnAssign)):
         return False
     value = statement.value
