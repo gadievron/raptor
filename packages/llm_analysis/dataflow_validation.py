@@ -2093,9 +2093,9 @@ def _finding_file_in_db(finding: dict, db_path: Path) -> bool:
 # — it does not need the substrate's general 64 MB member cap, and an
 # adversarial DB with many huge ZIP_STORED "source" members would
 # otherwise materialise each of them in full. A member over this
-# budget reads as None → the coverage gate refuses to refute
-# (condemn-toward-abstain, same direction as every other read failure
-# here).
+# budget reads as None. The function-coverage gate blocks only positive
+# evidence of a missing function, so an unavailable read does not itself
+# block refutation. File and callable-inventory coverage checks are separate.
 _DB_SOURCE_MEMBER_CAP = 10 * 1024 * 1024
 
 # Total characters the memo below may retain. The old
@@ -2111,8 +2111,9 @@ _db_source_cache_chars = 0
 def _read_db_source(db_path: Path, indexed_path: str) -> str | None:
     """Read a single indexed source file's text from `<db>/src.zip`.
 
-    Returns None on any error or on an over-budget member — caller
-    treats that as 'can't verify' and biases away from refutation.
+    Returns None on any error or on an over-budget member. The
+    function-coverage caller treats this as unknown and does not block
+    refutation on that basis alone.
     Cached per (db, path) with a generation stamp so replaced archives
     refresh in place; repeat findings need not re-open the zip. The memo
     is bounded by total retained characters (insertion-order eviction),
