@@ -263,6 +263,18 @@ def test_evaluate_finding_skips_for_non_c_cpp_files():
     assert out["skipped_reason"] == "non_c_cpp_file"
 
 
+def test_evaluate_finding_abstains_for_extensionless_file():
+    out = evaluate_finding(
+        {"function": "owned_candidate", "file": "src/unit"}, PrereqFacts()
+    )
+    assert out["applicable"] is True
+    assert out["checks"]["function_exists"] is None
+    assert out["checks"]["function_has_callers"] is None
+    assert out["details"]["abstained"] == "ext_not_in_fact_base"
+    assert out["skipped_reason"] is None
+
+
+
 def test_evaluate_finding_function_exists_with_callers():
     """Function defined and called somewhere → both checks True,
     callers_count surfaces in details for downstream evidence."""
@@ -311,10 +323,11 @@ def test_evaluate_finding_function_not_defined_locally():
 
 
 def test_evaluate_finding_files_with_no_extension_treated_as_c():
-    """Header-less or extensionless C source (e.g. driver code that
-    omits the .c suffix) — proceed as if C/C++ rather than skip,
-    since cocci will have scanned them. The empty extension fall-
-    through avoids a false "non_c_cpp_file" skip on these targets."""
+    """Retain a positive name witness for an extensionless finding.
+
+    This does not establish that the directory sweep examined the
+    extensionless file or can prove absence there.
+    """
     out = evaluate_finding(
         {"function": "foo", "file": "Makefile_target"},
         _facts(defs={"foo": [("a.c", 1)]}),
