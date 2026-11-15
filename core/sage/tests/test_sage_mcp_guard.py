@@ -740,11 +740,10 @@ class TestStampSectionInjection(unittest.TestCase):
 
     def _write(self, body):
         import tempfile
-        f = tempfile.NamedTemporaryFile(
-            "w", suffix=".authorized", delete=False)
-        f.write("# SAGE boot payload\n# SHA256: 0\n# ---\n" + body)
-        f.close()
-        self.addCleanup(Path(f.name).unlink)
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".authorized", delete=False) as f:
+            self.addCleanup(Path(f.name).unlink)
+            f.write("# SAGE boot payload\n# SHA256: 0\n# ---\n" + body)
         return f.name
 
     def test_duplicate_section_rejects_whole_stamp(self):
