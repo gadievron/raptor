@@ -82,6 +82,8 @@ if left is not None and count is not None:
             "file": p[0].file,
             "line": int(p[0].line),
             "col": int(p[0].column),
+            "line_end": int(p[0].line_end),
+            "col_end": int(p[0].column_end),
             "message": message,
         })
         print("COCCIRESULT:" + json.dumps(msg))
