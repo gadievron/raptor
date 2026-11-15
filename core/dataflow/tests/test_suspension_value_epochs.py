@@ -90,11 +90,17 @@ def test_definition_name_release_external_slot(tmp_path):
     if platform.python_implementation() != "CPython":
         pytest.skip("owned last-reference timing control requires CPython")
     guard = '    if not re.fullmatch(r"[a-z]+", safe): return'
-    for shared, asynchronous in ((False, False), (True, False), (False, True), (True, True)):
+    for shared, asynchronous, external_target in (
+        (shared, asynchronous, external_target)
+        for shared in (False, True) for asynchronous in (False, True)
+        for external_target in (False, True)
+    ):
         definition = "    async def trigger(): pass" if asynchronous else "    def trigger(): pass"
-        source = ("import re\nsafe = 'abc'\nclass Trigger:\n    def __del__(self):\n        global safe\n        safe = '<raw marker>'\n        events.append('finalized')\ndef process():\n"
+        source = ("import re\nsafe = 'abc'\nclass Trigger:\n    def __del__(self):\n        global safe\n        safe = '<raw marker>'\n        events.append('finalized')\n"
+                  + ("trigger = Trigger()\n" if external_target else "")
+                  + "def process():\n"
                   + ("    global safe\n" if shared else "    safe = 'abc'\n")
-                  + "    trigger = Trigger()\n" + guard + "\n" + definition + "\n    sink(safe)\n")
+                  + ("    global trigger\n" if external_target else "    trigger = Trigger()\n") + guard + "\n" + definition + "\n    sink(safe)\n")
         seen, events = [], []
         namespace = {"sink": seen.append, "events": events}
         exec(compile(source, "owned-definition.py", "exec"), namespace)
