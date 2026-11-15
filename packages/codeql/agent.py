@@ -264,6 +264,9 @@ def _workflow_success(analysis_results: dict[str, QueryResult], *, additional_re
     return any(r.success for r in analysis_results.values())
 
 
+_SARIF_DATA_UNSET = object()
+
+
 class CodeQLAgent:
     """
     Main CodeQL agent orchestrator.
@@ -1321,7 +1324,7 @@ class CodeQLAgent:
         print(f"{'=' * 70}\n")
 
     def _extract_dataflow_examples(self, sarif_path: Path, limit: int = 5,
-                                    *, sarif_data: dict | None = None) -> list:
+                                    *, sarif_data: object = _SARIF_DATA_UNSET) -> list:
         """Extract example dataflow paths from SARIF for visualization.
 
         Pre-fix this always called `load_sarif(sarif_path)`. The
@@ -1333,15 +1336,15 @@ class CodeQLAgent:
 
         Accept optional pre-loaded `sarif_data` so the caller can
         share the parse result across both helpers. Falls back to
-        `load_sarif` when the caller doesn't provide it (preserves
-        the standalone-call API).
+        `load_sarif` when the caller omits it (preserves the standalone-call
+        API). Explicit None preserves a failed prior load without reopening.
         """
         examples: list[dict[str, Any]] = []
         try:
-            if sarif_data is None:
+            if sarif_data is _SARIF_DATA_UNSET:
                 from core.sarif.parser import load_sarif
                 sarif_data = load_sarif(sarif_path)
-            if not sarif_data:
+            if not sarif_data or not isinstance(sarif_data, dict):
                 return examples
 
             for run in sarif_data.get("runs", []):
