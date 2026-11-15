@@ -14,19 +14,21 @@ def _make_db(path: Path, rows: list) -> None:
     ``rows`` is a list of ``(fix_hash, cwe, cve_id, repo_language,
     finding_id, status, backend, barrier_query, detail)`` tuples."""
     con = sqlite3.connect(str(path))
-    con.execute(
-        "CREATE TABLE synth_results ("
-        "fix_hash TEXT, cwe TEXT, cve_id TEXT, repo_language TEXT, "
-        "finding_id TEXT, status TEXT, backend TEXT, barrier_query TEXT, "
-        "detail TEXT, ts REAL, PRIMARY KEY (fix_hash, cwe))"
-    )
-    for row in rows:
+    try:
         con.execute(
-            "INSERT INTO synth_results VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (*row, time.time()),
+            "CREATE TABLE synth_results ("
+            "fix_hash TEXT, cwe TEXT, cve_id TEXT, repo_language TEXT, "
+            "finding_id TEXT, status TEXT, backend TEXT, barrier_query TEXT, "
+            "detail TEXT, ts REAL, PRIMARY KEY (fix_hash, cwe))"
         )
-    con.commit()
-    con.close()
+        for row in rows:
+            con.execute(
+                "INSERT INTO synth_results VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (*row, time.time()),
+            )
+        con.commit()
+    finally:
+        con.close()
 
 
 def _row(fix, cwe, cve, lang, status, backend, detail="", bq=None, fid=None):
