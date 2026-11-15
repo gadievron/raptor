@@ -114,6 +114,12 @@ class VulnerabilityAnalysis:
     mitigation: str
     error: str | None = None
 
+    def __post_init__(self) -> None:
+        for name in ("is_true_positive", "is_exploitable"):
+            value = getattr(self, name)
+            if value is not None and not isinstance(value, bool):
+                raise ValueError(f"{name} must be a boolean or None for abstention")
+
 
 # Dict schema for LLM structured generation (consistent with other callers)
 VULNERABILITY_ANALYSIS_SCHEMA = {
