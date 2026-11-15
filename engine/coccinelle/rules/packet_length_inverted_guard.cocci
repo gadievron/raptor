@@ -23,7 +23,8 @@ def packet_record(kind, positions, **values):
     for pos in positions:
         key = (str(pos.file), str(pos.current_element), int(pos.current_element_line))
         record = {item: str(value) for item, value in values.items()}
-        record.update(line=int(pos.line), col=int(pos.column))
+        record.update(line=int(pos.line), col=int(pos.column),
+                      line_end=int(pos.line_end), col_end=int(pos.column_end))
         _packet_evidence.setdefault(key, {}).setdefault(kind, []).append(record)
 
 @budget@
@@ -386,6 +387,7 @@ for (file, function, start), events in _packet_evidence.items():
                 continue
             emitted.add(location)
             result = {"file": file, "line": guard["line"], "col": guard["col"],
+                      "line_end": guard["line_end"], "col_end": guard["col_end"],
                       "rule": "packet_length_inverted_guard",
                       "message": "Packet-derived length is rejected when smaller than the skb-derived budget, then reaches an skb range consumer. Review the upper-bound check and buffer window."}
             sys.stderr.write("COCCIRESULT:" + json.dumps(result) + "\n")
