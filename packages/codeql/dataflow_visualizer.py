@@ -196,7 +196,7 @@ class DataflowVisualizer:
                     # on the arithmetic below to raise into the
                     # broad handler.
                     line_no = node['line']
-                    if not isinstance(line_no, int):
+                    if isinstance(line_no, bool) or not isinstance(line_no, int):
                         node['code_context'] = (
                             "Invalid line number in dataflow node"
                         )
