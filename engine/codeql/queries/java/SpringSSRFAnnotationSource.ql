@@ -1,9 +1,8 @@
 /**
  * @name SSRF via Spring annotation-driven parameter injection
- * @description Detects server-side request forgery where user input enters
- *              through Spring MVC annotation-injected parameters (@RequestParam,
- *              @PathVariable, @RequestHeader, @RequestBody, @MatrixVariable)
- *              and flows into HTTP client calls without validation.
+ * @description Tracks Spring MVC annotation-injected input to URL construction,
+ *              HTTP-client configuration or request APIs. Review effective
+ *              destination control, validation and eventual outbound use.
  * @kind path-problem
  * @problem.severity error
  * @security-severity 9.1
@@ -77,8 +76,8 @@ class WebClientCreateSink extends DataFlow::Node {
 }
 
 /**
- * `new URL(str).openConnection()` -- the URL constructor is the
- * taint-relevant sink because the string determines the target.
+ * URL construction is a candidate sink; this shape does not establish
+ * an eventual outbound request or effective destination control.
  */
 class JavaNetUrlSink extends DataFlow::Node {
   JavaNetUrlSink() {
@@ -117,8 +116,8 @@ class JavaHttpRequestUriSink extends DataFlow::Node {
 }
 
 /**
- * `URI.create(str)` -- often used as a wrapper before passing to
- * HttpRequest or other clients, so the string arg is the real sink.
+ * URI construction is a candidate sink; eventual use by an HTTP client
+ * must be reviewed separately.
  */
 class UriCreateSink extends DataFlow::Node {
   UriCreateSink() {
@@ -160,5 +159,7 @@ module SpringSsrfFlow = TaintTracking::Global<SpringSsrfConfig>;
 from SpringSsrfFlow::PathNode source, SpringSsrfFlow::PathNode sink
 where SpringSsrfFlow::flowPath(source, sink)
 select sink.getNode(), source, sink,
-  "Potential SSRF: user input from Spring annotation-injected $@ flows to an HTTP request.",
+  "Potential SSRF: input from Spring annotation-injected $@ reaches URL construction, " +
+    "HTTP-client configuration or a request API. Review destination control, validation " +
+    "and eventual outbound use.",
   source.getNode(), "parameter"
