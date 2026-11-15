@@ -31,7 +31,7 @@ def load_claim_presentation(out_dir: Path) -> dict | None:
     claims = payload.get("claims")
     if not isinstance(policy, str) or not policy or len(policy) > 128 or not isinstance(claims, list):
         return unavailable
-    rows = []
+    rows: list[dict[str, object]] = []
     state_counts = dict.fromkeys(_STATE_ORDER, 0)
     for claim in claims:
         if not isinstance(claim, dict):

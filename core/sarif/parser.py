@@ -14,7 +14,7 @@ import stat as stat_mod
 from itertools import chain
 from pathlib import Path
 from typing import Any, Callable, Iterator
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from urllib.parse import unquote, urljoin, urlsplit, urlunsplit, quote
 
 from core.detectors.compiler_families import compiler_diagnostic_is_candidate
@@ -109,7 +109,7 @@ def _sanitize_step_properties(props: Any) -> dict[str, Any]:
     if not isinstance(props, dict):
         return {}
     out: dict[str, Any] = {}
-    items = props.items()
+    items: Iterable[tuple[Any, Any]] = props.items()
     priority = tuple(key for key in ("tier", "tags") if key in props)
     if priority:
         # Provenance must not disappear behind unrelated display metadata.

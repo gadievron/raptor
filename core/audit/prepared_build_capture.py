@@ -205,7 +205,7 @@ class PreparedBuildCaptureOwner:
         self._declarations = declarations
         self._max_captures, self._max_source_bytes = max_captures, max_source_bytes
         self._max_namespace_items, self._max_retained_bytes = max_namespace_items, max_retained_bytes
-        self._records = {}
+        self._records: dict[int, _Capture] = {}
         self._closed, self._active = False, False
         self._lock = RLock()
         try:

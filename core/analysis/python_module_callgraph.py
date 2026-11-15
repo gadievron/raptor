@@ -519,7 +519,7 @@ def function_scope_bindings(tree: ast.Module) -> dict[ast.AST, frozenset[str]]:
             # frame visible to the body, not in its ordinary local bindings.
             # Defaults and decorators below retain the defining environment.
             type_parameters = frozenset(
-                parameter.name for parameter in getattr(node, "type_params", ())
+                getattr(parameter, "name") for parameter in getattr(node, "type_params", ())
                 if isinstance(getattr(parameter, "name", None), str)
             )
             visible = (enclosing | type_parameters | local_binding_names(node)) - globals_
@@ -531,7 +531,7 @@ def function_scope_bindings(tree: ast.Module) -> dict[ast.AST, frozenset[str]]:
             # syntax does not evaluate the value, bounds or defaults, and
             # does not bind the alias name in an ordinary enclosing scope.
             type_parameters = frozenset(
-                parameter.name for parameter in node.type_params
+                getattr(parameter, "name") for parameter in node.type_params
                 if isinstance(getattr(parameter, "name", None), str)
             )
             pending.append((node.value, enclosing | type_parameters))
@@ -540,7 +540,7 @@ def function_scope_bindings(tree: ast.Module) -> dict[ast.AST, frozenset[str]]:
             # parameters occupy a separate frame shared by the class body,
             # bases and keyword expressions; decorators precede that frame.
             type_parameters = frozenset(
-                parameter.name for parameter in getattr(node, "type_params", ())
+                getattr(parameter, "name") for parameter in getattr(node, "type_params", ())
                 if isinstance(getattr(parameter, "name", None), str)
             )
             class_environment = enclosing | type_parameters

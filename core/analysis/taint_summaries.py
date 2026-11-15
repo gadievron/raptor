@@ -46,6 +46,7 @@ Public surface:
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 import ast
 from collections import deque
 from collections.abc import Sequence
@@ -1192,7 +1193,7 @@ def _body_reflective_readers(body: list[ast.stmt], inherited: frozenset[str]) ->
                 assignments.setdefault(source, set()).update(captures)
         if isinstance(node, (ast.Assign, ast.AnnAssign, ast.For, ast.AsyncFor, ast.withitem)):
             if isinstance(node, ast.withitem):
-                value = node.context_expr
+                value: ast.expr | None = node.context_expr
                 targets = [node.optional_vars] if node.optional_vars is not None else []
             else:
                 value = node.iter if isinstance(node, (ast.For, ast.AsyncFor)) else node.value
@@ -1214,10 +1215,10 @@ def _body_reflective_readers(body: list[ast.stmt], inherited: frozenset[str]) ->
         pending.extend(ast.iter_child_nodes(node))
     work = deque(readers)
     while work:
-        for target in assignments.get(work.popleft(), ()):
-            if target not in readers:
-                readers.add(target)
-                work.append(target)
+        for alias_target in assignments.get(work.popleft(), ()):
+            if alias_target not in readers:
+                readers.add(alias_target)
+                work.append(alias_target)
     return frozenset(readers)
 
 
@@ -1240,7 +1241,7 @@ def _literal_star_lambda_arguments(arguments: list[ast.expr]) -> tuple[ast.expr,
 def _local_function_body_reads(node: ast.AST) -> frozenset[str] | None:
     """Existing bounded lexical reads, never function effects or return flow."""
     if (not isinstance(node, ast.FunctionDef) or node.decorator_list
-            or getattr(node, "type_params", ()) or getattr(node, "returns", None) is not None
+            or bool(getattr(node, "type_params", ())) or getattr(node, "returns", None) is not None
             or getattr(node, "type_comment", None)):
         return None
     args = node.args
@@ -1369,7 +1370,7 @@ def _comprehension_retains_reflective_reader(
     use their enclosing candidates; they never become function-wide aliases.
     """
     # Modes select negative consumers while sharing lexical scope traversal.
-    pending = [(node, inherited, frozenset())]
+    pending: list[tuple[ast.AST, frozenset[str], frozenset[str]]] = [(node, inherited, frozenset())]
     while pending:
         current, candidates, callback_masks = pending.pop()
         if free_body_readers:
@@ -1433,10 +1434,10 @@ def _comprehension_retains_reflective_reader(
         if not isinstance(current, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
             pending.extend((child, candidates, callback_masks) for child in ast.iter_child_nodes(current))
             continue
-        targets = _validated_expression_targets(current)
-        if targets is None or not current.generators:
+        expression_targets = _validated_expression_targets(current)
+        if expression_targets is None or not current.generators:
             continue
-        scopes = [targets[generator.target] for generator in current.generators]
+        scopes = [expression_targets[generator.target] for generator in current.generators]
         bound = frozenset(name for names, _ in scopes for name in names)
         local_readers: set[str] = set()
         for index, (generator, (names, reads)) in enumerate(
@@ -1483,7 +1484,7 @@ def _function_local_callable_candidates(fn_ast: ast.AST) -> dict[str, frozenset[
             continue
         if isinstance(node, (ast.Assign, ast.AnnAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            bindings = [(target, node.value) for target in targets]
+            bindings: list[tuple[ast.expr, ast.expr | None]] = [(target, node.value) for target in targets]
             while bindings:
                 target, value = bindings.pop()
                 if isinstance(target, ast.Name) and isinstance(target.ctx, ast.Store):
@@ -1502,6 +1503,8 @@ def _function_local_callable_candidates(fn_ast: ast.AST) -> dict[str, frozenset[
                     elif len(stars) == 1 and len(value.elts) >= len(target.elts) - 1:
                         index = stars[0]
                         capture = target.elts[index]
+                        if TYPE_CHECKING:
+                            assert isinstance(capture, ast.Starred)
                         if (not isinstance(capture.ctx, ast.Store)
                                 or not isinstance(capture.value, ast.Name)
                                 or not isinstance(capture.value.ctx, ast.Store)):
@@ -1517,11 +1520,11 @@ def _function_local_callable_candidates(fn_ast: ast.AST) -> dict[str, frozenset[
     work = deque((name, prototype) for name, values in candidates.items() for prototype in values)
     while work:
         name, prototype = work.popleft()
-        for target in aliases.get(name, ()):
-            values = candidates.setdefault(target, set())
+        for alias_target in aliases.get(name, ()):
+            values = candidates.setdefault(alias_target, set())
             if prototype not in values:
                 values.add(prototype)
-                work.append((target, prototype))
+                work.append((alias_target, prototype))
     return {name: frozenset(values) for name, values in candidates.items()}
 
 

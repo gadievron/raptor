@@ -1655,7 +1655,7 @@ class ModelConfig:
     max_tokens: int = 4096
     max_context: int = 32000
     temperature: float = 0.7
-    timeout: int = 120
+    timeout: float = 120
     cost_per_1k_tokens: float = 0.0  # Fallback rate — used only when model not in MODEL_COSTS
     enabled: bool = True
     role: str | None = None  # "analysis", "code", "consensus", "fallback", "judge", "aggregate"

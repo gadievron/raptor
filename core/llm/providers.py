@@ -4593,7 +4593,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
         # operator just disabled. Use explicit `is None` for kwarg
         # absence and `<= 0` to honour the no-timeout sentinel.
         if timeout_s is not None:
-            self._timeout_s = None if timeout_s <= 0 else timeout_s
+            self._timeout_s: float | None = None if timeout_s <= 0 else timeout_s
         elif config.timeout is not None:
             self._timeout_s = None if config.timeout <= 0 else config.timeout
         else:
@@ -4624,7 +4624,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
 
     def _effective_timeout_s(
         self, override: int | None,
-    ) -> int | None:
+    ) -> float | None:
         """Resolve the timeout for one call.
 
         ``override`` is the per-call ``timeout_s`` kwarg — callers

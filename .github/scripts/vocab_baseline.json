@@ -3631,5 +3631,10 @@
     "kind": "literal",
     "note": "Autonomous-run summary dict: counter + provenance KEYS written to the analysis-summary JSON (persistence schema keys, not a name vocabulary); root-module universe addition.",
     "reviewed": "2026-10-31"
+  },
+  "core/llm/catalog.py::_payload": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Closed explicit PublicRoute wire projection: route_id/provider/model_name plus bounded model parameters, enabled and role. These are fixed serialized schema keys, not learned function names, detector API lists or credential fields. Explicit projection prevents future private ModelConfig fields leaking into worker catalogs; provider discovery/authorization remains outside this schema."
   }
 }
