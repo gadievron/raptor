@@ -178,8 +178,10 @@ def test_tier_reader_preserves_reused_writer_descriptor(tmp_path, monkeypatch):
                 # dup2 simulates a new owner reusing the closed writer number.
                 fd = os.open(tmp_path / "other-owner", os.O_CREAT | os.O_WRONLY, 0o600)
                 if fd != old_writer:
-                    os.dup2(fd, old_writer)
-                    os.close(fd)
+                    try:
+                        os.dup2(fd, old_writer)
+                    finally:
+                        os.close(fd)
                 borrowed.append(old_writer)
                 raise OSError("injected pipe setup failure")
 
