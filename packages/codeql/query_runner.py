@@ -1452,7 +1452,7 @@ class QueryRunner:
         if (skip_install or _iris_pack_deps_already_resolved(pack_dir)
                 or RaptorConfig.CODEQL_OFFLINE):
             logger.debug(
-                "%s pack (%s): deps already resolvable, skipping install",
+                "%s pack (%s): dependency installation skipped",
                 label, lang,
             )
         else:
