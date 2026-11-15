@@ -20,6 +20,9 @@ rules:
   # call or a plain-variable staging buffer is missed (FN); anchoring
   # on any '\\' assignment would fire on state-marker stores (FP) —
   # the output-store anchor stays.
+  # Pointer/index stores can also carry state rather than quoted output.
+  # Confirm the destination, input/output flow and eventual consumer before
+  # treating the pattern as an escaping defect.
   #
   # The character tests match the LITERAL anywhere in the if
   # condition (`c == '"'`, Yoda `'"' == c`, ||-combined forms), and
@@ -44,11 +47,10 @@ rules:
     languages: [c, cpp]
     severity: MEDIUM
     message: >
-      This escaper writes a backslash escape for the double-quote but
-      the enclosing function never tests for the backslash itself. An
-      input backslash passes through unescaped and can neutralize the
-      escape prefix of a following quote, handing the attacker the
-      quoted-string boundary. Escape the backslash as well.
+      Candidate: a branch mentioning a double-quote literal stores a backslash
+      without a recognized complementary backslash test. Review whether the writes
+      form an escaper and whether both characters are handled in the actual
+      quoted-string output context.
     patterns:
       - pattern-either:
           - pattern: |
@@ -77,10 +79,10 @@ rules:
     languages: [c, cpp]
     severity: MEDIUM
     message: >
-      This escaper writes a backslash escape for the backslash but the
-      enclosing function never tests for the double-quote. A raw quote
-      in the input closes the quoted string early, handing the
-      attacker the string boundary. Escape the double-quote as well.
+      Candidate: a branch mentioning a backslash literal stores a backslash
+      without a recognized complementary double-quote test. Review whether the
+      writes form an escaper and whether both characters are handled in the
+      actual quoted-string output context.
     patterns:
       - pattern-either:
           - pattern: |
