@@ -2102,6 +2102,7 @@ _DB_SOURCE_MEMBER_CAP = 10 * 1024 * 1024
 # lru_cache(maxsize=128) bounded ENTRIES, not bytes — 128 entries of
 # 64 MB members retained ~8 GB for process lifetime.
 _DB_SOURCE_CACHE_BUDGET = 64 * 1024 * 1024
+_DB_SOURCE_CACHE_MAX_ENTRIES = 128
 
 _db_source_cache: dict[tuple[str, str], tuple[tuple, str | None]] = {}
 _db_source_cache_chars = 0
@@ -2129,7 +2130,8 @@ def _read_db_source(db_path: Path, indexed_path: str) -> str | None:
     text = _read_db_source_uncached(Path(db_path), indexed_path)
     _db_source_cache[key] = (generation, text)
     _db_source_cache_chars += len(text) if text else 0
-    while (_db_source_cache_chars > _DB_SOURCE_CACHE_BUDGET
+    while ((_db_source_cache_chars > _DB_SOURCE_CACHE_BUDGET
+            or len(_db_source_cache) > _DB_SOURCE_CACHE_MAX_ENTRIES)
            and len(_db_source_cache) > 1):
         old_key = next(iter(_db_source_cache))
         if old_key == key:
