@@ -255,6 +255,10 @@ def annotate_sarif(sarif_data: dict, repo_root: str) -> int:
                 if key is not None and key == last_rule_key:
                     rule_id = last_rule_id
                 else:
+                    if key is not None and extract_nosemgrep(
+                        Path(abs_path), line, _lines=lines,
+                    ) is None:
+                        continue
                     rule_id = _result_rule_id(result, get_result_rule(run, result))
                     if key is not None and (rule_id is None or type(rule_id) is str):
                         last_rule_key, last_rule_id = key, rule_id
