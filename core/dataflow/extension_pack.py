@@ -967,6 +967,13 @@ def rows_from_taint_specs(
                                  access_output=out, **common))
         elif spec.role == "propagator":
             params = spec.params_affected or [0]
+            if any(index != params[0] for index in params[1:]):
+                rejected.append(RejectedRow(
+                    row=label,
+                    reason="propagator has multiple distinct affected parameters; "
+                           "only single-input-to-return summaries are supported",
+                ))
+                continue
             if language == "cpp":
                 rows.append(ModelRow(role=ROLE_SUMMARY, model_kind="taint",
                                      access_input=arg(params[0]),
