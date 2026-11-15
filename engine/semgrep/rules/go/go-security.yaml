@@ -4,9 +4,7 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.go.defer-close-in-loop
     message: >-
-      defer $X.Close() inside a loop body accumulates deferred calls until
-      the enclosing function returns, causing resource exhaustion. Close
-      explicitly or extract the loop body into a separate function.
+      A deferred Close call appears inside a loop. Deferred calls run when the enclosing function returns and can accumulate. Review loop bounds, function lifetime and actual resource use; close per iteration or extract the loop body where necessary.
     languages: [go]
     severity: MEDIUM
     patterns:
@@ -92,8 +90,7 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.go.insecure-tls-skip-verify
     message: >-
-      InsecureSkipVerify disables TLS certificate verification, allowing
-      man-in-the-middle attacks. Remove InsecureSkipVerify or set it to false.
+      InsecureSkipVerify is enabled in a TLS configuration literal. Review the effective configuration, additional verification and connection use before assessing exposure. Keep certificate and hostname verification enabled for the intended peer.
     languages: [go]
     severity: CRITICAL
     pattern: |
@@ -133,9 +130,7 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.go.filepath-traversal
     message: >-
-      Untrusted data flows into a filesystem path operation. Validate and
-      sanitise the path to prevent directory traversal — filepath.Join does
-      NOT prevent "../" traversal above the base directory.
+      Potentially untrusted data reaches path construction or file I/O APIs. Review the actual operation and allowed roots before claiming traversal. filepath.Join does not enforce confinement; validate the effective path against the intended base directory.
     languages: [go]
     severity: CRITICAL
     mode: taint
