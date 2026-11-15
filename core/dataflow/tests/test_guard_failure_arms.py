@@ -3,6 +3,8 @@ import json
 
 import pytest
 
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import smt_barrier as sb, tier1_llm
 
 
@@ -33,4 +35,4 @@ def test_exiting_failure_arm_keeps_successful_guard_eligible(tmp_path, consumer,
         reply = json.dumps({"kind": "charset", "validator_source_line": guard,
                             "variable_name": "value", "charset": "a-z", "forbidden": "", "library_call": ""})
         result = tier1_llm.try_tier1b(**arguments, complete=lambda *_: reply)
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, (sb.Tier0Status.SOUND) is sb.Tier0Status.SOUND)

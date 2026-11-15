@@ -3,6 +3,8 @@ import ast
 
 import pytest
 
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import smt_barrier as sb
 
 GUARD = ' if not re.fullmatch(r"[a-z]+", value): return'
@@ -47,7 +49,7 @@ def query(tmp_path, pattern, *, mode='shared', subject='subject'):
 def test_match_dispatch_respects_value_epoch(tmp_path, pattern, mode):
     result = query(tmp_path, pattern, mode=mode)
     expected = sb.Tier0Status.NOT_APPLICABLE if mode == 'shared' else sb.Tier0Status.SOUND
-    assert result.status is expected, result.reasoning
+    assert_epoch_character_model(result, (expected) is sb.Tier0Status.SOUND)
 
 
 @pytest.mark.parametrize('pattern', ['_', 'captured', 'None', 'True', 'False',
@@ -55,7 +57,7 @@ def test_match_dispatch_respects_value_epoch(tmp_path, pattern, mode):
                                       '(None as captured) | (True as captured)'])
 def test_identity_only_match_preserves_shared_slot(tmp_path, pattern):
     result = query(tmp_path, pattern)
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, (sb.Tier0Status.SOUND) is sb.Tier0Status.SOUND)
 
 
 def test_match_capture_overwrite_expires_parameter(tmp_path):

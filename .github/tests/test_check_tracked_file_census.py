@@ -364,11 +364,11 @@ class TestScratchRepoEndToEnd:
     ):
         if shutil.which("git") is None:
             pytest.skip("git unavailable")
-        # tmp_path lives outside any repository on supported runners
-        # (a GIT_CEILING guard would be scrubbed with the rest of the
-        # GIT_* environment by design).
+        # An invalid owned gitdir boundary prevents discovery of an enclosing
+        # checkout when this suite's private scratch is inside the repository.
         bare = tmp_path / "not-a-repo"
         bare.mkdir()
+        (bare / ".git").write_text("gitdir: missing-owned-gitdir\n")
         assert main(["--root", str(bare)]) == 0  # notice arm
         assert "notice" in capsys.readouterr().out
         assert main(["--root", str(bare), "--require-git"]) == 1

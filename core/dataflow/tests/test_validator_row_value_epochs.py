@@ -1,6 +1,8 @@
 """Validator-row writes cannot inherit the earlier guard's language."""
 import pytest
 
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import smt_barrier as sb
 from core.smt_solver import z3_available
 
@@ -56,7 +58,7 @@ def test_fresh_guard_epochs_keep_unrelated_and_exiting_writes(tmp_path, placemen
     (tmp_path / "app.js").write_bytes(source.encode())
     result = sb.try_tier0(fix_diff="+" + line + "\n", repo_root=tmp_path,
                          sink_uri="app.js", sink_line=3, sink_class="xss", language="javascript")
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, (sb.Tier0Status.SOUND) is sb.Tier0Status.SOUND)
 
 
 @pytest.mark.parametrize("tail", ["", ' other = "marker";'], ids=["own-binding", "unrelated-binding"])

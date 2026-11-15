@@ -14,9 +14,12 @@ from core.testing.state_isolation import pin_user_state_dirs
 
 
 @pytest.fixture(autouse=True)
-def _capture_recovery_logs(monkeypatch):
+def _capture_recovery_logs(monkeypatch, caplog):
     """Capture recovery diagnostics independently of earlier logging setup."""
-    monkeypatch.setattr(logging.getLogger("raptor"), "propagate", True)
+    logger = logging.getLogger(__name__ + ".recovery")
+    monkeypatch.setattr(transaction, "logger", logger)
+    with caplog.at_level(logging.DEBUG, logger=logger.name):
+        yield
 
 
 @pytest.fixture
