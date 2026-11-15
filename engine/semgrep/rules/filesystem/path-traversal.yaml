@@ -54,7 +54,8 @@ rules:
           - pattern: Path($PATH)
     # No abspath/resolve sanitizers: both NORMALISE the path — they
     # resolve "../" so the escape takes effect, they do not confine
-    # it. basename genuinely confines (strips directory components).
+    # it. basename strips directory components, but dot-parent names and
+    # filesystem links still require a separate confinement check.
     pattern-sanitizers:
       - pattern: os.path.basename(...)
         exact: true
