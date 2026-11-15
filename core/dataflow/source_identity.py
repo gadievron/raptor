@@ -119,9 +119,25 @@ def known_python_identity_conflict(
             return "source import resolves to a different library identity"
     elif ".".join(written) != canonical:
         return "source library alias is unbound"
+    future_annotations = any(
+        isinstance(statement, ast.ImportFrom) and statement.module == "__future__"
+        and any(alias.name == "annotations" for alias in statement.names)
+        for statement in tree.body
+    )
     child: ast.AST = call
     while child in parents:
         frame = parents[child]
+        annotation_owner = None
+        if isinstance(frame, ast.arg) and child is frame.annotation:
+            arguments = parents.get(frame)
+            if isinstance(arguments, ast.arguments):
+                annotation_owner = parents.get(arguments)
+        elif isinstance(frame, (ast.FunctionDef, ast.AsyncFunctionDef)) and child is frame.returns:
+            annotation_owner = frame
+        if (not future_annotations
+                and isinstance(annotation_owner, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and any(parameter.name == root for parameter in annotation_owner.type_params)):
+            return "source library root is shadowed by a type parameter"
         if isinstance(frame, ast.TypeVar) and child is frame.bound:
             owner = parents.get(frame)
             if isinstance(owner, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.TypeAlias)):
