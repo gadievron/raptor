@@ -82,6 +82,8 @@ if not _socket_has_cloexec:
       "file":  p[0].file,
       "line":  int(p[0].line),
       "col":   int(p[0].column),
+      "line_end": int(p[0].line_end),
+      "col_end": int(p[0].column_end),
       "message":   "socket() without recognised SOCK_CLOEXEC — review descriptor lifetime, flag handling and reachable exec for possible inheritance (CWE-403)."
     }
     print("COCCIRESULT:" + json.dumps(msg))
@@ -122,6 +124,8 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message":   "accept() inheritance candidate — review descriptor lifetime, flag handling and reachable exec; consider accept4() with SOCK_CLOEXEC (CWE-403)"
 }
 print("COCCIRESULT:" + json.dumps(msg))
