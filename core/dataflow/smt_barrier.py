@@ -21,9 +21,9 @@ Results use these statuses:
 * NOT_APPLICABLE: extraction or a required source obligation is missing.
 * Z3_UNAVAILABLE: the optional solver substrate is unavailable.
 
-Successful XSS and command character proofs remain conditional diagnostics
+Successful XSS, SQL and command character proofs remain conditional diagnostics
 with NOT_APPLICABLE status and no barrier artifact: HTML interpretation,
-output composition and command identity/position are not verified by
+query/output composition and command identity/position are not verified by
 these character sets. They cannot authorize suppression of those findings.
 Unsupported source shapes and missing obligations fall through to later
 adjudication. No LLM assertion supplies a missing proof obligation.
@@ -3837,8 +3837,8 @@ def try_tier0(
         )
     verdict = prove_neutralizes(spec, sink_class)
     if verdict.sound:
-        if sink_class in {"xss", "cmdi", "cmdi_argv"}:
-            context = "HTML" if sink_class == "xss" else "command"
+        if sink_class in {"xss", "cmdi", "cmdi_argv", "sqli"}:
+            context = {"xss": "HTML", "sqli": "SQL"}.get(sink_class, "command")
             return Tier0Result(
                 Tier0Status.NOT_APPLICABLE,
                 f"character exclusion proved, but {context} sink interpretation "
