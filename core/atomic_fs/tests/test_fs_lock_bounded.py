@@ -350,12 +350,16 @@ class TestHintContainment:
             )
             assert result == [False]
         finally:
-            os.close(holder_fd)
-            if victim_fd is not None:
-                os.close(victim_fd)
-            if thread is not None and thread.ident is not None:
-                thread.join(timeout=10)
-                assert not thread.is_alive(), "lock waiter did not stop after holder cleanup"
+            try:
+                os.close(holder_fd)
+            finally:
+                try:
+                    if victim_fd is not None:
+                        os.close(victim_fd)
+                finally:
+                    if thread is not None and thread.ident is not None:
+                        thread.join(timeout=10)
+                        assert not thread.is_alive(), "lock waiter did not stop after holder cleanup"
 
     @pytest.mark.skipif(not os.path.exists("/proc/self/io"),
                         reason="procfs io counters unavailable")
