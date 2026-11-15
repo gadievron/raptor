@@ -37,7 +37,7 @@ class DefaultCallFormEvidence:
     )
 
 
-def _default_positional_call(tree: ast.AST, call_line: int, library_call: str) -> ast.Call | None:
+def _default_positional_call(tree: ast.Module, call_line: int, library_call: str) -> ast.Call | None:
     from core.dataflow.source_identity import canonical_python_call_spans, python_call_span
 
     spans = canonical_python_call_spans(tree, call_line, frozenset({library_call}))

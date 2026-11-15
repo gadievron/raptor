@@ -1492,7 +1492,7 @@ def run_cc_streaming(
     cmd: list[str],
     prompt: str,
     env: dict[str, str],
-    timeout_s: int | None,
+    timeout_s: float | None,
     cwd: str | None = None,
 ) -> StreamJsonResult:
     """Run ``claude -p --output-format stream-json`` via Popen, reading

@@ -35,6 +35,9 @@ def test_invalid_explicit_rules_are_not_replaced_by_ambient_defaults(rules):
         LLMDispatcher("invalid-explicit-rule", rules=rules)
 
 
+# Real UDS traffic requires the host kernel's peer-credential API.
+@pytest.mark.linux_native
+@pytest.mark.darwin_native
 @pytest.mark.parametrize("provider", ["anthropic", "gemini"])
 def test_generation_plane_refuses_delegation_other_operations_and_models(provider):
     rule = ProviderRule(provider, "http://127.0.0.1:1", lambda: {"x-api-key": "fixture-key"})

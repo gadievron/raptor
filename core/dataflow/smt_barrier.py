@@ -943,7 +943,7 @@ def _block_uses_raise(body: list) -> bool:
 # dominance purposes. ``ast.TryStar`` is 3.11+; on older runtimes
 # ``except*`` source is a SyntaxError and the parse-failure path
 # already declines.
-_TRY_NODES: tuple[type, ...] = (
+_TRY_NODES: tuple[type[ast.Try] | type[ast.TryStar], ...] = (
     (ast.Try, ast.TryStar) if hasattr(ast, "TryStar") else (ast.Try,)
 )
 

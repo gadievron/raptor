@@ -161,3 +161,14 @@ def test_empty_catalog_is_valid_and_does_not_discover_models(monkeypatch):
     monkeypatch.setattr("core.llm.config._get_configured_models", refuse_discovery)
     prepared = prepare_catalog([])
     assert PublicCatalog.from_bytes(prepared.public.to_bytes()).routes == ()
+
+
+@pytest.mark.parametrize("timeout", [120, 0.125])
+def test_public_round_trip_preserves_timeout_precision(timeout):
+    from core.llm.catalog import model_config_from_catalog
+
+    prepared = prepare_catalog([_config(timeout=timeout)])
+    public = PublicCatalog.from_bytes(prepared.public.to_bytes())
+    restored = model_config_from_catalog(public, public.routes[0].route_id)
+    assert restored.timeout == timeout
+    assert type(restored.timeout) is type(timeout)

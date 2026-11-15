@@ -189,6 +189,8 @@ class NamespaceImageOwner:
         if any(type(value) is not int or value <= 0 for value in limits):
             raise ValueError("explicit positive integer image budgets required")
         self._limits = limits
+        self._records: dict[int, _Record]
+        self._handoffs: dict[int, _Attempt]
         self._records, self._handoffs = {}, {}
         self._lock, self._active, self._closed = RLock(), False, False
         try:

@@ -163,7 +163,7 @@ def known_python_identity_conflict(
             annotation_owner = frame
         if (not future_annotations
                 and isinstance(annotation_owner, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and any(parameter.name == root for parameter in annotation_owner.type_params)):
+                and any(getattr(parameter, "name") == root for parameter in annotation_owner.type_params)):
             return "source library root is shadowed by a type parameter"
         if isinstance(frame, ast.TypeVar) and child is frame.bound:
             owner = parents.get(frame)
@@ -173,7 +173,7 @@ def known_python_identity_conflict(
         if isinstance(frame, (ast.TypeVar, ast.ParamSpec, ast.TypeVarTuple)) and child is frame.default_value:
             owner = parents.get(frame)
             if isinstance(owner, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.TypeAlias)):
-                if any(parameter.name == root for parameter in owner.type_params):
+                if any(getattr(parameter, "name") == root for parameter in owner.type_params):
                     return "source library root is shadowed by a type parameter"
         if isinstance(frame, ast.TypeAlias) and child is frame.value:
             if any(getattr(parameter, "name", None) == root for parameter in frame.type_params):

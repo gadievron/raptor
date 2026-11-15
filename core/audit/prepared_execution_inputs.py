@@ -90,7 +90,7 @@ def snapshot_parent_inputs(argv, environment, cwd, *, max_args: int, max_env: in
     directory = encode(cwd)
     if not args[0].startswith(b"/") or not directory.startswith(b"/"):
         raise InputsUnavailable("absolute_execution_spelling_required")
-    pairs = []
+    pairs: list[tuple[bytes, bytes]] = []
     names = set()
     try:
         for index, (key, value) in enumerate(environment.items()):
@@ -103,7 +103,8 @@ def snapshot_parent_inputs(argv, environment, cwd, *, max_args: int, max_env: in
             pairs.append((name, content))
     except RuntimeError as exc:
         raise InputsUnavailable("input_container_changed") from exc
-    pairs = tuple(pairs)
+    frozen_pairs = tuple(pairs)
+    del pairs
     digest = hashlib.sha256(b"raptor-parent-exec-inputs\0v1\0")
 
     def frame(value):
@@ -122,8 +123,8 @@ def snapshot_parent_inputs(argv, environment, cwd, *, max_args: int, max_env: in
     for value in args:
         frame(value)
     digest.update(b"E")
-    digest.update(len(pairs).to_bytes(8, "big"))
-    for name, content in pairs:
+    digest.update(len(frozen_pairs).to_bytes(8, "big"))
+    for name, content in frozen_pairs:
         frame(name)
         frame(content)
-    return ParentExecInputs(args, pairs, directory, digest.hexdigest(), total, codec, errors)
+    return ParentExecInputs(args, frozen_pairs, directory, digest.hexdigest(), total, codec, errors)

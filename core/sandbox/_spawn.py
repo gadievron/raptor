@@ -565,11 +565,6 @@ def _drain_status_pipe(status_r: int, parent_fds: set, *, _observation=None):
 
 
 
-def _drain_status_observation(status_r: int, parent_fds: set):
-    """Descriptive helper; production callers retain the legacy verdict API."""
-    observation = []
-    _drain_status_pipe(status_r, parent_fds, _observation=observation)
-    return observation[0] if observation else None
 
 
 def _should_warn_proc_mount_failure(proc_rc: int, libc_loaded: bool,
@@ -3403,6 +3398,8 @@ def run_sandboxed(
             # returncode oracles a fabricated target result. The
             # stderr write stays as the human-readable diagnostic.
             if cwd is not None:
+                if TYPE_CHECKING:
+                    assert _exec_cwd is not None
                 try:
                     os.chdir(_exec_cwd)
                 except OSError as e:
@@ -4915,7 +4912,7 @@ def run_sandboxed(
     except Exception:
         # No private result receipt can be issued without its owned handoff.
         with contextlib.suppress(Exception):
-            del cp._execution_input_handoff
+            delattr(cp, "_execution_input_handoff")
     if not text and _capture_any:
         # The parent can decode the retained prefix using its selected codec
         # before formatting loss, without interpreting target-printed markers.

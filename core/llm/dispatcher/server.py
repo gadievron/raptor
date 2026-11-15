@@ -1455,6 +1455,7 @@ class LLMDispatcher:
                            for name, model in generation_routes.items())):
                 raise ValueError("Generation routes require explicit native-provider rules and model identifiers")
             self._generation_routes = dict(generation_routes)
+        self._rules: dict[str, ProviderRule]
         if rules is not None:
             if creds is not None or not rules or any(
                 not isinstance(rule, ProviderRule) or name != rule.name
@@ -1468,7 +1469,7 @@ class LLMDispatcher:
             self._rules = {name: replace(rule) for name, rule in rules.items()}
         else:
             self._creds = creds or CredentialStore()
-            self._rules: dict[str, ProviderRule] = build_rules(self._creds)
+            self._rules = build_rules(self._creds)
 
         # Pooled clients for the forwarding leg, shared by every
         # request (httpx.Client is thread-safe). Building a client
@@ -2809,7 +2810,7 @@ def _make_request_handler(
             if dispatcher._generation_routes is not None:
                 # Dedicated ask plane: no renewal, child minting, account API,
                 # model discovery or alternate operation is reachable at all.
-                allowed = set()
+                allowed: set[str] = set()
                 for provider, model in dispatcher._generation_routes.items():
                     base = ("/anthropic/v1/messages" if provider == "anthropic" else
                             f"/gemini/v1beta/models/{model}:generateContent")

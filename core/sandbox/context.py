@@ -6611,7 +6611,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                 except Exception:
                                     _execution_invocation.unavailable()
                                     with suppress(Exception):
-                                        del _native_result._execution_input_handoff
+                                        delattr(_native_result, "_execution_input_handoff")
                             if getattr(_native_result, "_setup_status", None) is not None:
                                 # A returned failure status keeps the existing
                                 # typed setup decision table authoritative.

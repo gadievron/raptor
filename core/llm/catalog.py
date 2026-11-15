@@ -30,7 +30,7 @@ class CatalogError(ValueError):
     """Invalid public configuration; messages never include input values."""
 
 
-def _text(value: object, field: str, maximum: int = 256) -> None:
+def _validate_text(value: object, field: str, maximum: int = 256) -> None:
     if (not isinstance(value, str) or not value or len(value) > maximum
             or any(ord(char) < 32 or ord(char) == 127
                    or 0xD800 <= ord(char) <= 0xDFFF for char in value)):
@@ -57,10 +57,10 @@ class PublicRoute:
 
     def __post_init__(self) -> None:
         _identifier(self.route_id)
-        _text(self.provider, "provider")
-        _text(self.model_name, "model_name", 1024)
+        _validate_text(self.provider, "provider")
+        _validate_text(self.model_name, "model_name", 1024)
         if self.role is not None:
-            _text(self.role, "role")
+            _validate_text(self.role, "role")
         for field in ("max_tokens", "max_context"):
             value = getattr(self, field)
             if type(value) is not int or not 0 < value <= 2**53 - 1:
@@ -173,7 +173,7 @@ def prepare_catalog(configs: Iterable[ModelConfig]) -> PreparedCatalog:
     """
     from core.llm.config import ModelConfig
 
-    routes = []
+    routes: list[PublicRoute] = []
     private = {}
     for config in configs:
         if len(routes) >= MAX_CATALOG_ROUTES:

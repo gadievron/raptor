@@ -831,6 +831,30 @@
     },
     "plumbing:orphan_config_field:packages/source_intel/analyze.py:PrivilegeBackWalkEvidence.gating_examples": {
       "note": "Retained legacy record-constructor field accepted by render_source_context(privilege_back_walk=...). Current capability-call records lack reviewed denial-exit enforcement, so rendering intentionally does not consume these examples as gating evidence. test_retained_backwalk_flags_do_not_prove_gated_or_ungated_paths preserves record/API compatibility without restoring gating authority."
+    },
+    "plumbing:orphan_config_field:core/audit/prepared_build_capture.py:BuildCaptureDescription.namespace_digest": {
+      "note": "Explicit diagnostic description of the closed-search namespace digest returned by PreparedBuildCaptureOwner.describe. The same digest is bound during capture construction, while the production measurement source remains None. This field is not an independently measured namespace or build-authority grant; no current runtime consumer is claimed."
+    },
+    "plumbing:orphan_config_field:core/audit/prepared_image_envelope.py:EnvelopeOnly.block_bytes": {
+      "note": "Validated raw superblock block-size declaration exposed by the bounded envelope API. Not a decoder selection, effective filesystem geometry or active namespace consumer; compressed metadata/filesystem walking remain unavailable."
+    },
+    "plumbing:orphan_config_field:core/audit/prepared_image_envelope.py:EnvelopeOnly.compression_id": {
+      "note": "Raw supported-format compression identifier retained for diagnostic envelope inspection. No decompressor is installed or selected by this API, and no filesystem-validity or namespace authority follows from this declared value."
+    },
+    "plumbing:orphan_config_field:core/audit/prepared_image_envelope.py:EnvelopeOnly.index_spans": {
+      "note": "Bounded count-derived index spans calculated and checked by inspect_header, retained in its diagnostic return schema. They do not enumerate names, interpret metadata tables or establish complete lookup coverage; no active walk consumer is claimed."
+    },
+    "plumbing:orphan_config_field:core/audit/prepared_image_root_directory.py:BasicRootDirectoryDeclaration.declared_offset": {
+      "note": "Raw basic-DIR inode offset returned only after same-owned-header/frame decoding and bounded containment checks. It is a declaration, not an authenticated directory locator; directory walking and complete lookup membership are absent."
+    },
+    "plumbing:orphan_config_field:core/audit/prepared_image_root_directory.py:BasicRootDirectoryDeclaration.declared_size": {
+      "note": "Raw basic-DIR size declaration retained after explicit scalar budget checks. It neither enumerates directory entries nor proves full metadata extent or filesystem completeness; no consumer or activation is claimed."
+    },
+    "plumbing:orphan_config_field:core/audit/prepared_image_root_directory.py:BasicRootDirectoryDeclaration.declared_start_block": {
+      "note": "Raw basic-DIR start-block declaration exposed for diagnostic inspection after bounded region checks. No caller-provided stamp is promoted to physical SourceIdentity, directory ownership, complete membership or namespace authority."
+    },
+    "plumbing:orphan_config_field:core/sandbox/context.py:_ExecutionObservation.exec_pid_delivered": {
+      "note": "Parent-reported execution-status-channel diagnostic exposed only through the private exact selected-result/attempt observation. The producer CompletedProcess flag participates in existing status handling; this returned field is deliberately descriptive and grants neither independently observed child context nor authenticated build authority."
     }
   },
   "version": 1
