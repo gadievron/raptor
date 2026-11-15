@@ -88,4 +88,7 @@ def test_java_direct_return_binding_does_not_credit_mixed_rhs(tmp_path, mixed):
         assert result.status is Tier0Status.NOT_APPLICABLE
         assert "not bound to a variable" in result.reasoning
     else:
-        assert result.status is Tier0Status.SOUND, result.reasoning
+        # Exact binding passed; its unresolved output context still refuses.
+        assert result.status is Tier0Status.NOT_APPLICABLE, result.reasoning
+        assert result.extras["unverified_source_contracts"] == [
+            "html_text_or_quoted_attribute_sink_context_and_policy"]

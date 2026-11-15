@@ -30,6 +30,10 @@ public class Test {
 }
 """
 
+# Enforcement mechanics use a genuinely constant result; the encoder
+# fixture separately verifies that unresolved context is never enforced.
+_CONSTANT_JAVA = _SAFE_JAVA.replace('Encode.forHtml(p)', '"owned"')
+
 _UNSAFE_JAVA = """import javax.servlet.http.HttpServletRequest;
 import java.io.PrintWriter;
 public class Test {
@@ -93,11 +97,26 @@ def _write(tmp_path: Path, source: str, sarif_kwargs: dict | None = None):
 
 
 class TestVerdictRecording:
-    def test_encoder_guarded_finding_records_suppress(self, tmp_path):
+    def test_encoder_without_context_records_candidate_only(self, tmp_path):
+        repo, _, sarif_path, out = _write(tmp_path, _SAFE_JAVA)
+        stats = run_postpass([sarif_path], repo, out)
+        assert stats["recorded_suppress"] == 0
+        assert stats["recorded_candidate"] == 1
+        assert stats["enforced"] == 0 and stats["enforced_findings"] == []
+        records = [json.loads(line) for line in (out / "suppressions.jsonl").read_text().splitlines()]
+        assert len(records) == 1
+        record = records[0]
+        assert record["verdict"] == "sanitizer_candidate"
+        assert record["dropped"] is False and record["enforced"] is False
+        assert record["bindings"]
+        assert all("html_text_or_quoted_attribute_sink_context_and_policy"
+                   in binding["unverified_source_contracts"] for binding in record["bindings"])
+
+    def test_constant_finding_records_full_proof(self, tmp_path):
         # Re-pinned 2026-08-19: enforcement is the corpus-earned,
         # operator-approved default — a full-proof suppress verdict now
         # records dropped: true and its identity for the scanner filter.
-        repo, _, sarif_path, out = _write(tmp_path, _SAFE_JAVA)
+        repo, _, sarif_path, out = _write(tmp_path, _CONSTANT_JAVA)
         stats = run_postpass([sarif_path], repo, out)
         assert stats["examined"] == 1
         assert stats["recorded_suppress"] == 1
@@ -115,7 +134,7 @@ class TestVerdictRecording:
     def test_record_only_mode_still_available(self, tmp_path):
         # The pre-flip contract survives behind enforce=False (the
         # scanner's --no-sanitizer-cut-enforce path): evidence only.
-        repo, _, sarif_path, out = _write(tmp_path, _SAFE_JAVA)
+        repo, _, sarif_path, out = _write(tmp_path, _CONSTANT_JAVA)
         stats = run_postpass([sarif_path], repo, out, enforce=False)
         assert stats["recorded_suppress"] == 1
         assert stats["enforced"] == 0
@@ -137,7 +156,7 @@ class TestVerdictRecording:
             rw.VERDICTS["sanitizer_dominated"], earns_suppression=False,
         )
         monkeypatch.setitem(rw.VERDICTS, "sanitizer_dominated", reverted)
-        repo, _, sarif_path, out = _write(tmp_path, _SAFE_JAVA)
+        repo, _, sarif_path, out = _write(tmp_path, _CONSTANT_JAVA)
         stats = run_postpass([sarif_path], repo, out, enforce=True)
         assert stats["recorded_suppress"] == 1
         assert stats["enforced"] == 0
@@ -170,17 +189,29 @@ class TestVerdictRecording:
 class TestSourceLocator:
     @requires_ts("java")
     def test_multi_source_all_must_suppress(self, tmp_path):
-        # Two candidate sources: the flow from `a` is encoded
-        # (suppress) but `b` never reaches the sanitizer input
-        # (candidate_only) — the finding counts as candidate, no
-        # suppress verdict is recorded.
-        repo, _, sarif_path, out = _write(
+        # Both source candidates are examined; only a is the encoder
+        # input. Context remains unverified, and the source-role
+        # distinction is checked independently below.
+        repo, src, sarif_path, out = _write(
             tmp_path, _AMBIGUOUS_JAVA, {"sink_line": 9},
         )
         stats = run_postpass([sarif_path], repo, out)
         assert stats["recorded_suppress"] == 0
         assert stats["recorded_candidate"] == 1
         assert not (out / "suppressions.jsonl").exists()
+        from core.analysis.finding_resolver import ResolvedFinding, resolve_finding
+        from core.dataflow.sanitizer_catalog import match_sanitizers_in_cfg
+
+        sources = [resolve_finding({"cwe": "CWE-79", "file_path": str(src),
+                                    "source_line": line, "sink_line": 9, "language": "java"})
+                   for line in (6, 7)]
+        assert all(isinstance(source, ResolvedFinding) for source in sources)
+        assert sources[0].source_symbols == frozenset({"a"})
+        assert sources[1].source_symbols == frozenset({"b"})
+        bindings = match_sanitizers_in_cfg(sources[0].cfg, "CWE-79", "java")
+        assert bindings
+        assert any(binding.input_symbols == frozenset({"a"})
+                   and binding.output_symbols == frozenset({"safe"}) for binding in bindings)
 
     def test_locator_unique_before_sink(self, tmp_path):
         f = tmp_path / "T.java"
@@ -435,7 +466,12 @@ class TestLearnedSourcePatterns:
             extra_source_patterns=["getTheParameter"],
         )
         assert stats["refused_reasons"].get("no-source-candidates") is None
-        assert stats["recorded_suppress"] == 1
+        assert stats["recorded_suppress"] == 0 and stats["recorded_candidate"] == 1
+        assert stats["enforced"] == 0
+        record = json.loads((out / "suppressions.jsonl").read_text())
+        assert record["bindings"]
+        assert all("html_text_or_quoted_attribute_sink_context_and_policy"
+                   in binding["unverified_source_contracts"] for binding in record["bindings"])
         assert stats["mechanism_counts"]["learned-source-patterns"] == 1
 
     def test_invalid_learned_names_dropped_not_compiled(self, tmp_path):
@@ -782,6 +818,9 @@ public class Test {
 """
 
 
+_TWO_CANDIDATE_CONSTANT = _TWO_CANDIDATE_SAFE.replace('Encode.forHtml(a)', '"owned"')
+
+
 class TestMultiCandidateWitness:
     def test_full_proof_record_carries_every_candidate(self, tmp_path):
         # Two source candidates, both individually proven: the single
@@ -789,7 +828,7 @@ class TestMultiCandidateWitness:
         # evidence as the whole finding's witness. The aggregate keeps
         # each candidate's source line attributable.
         repo, _, sarif_path, out = _write(
-            tmp_path, _TWO_CANDIDATE_SAFE, {"sink_line": 9},
+            tmp_path, _TWO_CANDIDATE_CONSTANT, {"sink_line": 9},
         )
         stats = run_postpass([sarif_path], repo, out)
         assert stats["recorded_suppress"] == 1
@@ -804,7 +843,7 @@ class TestMultiCandidateWitness:
         assert all(c["reason"] for c in srcs)
 
     def test_single_candidate_record_stays_flat(self, tmp_path):
-        repo, _, sarif_path, out = _write(tmp_path, _SAFE_JAVA)
+        repo, _, sarif_path, out = _write(tmp_path, _CONSTANT_JAVA)
         run_postpass([sarif_path], repo, out)
         recs = [
             json.loads(line) for line in
@@ -901,7 +940,7 @@ def test_same_line_distinct_findings_cannot_earn_line_bound_enforcement(tmp_path
 
 
 def test_duplicate_scan_inputs_do_not_repeat_suppression_proof(tmp_path):
-    repo, _, sarif_path, out = _write(tmp_path, _SAFE_JAVA)
+    repo, _, sarif_path, out = _write(tmp_path, _CONSTANT_JAVA)
     stats = run_postpass([sarif_path, sarif_path], repo, out)
     assert stats['examined'] == 1
     assert stats['enforced'] == 1

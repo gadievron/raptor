@@ -35,7 +35,6 @@ from core.analysis.finding_resolver import (
 from core.analysis.sanitizer_cut import (
     VERDICT_CANDIDATE_ONLY,
     VERDICT_NO_SUPPRESS,
-    VERDICT_SUPPRESS,
     evaluate_finding,
 )
 
@@ -95,8 +94,8 @@ _CORPUS_CASES = [
 # taint source. No inter-proc phase for Java, so the interproc
 # expectation equals the intra-proc one.
 _JAVA_CORPUS_CASES = [
-    ("straight_line_safe_java.java", "CWE-79", 11, 13, VERDICT_SUPPRESS,
-     "y", VERDICT_SUPPRESS),
+    ("straight_line_safe_java.java", "CWE-79", 11, 13, VERDICT_CANDIDATE_ONLY,
+     "y", VERDICT_CANDIDATE_ONLY),
     # b11's exclusivity shape in Java — the sanitizer is among the
     # sink arg's reaching definers but not the only one.
     ("loop_rebind_java.java", "CWE-79", 9, 14, VERDICT_CANDIDATE_ONLY,
@@ -117,17 +116,17 @@ _JAVA_CORPUS_CASES = [
 _JAVA_B19_CASES = [
     # Tracked-local-array element written only by a catalog sanitizer,
     # consumed through one exact scalar hop.
-    ("array_element_java.java", "CWE-79", 8, 12, VERDICT_SUPPRESS),
+    ("array_element_java.java", "CWE-79", 8, 12, VERDICT_CANDIDATE_ONLY),
     # Private static wrapper whose return is provably the sanitizer
-    # applied to its argument — the synthetic binding carries the cut.
-    ("wrapper_helper_java.java", "CWE-79", 12, 14, VERDICT_SUPPRESS),
+    # applied to its argument — the synthetic binding retains context premises.
+    ("wrapper_helper_java.java", "CWE-79", 12, 14, VERDICT_CANDIDATE_ONLY),
 ]
 
 _JAVA_B27_CASES = [
     # Sanitized value through a returns-param conduit — transparency
-    # carries the vertex-cut through the helper hop.
+    # carries the value through the helper hop, without proving HTML context.
     ("conduit_transparency_java.java", "CWE-79", 11, 14,
-     VERDICT_SUPPRESS),
+     VERDICT_CANDIDATE_ONLY),
     # The honesty pin: the same conduit with the raw request value
     # must ride the taint through untouched. The decoy sanitizer call
     # keeps a catalog match on the (single) control path, so the
@@ -230,6 +229,11 @@ def test_java_corpus_fixture_verdict(
         f"{fixture}: verdict={result.verdict!r}, "
         f"expected {expected_verdict!r}. Reason: {result.reason}"
     )
+    if expected_verdict == VERDICT_CANDIDATE_ONLY:
+        assert not result.suppress
+        assert any("html_text_or_quoted_attribute_sink_context_and_policy"
+                   in binding.unverified_source_contracts
+                   for binding in result.all_matched_bindings)
 
 
 _JAVA_B34_CASES = [
@@ -262,6 +266,20 @@ def test_java_b34_positional_verdict(
     assert verdict == expected_verdict
 
 
+def _java_context_result(fixture, cwe, source_line, sink_line):
+    finding = _native_finding(fixture, cwe, source_line, sink_line, language="java")
+    resolved = resolve_finding(finding)
+    assert isinstance(resolved, ResolvedFinding)
+    result = evaluate_finding(
+        resolved.cfg, [resolved.source_node], resolved.sink_node,
+        cwe=resolved.cwe, language=resolved.language,
+        source_symbols=resolved.source_symbols, sink_arg=resolved.sink_arg,
+        extra_bindings=resolved.inter_proc_bindings,
+        java_source_text=(_CORPUS_DIR / fixture).read_text(),
+    )
+    return resolved, result
+
+
 @pytest.mark.parametrize(
     "fixture,cwe,source_line,sink_line,expected_verdict",
     _JAVA_B19_CASES,
@@ -283,6 +301,25 @@ def test_java_b19_full_path_verdict(
         "language": "java",
     })
     assert verdict == expected_verdict
+    resolved, result = _java_context_result(fixture, cwe, source_line, sink_line)
+    assert result.verdict == expected_verdict and not result.suppress
+    assert result.all_matched_bindings
+    assert all("html_text_or_quoted_attribute_sink_context_and_policy"
+               in binding.unverified_source_contracts for binding in result.all_matched_bindings)
+    if fixture == "array_element_java.java":
+        from core.analysis.java_array_escape import build_local_array_index
+
+        text = (_CORPUS_DIR / fixture).read_text()
+        index = build_local_array_index(text, (source_line, sink_line))
+        assert index is not None and index.ok and index.tracked("values")
+        writes = index.element_writes("values", 0)
+        assert len(writes) == 1
+        assert index.write_is_catalog_call(writes[0], {"org.owasp.encoder.Encode.forHtml"})
+        copy = next(node for node in resolved.cfg.nodes() if "bar" in node.defs)
+        assert "values" in copy.uses
+    else:
+        # Wrapper association remains value-bound, carrying its premise.
+        assert result.value_bound_bindings
 
 
 @pytest.mark.parametrize(
@@ -293,9 +330,8 @@ def test_java_b27_conduit_verdict(
     fixture, cwe, source_line, sink_line, expected_verdict,
 ):
     """b27 pins — conduit transparency through the exact production
-    entry point, in both directions: the sanitized value survives the
-    helper hop (suppress) and the tainted value rides through it
-    (no_suppress)."""
+    entry point: the catalogue value survives the helper hop while its
+    HTML context remains unverified; the raw-value control is unchanged."""
     pytest.importorskip("tree_sitter_java")
     from core.dataflow.sanitizer_cut_parity import value_bound_verdict_for
     verdict = value_bound_verdict_for({
@@ -306,6 +342,25 @@ def test_java_b27_conduit_verdict(
         "language": "java",
     })
     assert verdict == expected_verdict
+    resolved, result = _java_context_result(fixture, cwe, source_line, sink_line)
+    assert result.verdict == expected_verdict and not result.suppress
+    from core.analysis.java_wrapper_summaries import CONDUIT_PARAM, derive_conduit_summaries
+
+    text = (_CORPUS_DIR / fixture).read_text()
+    summaries, _ = derive_conduit_summaries(text, (source_line, sink_line))
+    through = [summary for summary in summaries.values() if summary.simple_name == "through"]
+    assert len(through) == 1 and through[0].kind == CONDUIT_PARAM
+    assert through[0].param_index == 0
+    copied = next(node for node in resolved.cfg.nodes() if "bar" in node.defs)
+    assert result.all_matched_bindings
+    assert all("html_text_or_quoted_attribute_sink_context_and_policy"
+               in binding.unverified_source_contracts for binding in result.all_matched_bindings)
+    if fixture == "conduit_tainted_java.java":
+        assert "x" in copied.uses and "unused" not in copied.uses
+        assert not result.value_bound_bindings
+    else:
+        assert "clean" in copied.uses
+        assert any("clean" in binding.output_symbols for binding in result.all_matched_bindings)
 
 
 @pytest.mark.parametrize(

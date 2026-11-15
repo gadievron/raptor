@@ -43,11 +43,17 @@ def test_nested_initializer_writes_remove_return_credit(statement):
 
 def test_distinct_later_initializer_preserves_return_identity():
     assignment, result = evaluate('String tmp=Encode.forHtml(raw), other=raw;')
-    assert result.suppress is True
+    assert result.verdict == "candidate_only" and not result.suppress
+    assert result.value_bound_bindings
+    assert all("html_text_or_quoted_attribute_sink_context_and_policy"
+               in binding.unverified_source_contracts for binding in result.value_bound_bindings)
     site = next(cs for cs in assignment.call_sites if cs.name == "org.owasp.encoder.Encode.forHtml")
     assert site.assigned_names == frozenset({"tmp"})
 
 
 def test_later_sanitizer_declarator_keeps_its_own_identity():
     _assignment, result = evaluate('String other=raw, tmp=Encode.forHtml(raw);')
-    assert result.suppress is True
+    assert result.verdict == "candidate_only" and not result.suppress
+    assert result.value_bound_bindings
+    assert all("html_text_or_quoted_attribute_sink_context_and_policy"
+               in binding.unverified_source_contracts for binding in result.value_bound_bindings)

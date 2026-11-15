@@ -40,6 +40,7 @@ DEFAULT_POSITIONAL_CALL = "single_positional_default_call"
 PATH_JOIN_CONTAINMENT = "trusted_path_base_components_and_containment"
 HTML_TEXT_CONTENT_CONTEXT = "html_text_content_sink_context"
 HTML_ATTRIBUTE_POLICY = "html_quoted_attribute_sink_context_and_policy"
+HTML_OUTPUT_POLICY = "html_text_or_quoted_attribute_sink_context_and_policy"
 
 
 @dataclass(frozen=True)
@@ -309,6 +310,7 @@ _TABLE: tuple[KnownSafeCall, ...] = (
         sink_class="xss",
         languages=("java",),
         input_arg_kind="transform",
+        required_source_contracts=frozenset({HTML_OUTPUT_POLICY}),
         soundness_note=(
             "OWASP Java Encoder forHtml escapes for ALL HTML contexts "
             "it documents as covered (element content and quoted "

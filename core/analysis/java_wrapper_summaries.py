@@ -69,6 +69,7 @@ from typing import Any
 from core.dataflow.sanitizer_catalog import (
     SanitizerBinding,
     sanitizer_callables_for_cwe,
+    source_contracts_for_callable,
 )
 from typing import TYPE_CHECKING
 
@@ -703,6 +704,8 @@ def synthetic_wrapper_bindings_java(
     language: str,
 ) -> frozenset[SanitizerBinding]:
     """Synthetic bindings for qualifying wrapper calls in ``cfg``.
+    Underlying catalogue requirements remain unverified on the synthetic
+    binding: wrapper association cannot discharge source premises.
     Empty frozenset on any failure — best-effort, the
     intra-procedural verdict stands."""
     summaries, _decisions = derive_wrapper_summaries(
@@ -756,6 +759,10 @@ def synthetic_wrapper_bindings_java(
                 input_symbols=input_symbols,
                 output_symbols=cs.assigned_names,
                 lineno=cs.lineno,
+                unverified_source_contracts=frozenset(
+                    contract for callee in summary.sanitizer_callables
+                    for contract in source_contracts_for_callable(callee, cwe, language)
+                ),
             ))
     return frozenset(bindings)
 

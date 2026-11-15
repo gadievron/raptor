@@ -238,7 +238,7 @@ class TestUndeclaredAssignmentTargets:
         )
         assert not result.suppress
 
-    def test_declared_local_temp_still_binds_and_suppresses(self):
+    def test_declared_local_temp_retains_conditional_binding(self):
         from core.analysis.sanitizer_cut import evaluate_finding
         src = (_IMP + "public class T {\n"
                "    private static String wrap(String s) {\n"
@@ -263,7 +263,11 @@ class TestUndeclaredAssignmentTargets:
             source_symbols=["x"], sink_arg="y",
             java_source_text=src, extra_bindings=bindings,
         )
-        assert result.suppress
+        assert result.verdict == "candidate_only" and not result.suppress
+        assert result.value_bound_bindings
+        assert all("html_text_or_quoted_attribute_sink_context_and_policy"
+                   in binding.unverified_source_contracts
+                   for binding in result.value_bound_bindings)
 
     def test_conduit_field_temp_refuses(self):
         from core.analysis.java_wrapper_summaries import (
@@ -537,3 +541,35 @@ class TestCommentsInHelperBody:
             "        String y = esc(x);\n        out.println(y);\n")
         summaries, _ = _summaries(src)
         assert ("T", "esc", 1) in summaries
+
+
+@pytest.mark.parametrize("method,requirement", [
+    ("forHtml", "html_text_or_quoted_attribute_sink_context_and_policy"),
+    ("forHtmlContent", "html_text_content_sink_context"),
+    ("forHtmlAttribute", "html_quoted_attribute_sink_context_and_policy"),
+], ids=("general", "content", "attribute"))
+@pytest.mark.parametrize("depth", (1, 2), ids=("one-hop", "two-hop"))
+def test_wrapper_retains_underlying_html_context(method, requirement, depth):
+    from core.analysis.sanitizer_cut import VERDICT_CANDIDATE_ONLY, evaluate_finding
+
+    helpers = '    private static String esc(String s) { return Encode.' + method + '(s); }\n'
+    call = "esc"
+    if depth == 2:
+        helpers += '    private static String wrap(String s) { return esc(s); }\n'
+        call = "wrap"
+    source = _src(helpers, '        String y = ' + call + '(x);\n        out.println(y);\n')
+    cfg = build_java_intraproc_cfg(source, "handle")
+    assert cfg is not None
+    bindings = synthetic_wrapper_bindings_java(cfg, source, _hint(source), "CWE-79", "java")
+    assert len(bindings) == 1
+    binding = next(iter(bindings))
+    assert binding.input_symbols == frozenset({"x"})
+    assert binding.output_symbols == frozenset({"y"})
+    assert binding.unverified_source_contracts == frozenset({requirement})
+    sink = next(n for n in cfg.nodes() if "out.println" in n.calls)
+    result = evaluate_finding(cfg, [cfg.entry], sink, cwe="CWE-79", language="java",
+                              source_symbols={"x"}, sink_arg="y", java_source_text=source,
+                              extra_bindings=bindings)
+    assert result.verdict == VERDICT_CANDIDATE_ONLY and not result.suppress
+    assert result.value_bound_bindings
+    assert all(requirement in b.unverified_source_contracts for b in result.value_bound_bindings)

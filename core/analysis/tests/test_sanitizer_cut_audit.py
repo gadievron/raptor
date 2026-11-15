@@ -371,10 +371,10 @@ class TestLegacyPath:
 
 class TestJavaLegRecords:
     """The b13 Java leg flows through the same record path — a Java
-    suppress verdict serialises with its FQN-resolved binding, so
-    operators can see exactly which encoder the gate credited."""
+    context candidate serialises with its FQN-resolved binding, so
+    operators can see the encoder and its unresolved premises."""
 
-    def test_java_suppress_record_carries_fqn_binding(
+    def test_java_candidate_record_carries_fqn_binding(
         self, tmp_path: Path,
     ):
         pytest.importorskip("tree_sitter_java")
@@ -404,7 +404,7 @@ class TestJavaLegRecords:
             source_symbols=resolved.source_symbols,
             sink_arg=resolved.sink_arg,
         )
-        assert result.verdict == "suppress"
+        assert result.verdict == "candidate_only" and not result.suppress
         record_sanitizer_cut_suppression(
             tmp_path, {"file_path": str(src_file), "language": "java"},
             result,
@@ -418,3 +418,7 @@ class TestJavaLegRecords:
         # see exactly which encoder the gate credited.
         assert r["bindings"][0]["callable"] == \
             "org.owasp.encoder.Encode.forHtml"
+        assert r["verdict"] == "sanitizer_candidate"
+        assert r["enforced"] is False
+        assert r["bindings"][0]["unverified_source_contracts"] == [
+            "html_text_or_quoted_attribute_sink_context_and_policy"]
