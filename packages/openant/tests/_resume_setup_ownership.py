@@ -3,8 +3,8 @@ import ast
 import json
 import tempfile
 import sys
-import hashlib
 import unittest
+import hashlib
 from pathlib import Path
 from unittest.mock import patch
 
@@ -23,10 +23,11 @@ def deny_event(event, values):
 sys.addaudithook(deny_event)
 source = args.source.read_text()
 assert args.expect == "candidate"
-assert hashlib.sha256(source.encode()).hexdigest() == "150f0723847d29ac4d39218cca7e72dc32f19afd08a912c172430d0a0f45d484"
 module = ast.parse(source, filename=str(args.source))
 cls = next(n for n in module.body if isinstance(n, ast.ClassDef) and n.name == args.class_name)
 setup = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "setUp")
+# Pin the setup component independently of unrelated tests in the module.
+assert hashlib.sha256(ast.dump(setup, include_attributes=False).encode()).hexdigest() == 'd721ad0af56fc5259cef20031dd24af5ce66be844726d15981bd97045f2c5a66'
 assert not setup.decorator_list
 assert ast.dump(setup.args) == ast.dump(ast.parse("def setUp(self): pass").body[0].args)
 allowed = {"tempfile", "Path", "self"}

@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 assert sys.flags.isolated and sys.flags.optimize == 0 and sys.dont_write_bytecode
 HERE = Path(__file__).resolve().parent
-CFG = {'source_sha256': '111c7309d0f51464cd0abcce65608d09c151817ef279ce8ea16c6134063dc389', 'setup_sha256': '0dccb660ccc577d5fea80747eba50917c77616b559e65122dd947b12d24e6c34', 'helper_sha256': {'_write': '09a1720d01ac9e58c0fee7e5091e358a743a13fa54ceb3bb4faac69e34bf88c8', '_analyze_row': '90625539bb288f31cd1c50b3a0d9f3808d21f2f1d4fa2f221d76be3fae5f8444'}}
+CFG = {'setup_sha256': '0dccb660ccc577d5fea80747eba50917c77616b559e65122dd947b12d24e6c34', 'helper_sha256': {'_write': '09a1720d01ac9e58c0fee7e5091e358a743a13fa54ceb3bb4faac69e34bf88c8', '_analyze_row': '90625539bb288f31cd1c50b3a0d9f3808d21f2f1d4fa2f221d76be3fae5f8444'}}
 parser=argparse.ArgumentParser()
 parser.add_argument('root',type=Path)
 parser.add_argument('mode',choices=('error','healthy'))
@@ -18,7 +18,6 @@ def audit(event,args):
         raise PermissionError('outside private resume seed fixture ownership boundary: '+event)
 sys.addaudithook(audit)
 source=a.root/'packages/openant/tests/test_resume.py';raw=source.read_bytes()
-assert hashlib.sha256(raw).hexdigest()==CFG['source_sha256']
 text=raw.decode();cl=next(n for n in ast.parse(text).body if isinstance(n,ast.ClassDef) and n.name=='TestSeedScanDir')
 assert [ast.unparse(n) for n in cl.bases]==['unittest.TestCase'] and not cl.decorator_list
 assert not any(isinstance(n,ast.FunctionDef) and n.name=='tearDown' for n in cl.body)

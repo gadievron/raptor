@@ -13,13 +13,12 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 HERE = Path(__file__).resolve().parent
-CFG = {'root': None, 'sweep_source_sha256': 'f57d7fac26dafc5b39afdb0b69aa3922612ff0280cfdd1752e94792c9054e9f2', 'sweep_function_sha256': '34abcd6af67257d91c685f1c38de0b521b1a2a2d90fdb85c871233ef7b973b78'}
+CFG = {'root': None, 'sweep_function_sha256': '34abcd6af67257d91c685f1c38de0b521b1a2a2d90fdb85c871233ef7b973b78'}
 CFG['root'] = sys.argv[1]
 assert sys.flags.isolated and sys.dont_write_bytecode and sys.flags.optimize == 0
 root = Path(CFG['root'])
 source = root / 'core/sandbox/tests/test_audit_failure_modes.py'
 sweep_source = root / 'core/sandbox/_spawn.py'
-assert hashlib.sha256(sweep_source.read_bytes()).hexdigest() == CFG['sweep_source_sha256']
 mode = sys.argv[2]
 assert mode in {'write_error', 'healthy'}
 output = Path(sys.argv[3])

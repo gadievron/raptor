@@ -251,9 +251,9 @@ class TestFormatJson:
         assert doc["target_type_defaults"] is None
 
     def test_paths_serialised_as_strings(self):
-        report = _report(_shape(target_path=Path("/home/raptor/targets/monit")))
+        report = _report(_shape(target_path=Path("/example/targets/monit")))
         doc = json.loads(format_json(report))
-        assert doc["target_path"] == "/home/raptor/targets/monit"
+        assert doc["target_path"] == "/example/targets/monit"
 
 
 @pytest.mark.usefixtures("describe_tool_probes")
