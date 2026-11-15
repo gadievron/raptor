@@ -23,7 +23,7 @@ inconclusive. INCONCLUSIVE is the bottom of the lattice: it absorbs
 disagreement and tool failures alike.
 """
 
-from typing import Any
+from typing import Any, cast
 from collections.abc import Iterable
 
 from .result import Verdict
@@ -34,7 +34,10 @@ _VALID = {"confirmed", "refuted", "inconclusive"}
 
 def _coerce(v: Any) -> Verdict:
     """Default unknown values to inconclusive (the safe floor)."""
-    return v if v in _VALID else "inconclusive"
+    if not isinstance(v, str):
+        return "inconclusive"
+    text = str.__str__(v)
+    return cast(Verdict, text) if text in _VALID else "inconclusive"
 
 
 def verdict_from(
