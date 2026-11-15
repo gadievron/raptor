@@ -1744,12 +1744,30 @@ def _python_match_dispatch(node: ast.AST) -> bool:
     return False
 
 
-def _python_possible_call(node: ast.AST) -> bool:
+def _python_possible_call(node: ast.AST, *, scope_root: ast.AST | None = None) -> bool:
     """Negative effect boundary; this never certifies purity or a callee.
 
     Deleting or overwriting a last reference can run finalisation code
     that replaces an externally owned slot, even for an unrelated name.
+    Function definitions also replace their bound name; their deferred body
+    is not executed by this classification.
     """
+    if scope_root is not None and isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        if not isinstance(scope_root, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return True
+        if not _python_name_has_local_slot(scope_root, node.name):
+            return True
+        args = scope_root.args
+        parameters = [*args.posonlyargs, *args.args, *args.kwonlyargs]
+        parameters += [arg for arg in (args.vararg, args.kwarg) if arg is not None]
+        if any(arg.arg == node.name for arg in parameters) or any(
+            part is not scope_root and part is not node
+            and (getattr(part, "lineno", -1), getattr(part, "col_offset", -1))
+            < (node.lineno, node.col_offset)
+            and _node_rebinds_var(part, node.name)
+            for part in _walk_same_scope(scope_root)
+        ):
+            return True
     if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
         return True
     return (_python_operator_dispatch(node) or _python_iteration_dispatch(node)
@@ -1851,7 +1869,7 @@ def _variable_reassigned_between(
     if not _python_name_has_local_slot(scope_root, var_name) and any(
         (_python_suspension(node)
          and after_line <= (getattr(node, "lineno", None) or -1) <= before_line)
-        or (_python_possible_call(node)
+        or (_python_possible_call(node, scope_root=scope_root)
             and after_line < (getattr(node, "lineno", None) or -1) < before_line)
         or (_python_evaluation_dispatch(node)
             and after_line < (getattr(node, "lineno", None) or -1) <= before_line)
@@ -1957,7 +1975,7 @@ def _rebound_in_loop_containing_sink(
         if end is None or not (loop.lineno <= sink_line <= end):
             continue
         if externally_owned and not loop.lineno <= validator_line <= end and any(
-            _python_possible_call(node) or _python_suspension(node)
+            _python_possible_call(node, scope_root=scope_root) or _python_suspension(node)
             for node in _walk_same_scope(loop)
         ):
             return True  # The next iteration cannot reuse an outer shared-slot fact.
@@ -2954,7 +2972,7 @@ def _python_chain_reaches_sink(
                         chain.discard(var)
         if class_decls is None and not _python_unpack_assignment(node) and (
             _python_suspension(node)
-            or (_python_possible_call(node)
+            or (_python_possible_call(node, scope_root=scope_root)
                 and not isinstance(node, (ast.Assign, ast.AnnAssign))
                 and validator_line < node.lineno < sink_line)
             or (_python_evaluation_dispatch(node) and validator_line < node.lineno <= sink_line)
@@ -3008,7 +3026,7 @@ def _python_chain_reaches_sink(
         # must not capture an external slot before a nested condition or
         # protocol dispatch has had a chance to rebind it.
         if not at_validator and any(
-            _python_possible_call(part) or _python_suspension(part)
+            _python_possible_call(part, scope_root=scope_root) or _python_suspension(part)
             for part in _walk_same_scope(ast.Expr(value=node.value))
         ):
             for var in list(chain):
@@ -3066,7 +3084,7 @@ def _python_chain_reaches_sink(
         if any(
             node.lineno == validator_line and node not in certified_nodes
             and not isinstance(node, (ast.Assign, ast.AnnAssign))
-            and _python_possible_call(node)
+            and _python_possible_call(node, scope_root=scope_root)
             for node in _walk_same_scope(scope_root)
             if hasattr(node, "lineno")
         ):

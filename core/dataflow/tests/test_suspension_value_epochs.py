@@ -82,3 +82,26 @@ def test_function_default_binding_does_not_create_a_local_slot():
 def test_validation_after_suspension_starts_a_new_external_epoch(tmp_path):
     result = query(tmp_path, [' await checkpoint()', GUARD])
     assert result.status is sb.Tier0Status.SOUND, result.reasoning
+
+
+def test_definition_name_release_external_slot(tmp_path):
+    import platform
+
+    if platform.python_implementation() != "CPython":
+        pytest.skip("owned last-reference timing control requires CPython")
+    guard = '    if not re.fullmatch(r"[a-z]+", safe): return'
+    for shared, asynchronous in ((False, False), (True, False), (False, True), (True, True)):
+        definition = "    async def trigger(): pass" if asynchronous else "    def trigger(): pass"
+        source = ("import re\nsafe = 'abc'\nclass Trigger:\n    def __del__(self):\n        global safe\n        safe = '<raw marker>'\n        events.append('finalized')\ndef process():\n"
+                  + ("    global safe\n" if shared else "    safe = 'abc'\n")
+                  + "    trigger = Trigger()\n" + guard + "\n" + definition + "\n    sink(safe)\n")
+        seen, events = [], []
+        namespace = {"sink": seen.append, "events": events}
+        exec(compile(source, "owned-definition.py", "exec"), namespace)
+        namespace["process"]()
+        assert events == ["finalized"]
+        assert seen == (["<raw marker>"] if shared else ["abc"])
+        (tmp_path / "app.py").write_text(source)
+        result = sb.try_tier0(fix_diff="+" + guard + "\n", repo_root=tmp_path,
+                              sink_uri="app.py", sink_line=len(source.splitlines()), sink_class="xss")
+        assert result.status is (sb.Tier0Status.NOT_APPLICABLE if shared else sb.Tier0Status.SOUND), (shared, seen, events, result)
