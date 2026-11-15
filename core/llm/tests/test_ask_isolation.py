@@ -20,6 +20,7 @@ import pytest
 from core.llm import ask_isolation
 from core.llm.ask_isolation import IsolatedAskError
 from core.llm.config import ModelConfig
+from core.security.credential_env import ANTHROPIC_FIRST_PARTY_AUTH_VARS
 
 
 @pytest.fixture
@@ -73,6 +74,15 @@ def test_additional_google_setup_does_not_silently_change_backend(native_setup, 
     model = ModelConfig(provider="gemini", model_name="fixture-model", api_key="selected-account")
     with pytest.raises(IsolatedAskError, match="Additional Google SDK"):
         ask_isolation.run_isolated_ask(model, "test", None)
+
+
+@pytest.mark.parametrize("name", [name for name in ANTHROPIC_FIRST_PARTY_AUTH_VARS
+                                  if name != "ANTHROPIC_API_KEY"])
+def test_alternate_anthropic_auth_requires_compatibility(native_setup, monkeypatch, name):
+    monkeypatch.setenv(name, "fixture-alternate-auth")
+    model = ModelConfig(provider="anthropic", model_name="fixture-model", api_key="selected-account")
+    with pytest.raises(IsolatedAskError, match="Custom Anthropic authentication"):
+        ask_isolation._rule_for(model)
 
 
 def test_worker_response_identity_and_size_are_checked():
