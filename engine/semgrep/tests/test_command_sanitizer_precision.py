@@ -61,6 +61,11 @@ _VALUE_SANITIZER_CASES = [
         ("eval.py", "injection/eval-taint.yaml", "raptor.injection.eval.taint.python", """
 import ast
 ast.literal_eval(eval(input()))  # unsafe
+eval(ast.literal_eval(input()))  # unsafe
+exec(ast.literal_eval(input()))  # unsafe
+compile(ast.literal_eval(input()), "<decoded>", "exec")  # unsafe
+decoded = ast.literal_eval(input())
+eval(decoded)  # unsafe
 ast.literal_eval(input())
 """),
         ("sql.py", "injection/sql-concat.yaml", "raptor.injection.sql.taint.python", """
