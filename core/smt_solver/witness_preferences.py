@@ -15,7 +15,7 @@ def parse_witness_preference(
     fields, so the caller fails fast rather
     than silently dropping the objective.
     """
-    if spec is None or spec == "":
+    if spec is None:
         return None
     if isinstance(spec, tuple):
         if len(spec) != 2:
@@ -23,6 +23,8 @@ def parse_witness_preference(
             raise ValueError(msg)
         name, direction = spec
     elif isinstance(spec, str):
+        if spec == "":
+            return None
         if ":" not in spec:
             msg = (
                 f"prefer_witness string must be 'max:name' or 'min:name', "
