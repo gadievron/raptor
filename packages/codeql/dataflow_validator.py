@@ -45,7 +45,7 @@ from core.llm.scorecard import fast_tier_model_name, run_cheap_fp_check
 from core.llm.task_types import TaskType
 from core.logging import get_logger
 from core.paths import confine
-from core.sarif.parser import _coerce_line
+from core.sarif.parser import _coerce_line, _text_value
 from core.source import read_contained_text_capped, read_text_capped, split_lines
 from core.source.windows import read_text_line_window_capped
 from core.security.prompt_defense_profiles import CONSERVATIVE
@@ -521,12 +521,18 @@ class DataflowValidator:
                     "Invalid SARIF flow coordinates; using 0 for unknown line or column",
                 )
 
+            message_value = loc.get("message")
+            label = _text_value(message_value)
+            if (label is None and message_value is not None
+                    and (not isinstance(message_value, dict) or "text" in message_value)):
+                self.logger.warning("Invalid SARIF flow label; using empty text")
+
             step = DataflowStep(
                 file_path=unquote(artifact.get("uri", ""), errors="strict"),
                 line=line or 0,
                 column=column or 0,
                 snippet=(region.get("snippet") or {}).get("text", ""),
-                label=(loc.get("message") or {}).get("text", "")
+                label=label or ""
             )
             steps.append(step)
 
