@@ -8,7 +8,7 @@ assert mode in {"normal", "error", "interrupt", "override"}
 output = Path(sys.argv[3]).resolve()
 assert not output.exists() and output.parent.is_dir()
 assert sys.executable == "/home/raptor/raptor/out/codex-fleet/artifacts/root-release-environment-20261114/sdk/venv/bin/python"
-pins = {'core/llm/tests/conftest.py': '1e31165c508244cf386b44644001f135ab16d8a3feb2143c665fa76be0151e26', 'core/llm/client.py': '71b7de158b0b4d2952763935e539a487ced1578697315d8f27d499f1b0d72e1b', '/home/raptor/raptor/out/codex-fleet/artifacts/root-release-environment-20261114/sdk/venv/lib/python3.14/site-packages/_pytest/monkeypatch.py': 'b5c405ed57dbd58adfb7f0fae44f84d62402993c50058e07f03387285c03df33', 'core/llm/tests/test_scorecard_flush_aggregation.py': '55e4e03e7ed4e09af94f2bd626e8aa3cbcb03f1bdc8b6305c9fbb7fffc32284c'}
+pins = {'core/llm/tests/conftest.py': 'f6a3fd21e9fc63ba1a90c1271acddd79a750e410661e9cd2be515c2ff75dc1bc', 'core/llm/client.py': '71b7de158b0b4d2952763935e539a487ced1578697315d8f27d499f1b0d72e1b', '/home/raptor/raptor/out/codex-fleet/artifacts/root-release-environment-20261114/sdk/venv/lib/python3.14/site-packages/_pytest/monkeypatch.py': 'b5c405ed57dbd58adfb7f0fae44f84d62402993c50058e07f03387285c03df33', 'core/llm/tests/test_scorecard_flush_aggregation.py': '55e4e03e7ed4e09af94f2bd626e8aa3cbcb03f1bdc8b6305c9fbb7fffc32284c'}
 for name, digest in pins.items():
     assert hashlib.sha256((root / name).read_bytes()).hexdigest() == digest
 client_source = root / "core/llm/client.py"
@@ -67,7 +67,7 @@ try:
     assert next(fixture) is None
     guard = client.LLMClient.flush_usage_to_scorecard
     assert guard is not original and imports == ["core.llm.client"]
-    body_scope = namespace["monkeypatch"](None, body)
+    body_scope = namespace["monkeypatch"](None, None, body)
     assert next(body_scope) is body
     if mode == "override":
         aggregation_namespace["_reset_registry"](body)
