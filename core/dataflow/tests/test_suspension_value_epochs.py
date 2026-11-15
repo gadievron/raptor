@@ -119,18 +119,24 @@ def test_exception_target_release_external_slot(tmp_path):
     if platform.python_implementation() != "CPython":
         pytest.skip("owned last-reference timing control requires CPython")
     guard = '    if not re.fullmatch(r"[a-z]+", safe): return'
-    for shared, capture, grouped in (
-        (shared, capture, grouped) for shared in (False, True)
+    for shared, capture, grouped, inline in (
+        (shared, capture, grouped, inline) for shared in (False, True)
         for capture in ("direct", "before", "after") for grouped in (False, True)
+        for inline in (False, True) if not (capture == "after" and inline)
     ):
         handler = "except* NameError" if grouped else "except NameError"
+        target = "safe" if capture == "direct" else "alias"
         source = ("import re\nsafe = 'abc'\nclass Trigger:\n    def __del__(self):\n        global safe\n        safe = '<raw marker>'\n        events.append('finalized')\ndef process():\n"
                   + ("    global safe\n" if shared else "    safe = 'abc'\n")
                   + "    trigger = Trigger()\n" + guard
                   + ("\n    alias = safe" if capture == "before" else "")
-                  + "\n    try:\n        owned_missing_name\n    " + handler + " as trigger:\n        pass\n"
-                  + ("    alias = safe\n" if capture == "after" else "")
-                  + "    sink(" + ("safe" if capture == "direct" else "alias") + ")\n")
+                  + "\n    try:\n        owned_missing_name\n    " + handler + " as trigger:")
+        if inline:
+            source += " sink(" + target + ")\n"
+        else:
+            source += ("\n        pass\n"
+                       + ("    alias = safe\n" if capture == "after" else "")
+                       + "    sink(" + target + ")\n")
         seen, events = [], []
         namespace = {"sink": seen.append, "events": events}
         exec(compile(source, "owned-exception-target.py", "exec"), namespace)
