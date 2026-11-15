@@ -226,7 +226,7 @@ class RelayHandlerLiveTests(unittest.TestCase):
 
     def setUp(self):
         self._env = os.environ.copy()
-        self._argv = list(sys.argv)
+        self._argv = sys.argv
         self._patched: list[tuple[object, str, object]] = []
         # main() is an entry point: driving it in-process runs its
         # process-scoped side effects for real — set_process_project
