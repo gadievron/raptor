@@ -7,9 +7,10 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.deserialisation.unsafe.python.jsonpickle
     message: >-
-      jsonpickle.decode reconstructs arbitrary Python objects from
-      attacker-controllable JSON (py/object tags import and instantiate any
-      class). Use plain json.loads with an explicit schema instead.
+      Candidate: a jsonpickle decoding API is called. Review input origin,
+      decoder configuration and downstream use before concluding arbitrary
+      object reconstruction or code execution. Prefer a schema-validated
+      data-only format for untrusted input.
     languages: [python]
     severity: CRITICAL
     pattern-either:
