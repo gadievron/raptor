@@ -258,23 +258,23 @@ def test_osv_client_uses_offline_db_when_set(tmp_path: Path) -> None:
               introduced="0", fixed="4.2.7"),
     ])
     http = _ZipServingHttp({"PyPI/all.zip": blob})
-    db = OsvOfflineDB(tmp_path / "osv.sqlite", http=http)
-    db.ensure_fresh(["PyPI"])
+    with closing(OsvOfflineDB(tmp_path / "osv.sqlite", http=http)) as db:
+        db.ensure_fresh(["PyPI"])
 
-    cache = JsonCache(root=tmp_path / "cache")
-    client = OsvClient(http, cache, offline=True, offline_db=db)
+        cache = JsonCache(root=tmp_path / "cache")
+        client = OsvClient(http, cache, offline=True, offline_db=db)
 
-    dep = Dependency(
-        ecosystem="PyPI", name="django", version="4.2.0",
-        declared_in=Path("/x/req.txt"),
-        scope="main", is_lockfile=False,
-        pin_style=PinStyle.EXACT, direct=True,
-        purl="pkg:pypi/django@4.2.0",
-        parser_confidence=Confidence("high", reason="t"),
-    )
-    results = client.query_batch([dep])
-    assert len(results) == 1
-    assert {a.osv_id for a in results[0].advisories} == {"PYSEC-1"}
+        dep = Dependency(
+            ecosystem="PyPI", name="django", version="4.2.0",
+            declared_in=Path("/x/req.txt"),
+            scope="main", is_lockfile=False,
+            pin_style=PinStyle.EXACT, direct=True,
+            purl="pkg:pypi/django@4.2.0",
+            parser_confidence=Confidence("high", reason="t"),
+        )
+        results = client.query_batch([dep])
+        assert len(results) == 1
+        assert {a.osv_id for a in results[0].advisories} == {"PYSEC-1"}
 
 
 # ---------------------------------------------------------------------------
