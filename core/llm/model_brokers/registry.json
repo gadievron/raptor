@@ -97,6 +97,12 @@
       "protocol": "http"
     },
     {
+      "name": "requesty",
+      "auth_scheme": "Bearer",
+      "upstream_base_url": "https://router.requesty.ai",
+      "api_path": "/v1"
+    },
+    {
       "name": "runcrate",
       "auth_scheme": "Bearer",
       "upstream_base_url": "https://api.runcrate.ai",
