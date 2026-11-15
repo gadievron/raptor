@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-import os
 import re
-import stat
+from functools import partial
 from pathlib import Path
+
+from core.security.file_policy import validate_file_permissions
+from core.source.gated import ReadBudgetExceededError, read_bytes_gated
 
 
 HEADER_NAME = "X-Origin-Verify"
@@ -30,20 +32,17 @@ def with_origin_header(headers: tuple[str, ...], value: str) -> tuple[str, ...]:
 
 def read_value(path: str | Path) -> str:
     """Read a private, regular, owner-only file without following symlinks."""
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
-        fd = os.open(path, flags)
-        try:
-            mode = os.fstat(fd).st_mode
-            if not stat.S_ISREG(mode) or mode & 0o077:
-                raise ValueError("origin verification file must be regular and owner-only")
-            data = os.read(fd, 129)
-        finally:
-            os.close(fd)
+        data = read_bytes_gated(
+            path, 128, follow_symlinks=False,
+            stat_validator=partial(validate_file_permissions, forbidden_mode_bits=0o077),
+        )
+    except ReadBudgetExceededError:
+        raise ValueError("origin verification file is too large") from None
+    except ValueError:
+        raise ValueError("origin verification file must be regular and owner-only") from None
     except OSError as exc:
         raise ValueError("cannot read origin verification file") from exc
-    if len(data) > 128:
-        raise ValueError("origin verification file is too large")
     try:
         return validate_value(data.decode("ascii").strip())
     except (UnicodeDecodeError, ValueError) as exc:
