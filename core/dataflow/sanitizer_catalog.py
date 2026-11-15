@@ -242,8 +242,8 @@ def repo_shadows_module_root(
     repo_root: str, root: str,
 ) -> bool:
     """True when the scanned repo ships an import-resolvable module
-    that shadows ``root`` — ``<repo_root>/<root>.py`` or
-    ``<repo_root>/<root>/__init__.py``.
+    that shadows ``root`` — a source or legacy sourceless bytecode
+    module, or a package with a source or bytecode ``__init__``.
 
     Import-target ORIGIN check: ``import html`` inside such a repo
     resolves to the REPO's file at runtime (the script directory
@@ -259,9 +259,11 @@ def repo_shadows_module_root(
         from pathlib import Path as _Path
 
         base = _Path(repo_root)
-        return (base / f"{root}.py").is_file() or (
-            base / root / "__init__.py"
-        ).is_file()
+        return any(
+            (base / f"{root}{suffix}").is_file()
+            or (base / root / f"__init__{suffix}").is_file()
+            for suffix in (".py", ".pyc")
+        )
     except OSError:
         return True
 
