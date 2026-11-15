@@ -37,14 +37,18 @@ def sweep(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "_spatch_path", lambda: "/unused/spatch")
     monkeypatch.setattr(runner, "_rule_version_probe", lambda: lambda: None)
     monkeypatch.setattr(runner, "rule_version_refusal", lambda *_: None)
-    monkeypatch.setattr(runner, "read_text_gated", lambda path, *a, **kw: Path(path).stem)
+    # The grammar and output parser are owned seams. Declare reporting
+    # capability so these controls reach inventory handling, not the separate
+    # unavailable-reporter refusal. This sentinel is never parsed or executed.
+    monkeypatch.setattr(runner, "read_text_gated", lambda path, *a, **kw:
+                        Path(path).stem + "\nscript:python")
     monkeypatch.setattr(runner, "contains_script_block", lambda _: False)
     monkeypatch.setattr(runner, "_lexical_scan", lambda text: (text, False))
     monkeypatch.setattr(runner, "_LIFECYCLE_BLOCK_RE", SimpleNamespace(
-        search=lambda text: state.mode == "isolation" and text == "third"))
+        search=lambda text: state.mode == "isolation" and text.splitlines()[0] == "third"))
     monkeypatch.setattr(runner, "_emitted_rule_ids", lambda text:
                         {"shared"} if state.mode == "collision" else {text})
-    monkeypatch.setattr(runner, "_inject_harness", lambda text, _: text)
+    monkeypatch.setattr(runner, "_inject_harness", forbidden)
     monkeypatch.setattr(runner, "_make_nonce", lambda: "owned-nonce")
     monkeypatch.setattr(runner, "_parse_errors", lambda _: [])
     monkeypatch.setattr(runner, "_warn_forged_markers", lambda *a, **kw: 0)
