@@ -2439,11 +2439,11 @@ def _any_match_at_finding_location(
             m_line = int(m.get("line") or 0)
         except (ValueError, TypeError):
             m_line = 0
-        # m_line == 0 means the engine could NOT localize the match —
+        # A non-positive line means the engine could NOT localize the match —
         # that is not an at-location match (the Tier-2 verdict would
         # read "confirmed" precisely when the engine has no line
         # evidence). Only a missing target_line relaxes the check.
-        if m_line == 0:
+        if m_line <= 0:
             continue
         if target_line == 0 or abs(m_line - target_line) <= 5:
             return True
