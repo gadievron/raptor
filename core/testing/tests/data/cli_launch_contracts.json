@@ -417,7 +417,7 @@
     "core/project/tests/test_directory_relocation.py": "55a5c7b9b733dd8cac46829aa71e4579577e24579af59c41a63f5b495e05d630",
     "core/project/tests/test_disk_usage_accounting.py": "9c201aa4dc3f298fefdf0543dd8ceb07c6e51e08f7666803c6564c31f4f749be",
     "core/project/tests/test_merge_artifact_storage.py": "626b4631ef83728e3e8c233f0cbdbf0252f3196c575d23f2b183d232134a70fd",
-    "core/project/tests/test_merge_publication_transaction.py": "bbdd3b2e71066fe7bcf62ef4ed83e880c22bac59f445294164782113f94afd46",
+    "core/project/tests/test_merge_publication_transaction.py": "3470ed403140112e60700b1d7ed48bed6a64c65570b3d78f18a6e303b7097d99",
     "core/project/tests/test_operation_lock_lifecycle.py": "7ee83b0033844f408c804cff4c3669fe1209ca49037827276155609ed17eeb44",
     "core/project/tests/test_package_exports.py": "8bdeae5acbc67eb46187159a6285853d13904b78f5d321332cdd6dc5d72804b6",
     "core/project/tests/test_sessions.py": "9bc47d9882c9c54088d1fda24565d3f340772f946c44571d1cd65e248a50d721",
