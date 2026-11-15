@@ -22,7 +22,7 @@ class _Consumers(list):
 
 def _events(first_valid, offset=0):
     def event(line, **values):
-        return dict(line=line + offset, col=1, **values)
+        return dict(line=line + offset, col=1, line_end=line + offset, col_end=9, **values)
 
     return {
         "reject": [event(4, length="n", remaining="r", bad="bad")],
@@ -60,6 +60,7 @@ def test_report_stops_only_after_success(first_valid, visits, reports):
         assert (rows[0]["file"], rows[0]["line"], rows[0]["col"], rows[0]["rule"]) == (
             "owned.c", 4, 1, "packet_length_inverted_guard",
         )
+        assert (rows[0]["line_end"], rows[0]["col_end"]) == (4, 9)
 
 
 def test_duplicate_guard_still_emits_once():
@@ -76,7 +77,7 @@ def test_distinct_functions_keep_their_reports():
 
 def test_distinct_guards_keep_their_reports():
     events = _events(0)
-    events["reject"].append(dict(line=6, col=1, length="n", remaining="r", bad="bad"))
+    events["reject"].append(dict(line=6, col=1, line_end=6, col_end=9, length="n", remaining="r", bad="bad"))
     events["reachable"].extend(dict(line=6, col=1, sink_line=str(line), sink_col="1")
                                for line in range(7, 133))
     rows = _reports({("owned.c", "owned", 1): events})
