@@ -591,9 +591,9 @@ def run_rule(
             path. ``target`` must then be the directory that spatch
             should resolve relative ``#include`` paths from — it
             becomes the subprocess cwd, exactly as in ``--dir`` mode —
-            and every entry should be an absolute path so match
-            attribution (``SpatchMatch.file`` echoes the argv
-            spelling) is unambiguous. Reported input parse errors
+            and entries are made absolute relative to the caller's
+            current directory before invocation. Match attribution
+            uses that argv spelling. Reported input parse errors
             make coverage incomplete even when spatch exits zero;
             partial matches remain available. With no reported parse
             or output errors, quiet members are attributed from argv,
@@ -685,6 +685,8 @@ def run_rule(
         )
 
     if file_set is not None:
+        # Member inputs are relative to the caller, before the child cwd changes.
+        file_set = [Path(entry).absolute() for entry in file_set]
         if not target.is_dir():
             # The target is the include-resolution root (subprocess
             # cwd) in batch mode; a file target here is a caller bug
@@ -1955,7 +1957,7 @@ def demux_result_by_file(
     for m in result.matches:
         by_file.setdefault(_rel(m.file), []).append(m)
 
-    members = [_rel(str(f)) for f in file_set]
+    members = [_rel(str(Path(f).absolute())) for f in file_set]
     errors = list(result.errors)
     if by_file.keys() - set(members):
         # Never turn an unassigned authentic hit into verified silence.
