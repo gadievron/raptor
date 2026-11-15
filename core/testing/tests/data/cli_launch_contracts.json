@@ -1226,7 +1226,7 @@
     "packages/sca/wheel_compat/tests/conftest.py": "5363c2ffcf1245d4d70756b8529d0475603574509ad8b0c351a942ceb0cd7416",
     "packages/semgrep/tests/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "packages/semgrep/tests/conftest.py": "fc5831245c09b45a7903c0b61dd639f4b006c1bd67673fc7c2f6249a8e757b80",
-    "packages/semgrep/tests/test_nosemgrep.py": "598c8f8cdf2613775ccabcc453be02a9829f7d0d57a19a4059b1dd7b98b094d3",
+    "packages/semgrep/tests/test_nosemgrep.py": "da2ad6579708a6185dd3b18db6fd22f0974ee7400492d668f57d9fd650a93a25",
     "packages/semgrep/tests/test_offline.py": "490f2e85123b7a090f05b91c47b83f2c9db49380a6ed82cff7d6051db23ded4c",
     "packages/semgrep/tests/test_runner.py": "7a2b6258e5aaf61de982d76c799f88bbd18f0c19114f11e17b654b5bc5132f58",
     "packages/semgrep/tests/test_snap_launcher_identity.py": "647a954ebbc4b308d915df42162f1a5cda5d5339ea1064a563156f43afc5c91d",
