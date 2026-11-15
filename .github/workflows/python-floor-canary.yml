@@ -1,12 +1,13 @@
 name: Python floor canary
 
-# Verifies the documented Python 3.12 floor (requires-python in
+# Verifies the documented Python 3.13 floor (requires-python in
 # pyproject.toml) still holds. The main test suite runs on a single
 # recent interpreter, so a dependency or runtime-module change could
-# silently break 3.12 between releases. This lane installs the
-# lockfile on 3.12, import-smokes the floor-sensitive runtime modules
-# (typing.Self users, the os.unshare-dependent sandbox entry), and
-# runs a small fast test subset. Weekly plus any PR that touches the
+# silently break 3.13 between releases. This lane installs the
+# lockfile on 3.13, import-smokes the floor-sensitive runtime modules
+# (typing.Self users, the os.unshare-dependent sandbox entry, the
+# ast.TypeVar.default_value-dependent dataflow analyser), and runs a
+# small fast test subset. Weekly plus any PR that touches the
 # dependency surface or this lane's own setup — unrelated changes stay
 # on the weekly floor check rather than allocating another PR runner.
 
@@ -33,7 +34,7 @@ permissions:
   contents: read
 
 env:
-  PYTHON_VERSION: '3.12'
+  PYTHON_VERSION: '3.13'
   VENV_PATH: .venv
 
 jobs:
@@ -66,7 +67,7 @@ jobs:
       # The lockfile itself is the artifact under test: `uv export
       # --locked` fails if uv.lock and pyproject.toml disagree, and the
       # install includes the source grammars exercised by the test subset
-      # and fails if any locked wheel refuses the 3.12 floor.
+      # and fails if any locked wheel refuses the 3.13 floor.
       - name: Create venv from the lockfile on the floor interpreter
         shell: bash
         run: |
@@ -76,7 +77,7 @@ jobs:
 
       # Floor-sensitive runtime modules: the direct typing.Self users
       # (3.11+), the os.unshare-dependent sandbox mount-ns backend
-      # (3.12+), and representative entry modules whose import closures
+      # (3.13+), and representative entry modules whose import closures
       # pull in most of core/ and packages/.
       - name: Import smoke
         run: |
@@ -103,7 +104,7 @@ jobs:
           EOF
 
       # Small, fast, dependency-light subset — enough to execute real
-      # code paths on 3.12 without re-running the whole suite here.
+      # code paths on 3.13 without re-running the whole suite here.
       - name: Fast test subset
         run: |
           source "$VENV_PATH/bin/activate"

@@ -30,10 +30,11 @@ return to the relevant feature guide for platform-specific requirements.
 
 ## Python
 
-Python **3.12+** is required. The sandbox layer hard-requires
-`os.unshare` (added in 3.12), and runtime modules use `typing.Self`
-(3.11+) and PEP 604 union syntax (`X | Y`) at function-definition time —
-the suite fails at import/setup on 3.11 and earlier.
+Python **3.13+** is required. The sandbox layer hard-requires
+`os.unshare` (added in 3.12), runtime modules use `typing.Self`
+(3.11+) and PEP 604 union syntax (`X | Y`) at function-definition time,
+and the dataflow source-identity analyser uses `ast.TypeVar.default_value`
+(added in 3.13, PEP 696) — the suite fails on 3.12 and earlier.
 
 
 ## Core Tools

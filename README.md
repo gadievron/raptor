@@ -151,7 +151,7 @@ and [WSL requirements](docs/wsl.md) for the exact contracts and residual risks.
 
 ## Prerequisites
 
-- **Manual checkout:** Python 3.12+, [uv](https://docs.astral.sh/uv/), and the
+- **Manual checkout:** Python 3.13+, [uv](https://docs.astral.sh/uv/), and the
   tools needed by your workflow. Semgrep is needed for default source scans;
   standalone SCA does not require it.
 - **Interactive shell:** Claude Code with an active subscription or an

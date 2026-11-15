@@ -116,7 +116,7 @@ depth, including the cost model and the finding lifecycle.
 
 ## Dependencies
 
-Python 3.12+ and the tools listed in [dependencies](dependencies.md).
+Python 3.13+ and the tools listed in [dependencies](dependencies.md).
 Install Python packages with `uv sync --locked`; external
 tools (Semgrep, CodeQL, AFL++, ...) are installed separately and probed
 at runtime -- `python3 raptor.py doctor` reports what is missing.
