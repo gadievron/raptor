@@ -185,6 +185,7 @@ def canonicalise(text: str) -> str:
     the multi-condition structure intact. Internal multi-space
     runs from rewrite expansion still collapse fine.
     """
+    text = str.__str__(text)
     # Refuse the complete input before scanning. A truncated prefix can
     # accidentally become a valid condition with different semantics.
     if len(text) > MAX_CANONICALISE_CHARS:
