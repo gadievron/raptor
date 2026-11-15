@@ -114,10 +114,12 @@ def test_store_lock_degrades_after_bounded_wait(
                    for r in caplog.records)
         assert any("WITHOUT" in r.message for r in caplog.records)
     finally:
-        os.close(holder_fd)
-        if thread is not None and thread.ident is not None:
-            thread.join(timeout=10)
-            assert not thread.is_alive(), "lock waiter survived holder cleanup"
+        try:
+            os.close(holder_fd)
+        finally:
+            if thread is not None and thread.ident is not None:
+                thread.join(timeout=10)
+                assert not thread.is_alive(), "lock waiter survived holder cleanup"
 
     assert clock.seconds >= 0.5
     assert len(clock.sleeps) > 1, "caller bypassed the polling wait"
@@ -160,10 +162,12 @@ def test_journal_append_fails_loudly_after_bounded_wait(
         assert errors, "append neither raised nor was refused"
         assert "row NOT appended" in str(errors[0])
     finally:
-        os.close(holder_fd)
-        if thread is not None and thread.ident is not None:
-            thread.join(timeout=10)
-            assert not thread.is_alive(), "lock waiter survived holder cleanup"
+        try:
+            os.close(holder_fd)
+        finally:
+            if thread is not None and thread.ident is not None:
+                thread.join(timeout=10)
+                assert not thread.is_alive(), "lock waiter survived holder cleanup"
 
     assert clock.seconds >= 0.5
     assert len(clock.sleeps) > 1, "caller bypassed the polling wait"
