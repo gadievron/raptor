@@ -620,7 +620,7 @@ def run_rule(
         SpatchResult with matches parsed from COCCIRESULT lines.
     """
     rule = Path(rule).resolve()
-    target = Path(target)
+    target = Path(target).absolute()
     rule_name = rule.stem
 
     if not is_available():
@@ -1043,7 +1043,7 @@ def run_rules(
     # The C/H tree walk is loop-invariant (the target doesn't change
     # between rules) — enumerate once here instead of once per rule:
     # N rules previously meant 2N full recursive globs of the target.
-    target = Path(target)
+    target = Path(target).absolute()
     try:
         tree_files = _walk_c_h(target) if target.is_dir() else None
     except OSError as exc:
@@ -1127,7 +1127,7 @@ def run_rules_batched(
     retries its accepted rules individually with the original timeout/options;
     incomplete batch matches never stand in for those per-rule results.
     """
-    target = Path(target)
+    target = Path(target).absolute()
     # Keep every explicitly requested path: missing rules need a refusal,
     # not silent removal from the batch's result set.
     rules = [Path(r).resolve() for r in rules]
@@ -1304,7 +1304,7 @@ def run_rules_batched(
     nonce = _make_nonce()
     combined = "\n".join(parts).replace(RESULT_PREFIX, _nonced_prefix(nonce))
 
-    target = Path(target)
+    target = Path(target).absolute()
     run_env = dict(env) if env is not None else RaptorConfig.get_safe_env()
     # Same private-TMPDIR scratch as run_rule — see the comment there.
     # The batch rule file is materialised inside it for the same
