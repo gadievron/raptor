@@ -23,9 +23,7 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.java.insecure-cookie-secure-false
     message: >-
-      Cookie Secure flag explicitly set to false — the cookie will be sent
-      over unencrypted HTTP, exposing it to network sniffing. Call
-      setSecure(true).
+      A setSecure(false) call may disable the Secure flag on a response cookie. Confirm the API and final cookie flags, then review the intended transport before emission. Enable Secure where HTTPS-only transmission is required.
     languages: [java]
     severity: HIGH
     pattern: $COOKIE.setSecure(false)
@@ -35,9 +33,7 @@ rules:
 
   - id: raptor.java.insecure-cookie-httponly-false
     message: >-
-      Cookie HttpOnly flag explicitly set to false — the cookie is
-      accessible to client-side JavaScript, enabling session theft via XSS.
-      Call setHttpOnly(true).
+      A setHttpOnly(false) call may allow script access to a response cookie. Confirm the API, final cookie flags and whether script access is intended. Enable HttpOnly where client-side access is unnecessary.
     languages: [java]
     severity: HIGH
     pattern: $COOKIE.setHttpOnly(false)
@@ -50,9 +46,7 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.java.spring-redirect
     message: >-
-      Untrusted data flows into a Spring MVC "redirect:" view name,
-      enabling open redirect attacks. Validate the redirect target against
-      an allowlist of trusted URLs.
+      Potentially request-derived text reaches a redirect:-prefixed string. Confirm that it is used as a Spring MVC redirect view name, then validate destinations against the intended URL allowlist.
     languages: [java]
     severity: HIGH
     mode: taint
@@ -82,9 +76,7 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.java.path-traversal
     message: >-
-      Untrusted data flows into a filesystem path operation, enabling
-      directory traversal. Validate and canonicalise the path, then verify
-      it stays within the intended base directory.
+      Potentially request-derived text reaches path construction or file I/O APIs. Review the actual operation and effective path before claiming traversal. Validate and canonicalise the path, then verify it stays within the intended base directory.
     languages: [java]
     severity: CRITICAL
     mode: taint
