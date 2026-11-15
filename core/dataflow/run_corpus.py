@@ -15,9 +15,12 @@ from __future__ import annotations
 import argparse
 import csv
 import importlib
+import stat
 import sys
+from io import StringIO
 from pathlib import Path
 
+from core.atomic_fs import write_bytes_atomically
 from core.dataflow.finding import Finding
 from core.dataflow.label import (
     GroundTruth,
@@ -108,32 +111,49 @@ def _classify_agreement(validator_label: str, ground_truth: str) -> str:
     return "agree" if validator_label == ground_truth else "disagree"
 
 
-def run(corpus_dir: Path, validator: Validator, output: Path) -> int:
-    """Run validator against every corpus entry; write CSV to output.
+def _csv_row_bytes(values: Iterable[object]) -> bytes:
+    with StringIO(newline="") as stream:
+        csv.writer(stream).writerow(values)
+        return stream.getvalue().encode("utf-8")
 
-    Returns the number of findings processed.
+
+def run(corpus_dir: Path, validator: Validator, output: Path) -> int:
+    """Process every entry before publishing the complete measurement CSV.
+
+    Returns the number of findings processed. Failures before publication
+    retain the previous output. Destination symlinks are followed and the
+    parent directory must exist. New CSVs are private; existing permission
+    bits are retained.
     """
+    output = output.resolve()
+    if not output.parent.is_dir():
+        raise FileNotFoundError(f"CSV output directory does not exist: {output.parent}")
+    try:
+        mode = stat.S_IMODE(output.stat().st_mode)
+    except FileNotFoundError:
+        mode = 0o600
     rows = 0
-    with output.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(CSV_HEADER)
+
+    def chunks() -> Iterable[bytes]:
+        nonlocal rows
+        yield _csv_row_bytes(CSV_HEADER)
         for finding, label in iter_corpus(corpus_dir):
             verdict = validator.validate(finding)
             v_label = verdict_to_label(verdict)
             agreement = _classify_agreement(v_label, label.verdict)
-            writer.writerow(
-                [
-                    finding.finding_id,
-                    finding.producer,
-                    finding.rule_id,
-                    label.verdict,
-                    label.fp_category or "",
-                    verdict.value,
-                    v_label,
-                    agreement,
-                ]
-            )
+            yield _csv_row_bytes([
+                finding.finding_id,
+                finding.producer,
+                finding.rule_id,
+                label.verdict,
+                label.fp_category or "",
+                verdict.value,
+                v_label,
+                agreement,
+            ])
             rows += 1
+
+    write_bytes_atomically(output, chunks(), mode=mode)
     return rows
 
 
