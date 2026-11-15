@@ -381,7 +381,7 @@
     "core/llm/scorecard/tests/test_cli.py": "cce74f183697c136e936689047e0d57b0252c0fb145f5a5413f68708d284a368",
     "core/llm/tests/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "core/llm/tests/conftest.py": "5e1d63e803bc63e7af031cad6f2687e9925546851834164bbb44fd33011a74c4",
-    "core/llm/tests/test_ask_isolation.py": "7065f0ec59eec7efe49d781ef997080a53b288c7a1ea8df3617f1bfe9e4306a8",
+    "core/llm/tests/test_ask_isolation.py": "731ea60939c2bef4c1e74e31afb37351a604db2aef78b4c08db0e0b204d3e884",
     "core/llm/tests/test_cc_adapter.py": "5386df552d365fbd8fc3da4b27f1e49f2b187bbddc517520924cd274e2f549bf",
     "core/llm/tests/test_cc_streaming_pipes.py": "94ca544103e51618633ef0c46c79124e5a72ec66468a68d5e4f9bbf0d1a66b3b",
     "core/llm/tests/test_client_thread_ownership.py": "835e7f6f9f0d9a939d25ffa2ff9e63865db7c9ba6cd24b3a745ce5b4e8fe86db",
