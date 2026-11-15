@@ -134,6 +134,7 @@ for pos in p:
     print("COCCIRESULT:" + json.dumps({
         "rule": "snprintf_truncation_boundary", "file": pos.file,
         "line": int(pos.line), "col": int(pos.column),
+        "line_end": int(pos.line_end), "col_end": int(pos.column_end),
         "message": "Candidate: (v)snprintf return compared with > size; ret == size is truncated. Review whether the caller requires complete output or handles that boundary separately (CWE-193)"
     }))
 
@@ -264,5 +265,6 @@ for pos in p:
     print("COCCIRESULT:" + json.dumps({
         "rule": "snprintf_truncation_boundary", "file": pos.file,
         "line": int(pos.line), "col": int(pos.column),
+        "line_end": int(pos.line_end), "col_end": int(pos.column_end),
         "message": "Candidate: (v)snprintf return compared with > size; ret == size is truncated. Review whether the caller requires complete output or handles that boundary separately (CWE-193)"
     }))

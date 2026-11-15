@@ -41,6 +41,8 @@ _SCRIPTS = [
     ("use_after_fclose", 0),
     ("use_after_fclose", 1),
     ("use_after_fclose", 2),
+    ("snprintf_truncation_boundary", 0), ("snprintf_truncation_boundary", 1),
+    ("snprintf_advance", 0), ("snprintf_advance", 1), ("snprintf_advance", 2),
 ]
 
 
@@ -60,7 +62,7 @@ def _report(name, index, position, **bindings):
     tree = ast.parse(_python_statements(scripts[index]))
     tree.body = [node for node in tree.body if not isinstance(node, (ast.Import, ast.ImportFrom))]
     output = io.StringIO()
-    namespace = {"json": json, "ast": ast, "re": re, "ARR": "buffer", "offset": "1", "COMMAND": "F_SETFD", "FLAGS": "O_NONBLOCK", "p": [position], "p2": [position], "PARAM": "count", "TD": "struct payload", "TL": "int", "T": "char", "LOCAL": "owned", "swap1": "htons", "swap2": "ntohs", "V": "secret"}
+    namespace = {"json": json, "sys": SimpleNamespace(stderr=output), "buf": "owned", "n": "count", "ast": ast, "re": re, "ARR": "buffer", "offset": "1", "COMMAND": "F_SETFD", "FLAGS": "O_NONBLOCK", "p": [position], "p2": [position], "PARAM": "count", "TD": "struct payload", "TL": "int", "T": "char", "LOCAL": "owned", "swap1": "htons", "swap2": "ntohs", "V": "secret"}
     namespace.update(bindings)
     with redirect_stdout(output):
         exec(compile(tree, str(rule), "exec"), namespace)
