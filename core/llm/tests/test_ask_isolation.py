@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import http.server
 import json
+import logging
 import os
 import sys
 import threading
@@ -115,11 +116,19 @@ def test_cli_keyless_switch_uses_worker_and_keeps_terminal_sanitisation(monkeypa
     loader = importlib.machinery.SourceFileLoader("keyless_ask_test_cli", str(script))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)
+    names = ("raptor", "httpx", "httpcore")
+    loggers = [logging.getLogger(name) for name in names]
+    levels = {logger: logger.level for logger in loggers}
+    handler_levels = {handler: handler.level for logger in loggers for handler in logger.handlers}
     with ExitStack() as stack:
         stack.enter_context(patch.object(sys, "path", sys.path.copy()))
-        stack.enter_context(isolated_cli_logging())
+        stack.enter_context(isolated_cli_logging(logger_names=names))
+        for handler, level in handler_levels.items():
+            stack.callback(handler.setLevel, level)
         loader.exec_module(module)
         assert module.main() == 0
+    assert {logger: logger.level for logger in loggers} == levels
+    assert {handler: handler.level for handler in handler_levels} == handler_levels
     worker.assert_called_once_with(selected, "test prompt", None, max_tokens=4096, temperature=None)
     parent.generate.assert_not_called()
     assert "\x1b" not in capsys.readouterr().out
