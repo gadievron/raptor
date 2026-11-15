@@ -8,10 +8,7 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.deserialisation.java.xmldecoder
     message: >-
-      java.beans.XMLDecoder deserialises arbitrary objects and invokes their
-      methods during decoding — remote code execution if the stream is
-      attacker-controlled. Parse the XML with a schema-validating parser and
-      construct objects explicitly instead.
+      An XMLDecoder constructor appears in this code. Review the input origin and later decoding operations; permissive decoding of untrusted XML can construct objects and invoke methods. Prefer restricted data parsing and explicit object construction.
     languages: [java, kotlin]
     severity: HIGH
     pattern-either:
@@ -54,10 +51,7 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.deserialisation.java.jackson-default-typing
     message: >-
-      Jackson default typing deserialises attacker-chosen classes
-      (polymorphic type handling on all Object fields) — a well-known RCE
-      gadget surface. Use activateDefaultTyping only with a strict
-      PolymorphicTypeValidator, or model types explicitly.
+      A default-typing configuration call appears in this code. Confirm the mapper API, library version, validator and later use with untrusted input before concluding attacker-chosen type construction. Prefer explicit model types or a suitably restrictive validator.
     languages: [java, kotlin]
     severity: HIGH
     pattern-either:
