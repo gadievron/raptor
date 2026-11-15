@@ -353,6 +353,7 @@ _TABLE: tuple[KnownSafeCall, ...] = (
         sink_class="xss",
         languages=("java",),
         input_arg_kind="transform",
+        required_source_contracts=frozenset({HTML_TEXT_CONTENT_CONTEXT}),
         soundness_note=(
             "ESAPI DefaultEncoder.encodeForHTML entity-encodes for HTML "
             "body context (canonical OWASP Benchmark safe form). The "
@@ -366,9 +367,11 @@ _TABLE: tuple[KnownSafeCall, ...] = (
         sink_class="xss",
         languages=("java",),
         input_arg_kind="transform",
+        required_source_contracts=frozenset({HTML_OUTPUT_POLICY}),
         soundness_note=(
             "Spring HtmlUtils.htmlEscape entity-encodes &, <, >, \", ' "
-            "per the HTML 4.0 character entity set. HTML-safe output."
+            "per the HTML 4.0 character entity set. Output context and "
+            "attribute policy remain separate requirements."
         ),
     ),
     # NB: org.apache.commons.io.FilenameUtils.getName is DELIBERATELY
