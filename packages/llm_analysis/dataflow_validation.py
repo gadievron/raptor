@@ -1484,9 +1484,9 @@ def _try_template_with_retry(
 ) -> "tuple[ValidationResult, bool, int]":
     """Tier 2 + Tier 3: ask LLM for source/sink predicates, retry on compile fail.
 
-    Returns (result, succeeded, n_retries). `succeeded=False` means we
-    exhausted retries without a compile-able query — caller should fall
-    through to the next tier.
+    Returns (result, succeeded, n_retries). `succeeded=False` means no
+    usable template result was produced. The caller returns this inconclusive
+    result as template-failed instead of trying the generic fallback.
     """
     last_compile_error: str | None = None
     last_evidence: ToolEvidence | None = None
