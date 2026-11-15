@@ -59,6 +59,8 @@ if not free_nonbase_zero_offset(offset):
       "file":  p[0].file,
       "line":  int(p[0].line),
       "col":   int(p[0].column),
+      "line_end": int(p[0].line_end),
+      "col_end": int(p[0].column_end),
       "message":   "Pointer arithmetic reaches deallocation; verify the allocation base and effective offset (CWE-761 candidate)"
     }
     print("COCCIRESULT:" + json.dumps(msg))
@@ -79,6 +81,8 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message":   "Prefix increment changes the deallocation argument; verify the allocation base and effective offset (CWE-761 candidate)"
 }
 print("COCCIRESULT:" + json.dumps(msg))

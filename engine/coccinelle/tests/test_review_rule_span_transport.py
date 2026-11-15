@@ -32,6 +32,9 @@ _SCRIPTS = [
     ("copy_user_size_mismatch", 0), ("copy_user_size_mismatch", 1),
     ("copy_user_size_mismatch", 2),
     ("fcntl_flag_domain", 0), ("free_stack_array", 0),
+    ("sizeof_array_param", 0), ("sizeof_array_param", 1),
+    ("malloc_strlen_strcpy", 0), ("malloc_strlen_strcpy", 1),
+    ("free_nonbase_ptr", 0), ("free_nonbase_ptr", 1),
 ]
 
 
@@ -51,7 +54,7 @@ def _report(name, index, position, **bindings):
     tree = ast.parse(_python_statements(scripts[index]))
     tree.body = [node for node in tree.body if not isinstance(node, (ast.Import, ast.ImportFrom))]
     output = io.StringIO()
-    namespace = {"json": json, "ast": ast, "re": re, "ARR": "buffer", "COMMAND": "F_SETFD", "FLAGS": "O_NONBLOCK", "p": [position], "p2": [position], "PARAM": "count", "TD": "struct payload", "TL": "int", "T": "char", "LOCAL": "owned", "swap1": "htons", "swap2": "ntohs", "V": "secret"}
+    namespace = {"json": json, "ast": ast, "re": re, "ARR": "buffer", "offset": "1", "COMMAND": "F_SETFD", "FLAGS": "O_NONBLOCK", "p": [position], "p2": [position], "PARAM": "count", "TD": "struct payload", "TL": "int", "T": "char", "LOCAL": "owned", "swap1": "htons", "swap2": "ntohs", "V": "secret"}
     namespace.update(bindings)
     with redirect_stdout(output):
         exec(compile(tree, str(rule), "exec"), namespace)
@@ -81,6 +84,8 @@ def test_report_spans_survive_parser_and_deduplication(name, index):
         ("double_close", 5): "double_fclose",
         ("copy_user_size_mismatch", 1): "copy_from_user_sizeof_ptr",
         ("copy_user_size_mismatch", 2): "copy_from_user_sizeof_ptr",
+        ("sizeof_array_param", 1): "sizeof_array_param_unsized",
+        ("free_nonbase_ptr", 1): "free_nonbase_ptr_inc",
     }.get((name, index), name)
     assert all(row.rule == expected_rule and row.message for row in rows)
     assert rows[0].message == rows[1].message
@@ -123,3 +128,10 @@ def test_usercopy_type_filters_stay_quiet(index, bindings):
 def test_correct_fcntl_domain_stays_quiet(command, flags):
     position = SimpleNamespace(file="owned.c", line=4, column=2, line_end=5, column_end=18)
     assert _report("fcntl_flag_domain", 0, position, COMMAND=command, FLAGS=flags) == ""
+
+
+@pytest.mark.parametrize("offset", ["(unsigned long)0UL", "(int)(-0)"],
+                         ids=["cast-zero", "signed-zero"])
+def test_zero_pointer_offset_stays_quiet(offset):
+    position = SimpleNamespace(file="owned.c", line=4, column=2, line_end=5, column_end=18)
+    assert _report("free_nonbase_ptr", 0, position, offset=offset) == ""

@@ -40,6 +40,8 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message":   "Candidate: sizeof on an array-notation parameter returns pointer width; review the intended extent (CWE-467)"
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -74,6 +76,8 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message":   "Candidate: sizeof on an unsized array parameter returns pointer width; review the intended extent (CWE-467)"
 }
 print("COCCIRESULT:" + json.dumps(msg))
