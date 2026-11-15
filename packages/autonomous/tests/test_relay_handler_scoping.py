@@ -288,11 +288,10 @@ class RelayHandlerLiveTests(unittest.TestCase):
 
     def _fake_binary(self) -> Path:
         import tempfile
-        handle = tempfile.NamedTemporaryFile(
-            prefix="relay-bin-", delete=False)
-        self.addCleanup(os.unlink, handle.name)
-        handle.write(b"\x7fELF-not-really")
-        handle.close()
+        with tempfile.NamedTemporaryFile(
+            prefix="relay-bin-", delete=False) as handle:
+            self.addCleanup(os.unlink, handle.name)
+            handle.write(b"\x7fELF-not-really")
         return Path(handle.name)
 
     def _drive(self, argv: list[str]):
@@ -408,30 +407,29 @@ class RelayHandlerLiveTests(unittest.TestCase):
         abort so the post-scan degrade lanes are reachable."""
         import json
         import tempfile
-        handle = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".sarif", prefix="relay-", delete=False)
-        self.addCleanup(os.unlink, handle.name)
-        json.dump({
-            "version": "2.1.0",
-            "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
-            "runs": [{
-                "tool": {"driver": {"name": "imported", "rules": [
-                    {"id": "test/format-string"},
-                ]}},
-                "results": [{
-                    "ruleId": "test/format-string",
-                    "level": "warning",
-                    "message": {"text": "imported test finding"},
-                    "locations": [{
-                        "physicalLocation": {
-                            "artifactLocation": {"uri": "app.c"},
-                            "region": {"startLine": 2},
-                        },
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".sarif", prefix="relay-", delete=False) as handle:
+            self.addCleanup(os.unlink, handle.name)
+            json.dump({
+                "version": "2.1.0",
+                "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+                "runs": [{
+                    "tool": {"driver": {"name": "imported", "rules": [
+                        {"id": "test/format-string"},
+                    ]}},
+                    "results": [{
+                        "ruleId": "test/format-string",
+                        "level": "warning",
+                        "message": {"text": "imported test finding"},
+                        "locations": [{
+                            "physicalLocation": {
+                                "artifactLocation": {"uri": "app.c"},
+                                "region": {"startLine": 2},
+                            },
+                        }],
                     }],
                 }],
-            }],
-        }, handle)
-        handle.close()
+            }, handle)
         return Path(handle.name)
 
     @pytest.mark.slow  # full main() traversal — two real end-to-end degrade runs
