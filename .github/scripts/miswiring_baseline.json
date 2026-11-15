@@ -43,6 +43,9 @@
     "artifacts:orphan_reader::README.txt": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
+    "artifacts:orphan_reader::_iris.sarif": {
+      "note": "IRIS SARIF is produced by the external CodeQL CLI: _run_iris_pack passes codeql_{lang}_iris.sarif through _run_local_pack to _run_selected_local_pack, which supplies --output=<out_dir/sarif_name>. iris_overlap_summary reads the identical per-language path. The detector indexes the f-string suffix and does not trace sarif_name into the subprocess writer."
+    },
     "artifacts:orphan_reader::analysed_results.json": {
       "note": "explicit-input convention: raptor-ghidra export and attach.sync_findings_to_attached accept an operator-placed bare record list at this name; no pipeline writes it by design — the wired sources are the run-written reports (orchestrated_report.json, autonomous_analysis_report.json)"
     },
@@ -277,6 +280,9 @@
     "artifacts:write_only_artifact::cocci.sarif": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
+    "artifacts:write_only_artifact::codeql_stage_diagnostics.sarif": {
+      "note": "Operator-facing CodeQL stage failure SARIF from scanner.run_codeql. Its returned diagnostic_reports paths join codeql_sarifs/sarif_inputs and are read by the generic merge_sarif and generate_scan_metrics pipeline; literal-name artifact indexing cannot follow that path flow. Invocation failure diagnostics are retained even when no language finding report survives."
+    },
     "artifacts:write_only_artifact::compiler-review-candidates.json": {
       "note": "Operator-facing compiler leads retained for independent corroboration. Deliberately excluded from automatic findings and paid analysis; documented in docs/static-analysis.md."
     },
@@ -358,6 +364,9 @@
     "artifacts:write_only_artifact::exploitation-report.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
+    "artifacts:write_only_artifact::exploitation-report.md": {
+      "note": "Intentional external human-readable combined exploitation report. ExploitReport.write_reports writes exploitation-report.md through the shared atomic writer and returns its path as markdown_report; generate_reports preserves this public artifact receipt and report_completion protects its destination from portable-export collisions. It is not a resume/cache/verdict input requiring a Python literal-name reader. No new exploit execution, verification or completeness authority is conferred; this artifact-index exception is not a general rendering-safety exemption."
+    },
     "artifacts:write_only_artifact::external-tool-results.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
@@ -418,6 +427,9 @@
     "artifacts:write_only_artifact::jazzer-corpus.json": {
       "note": "operator-facing run record: names the project's own Jazzer seed corpus (src/test/resources/<pkg>/<Class>Inputs, the jazzer JUnit convention) the campaign staged — same posture as crate-corpus.json / generated-corpus.json"
     },
+    "artifacts:write_only_artifact::knowledge-results.json": {
+      "note": "Terminal operator diagnostic/export of knowledge-request processing, recorded context delivery/omission/failure, material bindings and cycle/call provenance. AuditKnowledgeRuntime.write_artifacts writes it at normal review-drain completion and executor/drain failure cleanup; events mirror to audit-log.jsonl. Live runtime objects drive scheduling. Deliberately not a resume/cache/checker input; role context_provenance_not_verification_evidence. Tests validate the export. No production reader is expected."
+    },
     "artifacts:write_only_artifact::ledger.json": {
       "note": "Constant/path indirection: core/engagement/ledger.py load_ledger and set_artifact_status read LEDGER_FILENAME through ledger_path and load_json. The engagement report also lists this existing artifact; its mention is not a new write-only data flow."
     },
@@ -466,6 +478,9 @@
     "artifacts:write_only_artifact::provenance.md": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
+    "artifacts:write_only_artifact::python-sql.sarif": {
+      "note": "Additive Python SQL recovery SARIF consumed through returned paths, not an orphan/operator-only diagnostic. scanner.run_python_sql_stage returns the emitted python-sql.sarif path through _write_stage_report; main adds python_sql_sarifs to sarif_inputs and calls core.sarif.parser.merge_sarif, whose accumulate_file loads each supplied path. Findings and invocation/coverage diagnostics feed combined.sarif, exclusion/suppression handling and scan metrics; on merge failure metrics consume the individual sarif_inputs. The composition regression test_recovery_provenance_survives_scan_merge_exclusion_and_suppression exercises the existing stage/merge/exclusion/annotation path. The artifact index sees no literal-name reader because the consumer receives path variables. No new reader or detection/coverage authority is implied."
+    },
     "artifacts:write_only_artifact::r.yml": {
       "note": "externally consumed: raptor-self-test writes a scratch Semgrep rule file that semgrep (external tool) reads via --config"
     },
@@ -483,6 +498,9 @@
     },
     "artifacts:write_only_artifact::results.sarif": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::review-admission.json": {
+      "note": "Diagnostic snapshot of the main review graph admission policy, intentionally written after review/study drain for inspection. It records schema_version, scope=main_review_graph, global_review_ownership=false and graph.admission_state(); no production replay or control-flow consumer is intended. The actual-audit fairness integration test reads and verifies initial/continuation admission counts."
     },
     "artifacts:write_only_artifact::rule-eval-results.json": {
       "note": "rule_eval outputs: operator-facing results JSON and human summary for the corpus rule-verification runner; read by the operator, never by production code"
@@ -691,11 +709,23 @@
     "dead:dead_method:core/audit/tests/test_return_census.py:TestCpgUsage._fake_server_rows": {
       "note": "test scaffolding kept for the planned CPG-backed census cases; harmless"
     },
+    "dead:dead_method:core/http/_connect.py:ConnectProxyManager._new_pool": {
+      "note": "urllib3 PoolManager.connection_from_pool_key dynamically calls self._new_pool. This override strips forward-proxy settings from HTTP pools and attaches destination-bound CONNECT configuration; exercised by real HTTP CONNECT integration tests."
+    },
+    "dead:dead_method:core/http/_connect.py:ConnectProxyManager._proxy_requires_url_absolute_form": {
+      "note": "urllib3 PoolManager.urlopen dynamically calls self._proxy_requires_url_absolute_form. Returning False keeps origin-form request targets inside CONNECT tunnels, including redirects; exercised by the real HTTP CONNECT integration tests."
+    },
+    "dead:dead_method:core/http/_connect.py:ConnectProxyManager.connection_from_host": {
+      "note": "urllib3 PoolManager.connection_from_url and PoolManager.urlopen dynamically dispatch self.connection_from_host. This override bypasses ProxyManager forward-proxy pooling so CONNECT HTTP pools remain destination-bound; exercised by the real HTTP CONNECT integration tests."
+    },
     "dead:dead_method:core/llm/dispatcher/client.py:_TokenRenewalAuth.async_auth_flow": {
       "note": "httpx framework hook: httpx.Client/AsyncClient invoke the Auth subclass's sync_auth_flow/async_auth_flow generators dynamically during send() — no in-repo caller names them (same pattern as any httpx.Auth override)"
     },
     "dead:dead_method:core/llm/dispatcher/client.py:_TokenRenewalAuth.sync_auth_flow": {
       "note": "httpx framework hook: httpx.Client/AsyncClient invoke the Auth subclass's sync_auth_flow/async_auth_flow generators dynamically during send() — no in-repo caller names them (same pattern as any httpx.Auth override)"
+    },
+    "dead:dead_method:core/testing/tests/_project_case_setup_ownership.py:Result.addError": {
+      "note": "unittest TestResult callback invoked dynamically by TestCase.run on setup errors. This override records the original exception object; the private setup-ownership helper and its outer test consume observed_primary/primary_identity to verify error preservation. No direct callback call is required."
     },
     "dead:dead_method:packages/autonomous/corpus_generator.py:CorpusGenerator.generate_mutated_seed": {
       "note": "kept: feature seed — autonomous fuzzing loop (operator decision 2026-08-16, reaffirmed 2026-08-17); unwired since introduction"
@@ -790,11 +820,47 @@
     "plumbing:orphan_config_field:core/audit/fail_open_roles.py:SecurityFlag.safe_when": {
       "note": "pending wiring: safe_when is the fail-open channel's planned per-flag suppression predicate"
     },
+    "plumbing:orphan_config_field:core/audit/prepared_build_capture.py:BuildCaptureDescription.namespace_digest": {
+      "note": "Explicit diagnostic description of the closed-search namespace digest returned by PreparedBuildCaptureOwner.describe. The same digest is bound during capture construction, while the production measurement source remains None. This field is not an independently measured namespace or build-authority grant; no current runtime consumer is claimed."
+    },
+    "plumbing:orphan_config_field:core/audit/prepared_declaration_custody.py:DeclarationCapture.database_sha256": {
+      "note": "Retained public immutable capture-record metadata returned by capture_declaration/DeclarationOwner.capture and exposed through AcquiredDeclaration.selected.capture. The digest describes the retained whole database bytes for callers. Internal custody intentionally uses issued-object identity and exact bytes/intervals, not the digest as build authentication or authority; no internal serialized consumer is claimed."
+    },
+    "plumbing:orphan_config_field:core/audit/prepared_image_envelope.py:EnvelopeOnly.block_bytes": {
+      "note": "Validated raw superblock block-size declaration exposed by the bounded envelope API. Not a decoder selection, effective filesystem geometry or active namespace consumer; compressed metadata/filesystem walking remain unavailable."
+    },
+    "plumbing:orphan_config_field:core/audit/prepared_image_envelope.py:EnvelopeOnly.compression_id": {
+      "note": "Raw supported-format compression identifier retained for diagnostic envelope inspection. No decompressor is installed or selected by this API, and no filesystem-validity or namespace authority follows from this declared value."
+    },
+    "plumbing:orphan_config_field:core/audit/prepared_image_envelope.py:EnvelopeOnly.index_spans": {
+      "note": "Bounded count-derived index spans calculated and checked by inspect_header, retained in its diagnostic return schema. They do not enumerate names, interpret metadata tables or establish complete lookup coverage; no active walk consumer is claimed."
+    },
+    "plumbing:orphan_config_field:core/audit/prepared_image_root_directory.py:BasicRootDirectoryDeclaration.declared_offset": {
+      "note": "Raw basic-DIR inode offset returned only after same-owned-header/frame decoding and bounded containment checks. It is a declaration, not an authenticated directory locator; directory walking and complete lookup membership are absent."
+    },
+    "plumbing:orphan_config_field:core/audit/prepared_image_root_directory.py:BasicRootDirectoryDeclaration.declared_size": {
+      "note": "Raw basic-DIR size declaration retained after explicit scalar budget checks. It neither enumerates directory entries nor proves full metadata extent or filesystem completeness; no consumer or activation is claimed."
+    },
+    "plumbing:orphan_config_field:core/audit/prepared_image_root_directory.py:BasicRootDirectoryDeclaration.declared_start_block": {
+      "note": "Raw basic-DIR start-block declaration exposed for diagnostic inspection after bounded region checks. No caller-provided stamp is promoted to physical SourceIdentity, directory ownership, complete membership or namespace authority."
+    },
     "plumbing:orphan_config_field:core/build/build_detector.py:BuildSystem.detected_files": {
       "note": "construction-time provenance: the detector stores which build files drove the detection (the same list its confidence score is computed from) on the result object for debugging and tests; nothing dereferences the field programmatically by design"
     },
+    "plumbing:orphan_config_field:core/dataflow/string_type_evidence.py:ExactStringArgumentEvidence.guard_span": {
+      "note": "guard_span is an intentionally nullable source-premise location in the public ExactStringArgumentEvidence result; tier1_llm serializes the complete dataclass via asdict into Tier0Result.extras. Acceptance is established before serialization, not by reading this field. The cvefix bridge currently does not persist extras."
+    },
     "plumbing:orphan_config_field:core/llm/tool_use/types.py:TurnStarted.input_token_estimate": {
       "note": "kept: published observability API (2026-08-17 config-orphan pass). TurnStarted is a frozen event dataclass exported in core.llm.tool_use.__all__ for external subscribers; per-turn input-token telemetry is the point of the event. The in-repo hunt_dispatch subscriber deliberately skips TurnStarted; the value is computed regardless for the context-policy gate (loop.py)."
+    },
+    "plumbing:orphan_config_field:core/sandbox/context.py:_ExecutionObservation.exec_pid_delivered": {
+      "note": "Parent-reported execution-status-channel diagnostic exposed only through the private exact selected-result/attempt observation. The producer CompletedProcess flag participates in existing status handling; this returned field is deliberately descriptive and grants neither independently observed child context nor authenticated build authority."
+    },
+    "plumbing:orphan_config_field:packages/source_intel/analyze.py:PrivilegeBackWalkEvidence.all_paths_gated": {
+      "note": "Retained legacy record-constructor field accepted by render_source_context(privilege_back_walk=...). Current capability-call records lack reviewed denial-exit enforcement, so rendering intentionally does not consume this flag as gating evidence. test_retained_backwalk_flags_do_not_prove_gated_or_ungated_paths preserves record/API compatibility without restoring gating authority."
+    },
+    "plumbing:orphan_config_field:packages/source_intel/analyze.py:PrivilegeBackWalkEvidence.gating_examples": {
+      "note": "Retained legacy record-constructor field accepted by render_source_context(privilege_back_walk=...). Current capability-call records lack reviewed denial-exit enforcement, so rendering intentionally does not consume these examples as gating evidence. test_retained_backwalk_flags_do_not_prove_gated_or_ungated_paths preserves record/API compatibility without restoring gating authority."
     }
   },
   "version": 1
