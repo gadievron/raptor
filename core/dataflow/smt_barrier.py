@@ -2931,6 +2931,7 @@ def _python_chain_reaches_sink(
                           getattr(pair[0], "col_offset", 0)),
     )
     local_slots: dict[str, bool] = {}
+    external_slot_seen = not _python_name_has_local_slot(scope_root, start_var)
     for node, class_decls in window:
         # Header bindings are kill-only: defaults/decorators can execute
         # here, whereas a nested function's body is still deferred.
@@ -3022,6 +3023,9 @@ def _python_chain_reaches_sink(
         # evaluated against the PRE-statement chain; kill wins when a
         # name lands in both sets (conservative).
         chain = (chain | grows) - kills
+        external_slot_seen |= any(
+            not _python_name_has_local_slot(scope_root, var) for var in chain
+        )
         if _python_unpack_assignment(node):
             # RHS fields were captured before target unpacking. Keep
             # their new local aliases, but expire shared slots that the
@@ -3031,6 +3035,18 @@ def _python_chain_reaches_sink(
                     local_slots[var] = _python_name_has_local_slot(scope_root, var)
                 if not local_slots[var]:
                     chain.discard(var)
+    # Other calls on the validator row can replace an external slot even
+    # when the certified call itself returned an immutable value. Locals
+    # retain their captured value; the library certificate grants no purity
+    # contract to neighbouring calls. Decline the complete chain when it
+    # touched an external slot: later local aliases can already be stale.
+    if external_slot_seen and sanitizer_call_spans and any(
+        isinstance(node, ast.Call) and node.lineno == validator_line
+        and (node.lineno, node.col_offset, node.end_lineno, node.end_col_offset)
+        not in sanitizer_call_spans
+        for node in _walk_same_scope(scope_root)
+    ):
+        return False
     # Loop back-edge kill: a rebind textually AFTER the sink (or before
     # the validator) still reaches the sink on the next iteration when
     # it shares a loop with the sink — the flat forward pass cannot see
