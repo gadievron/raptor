@@ -5551,6 +5551,11 @@ def _php_sql_additions(
                 if not proved and '$' in source[m.start():covered]:
                     hits.add(line)
                 continue
+            a, b = args[0] if args else (m.end(), covered)
+            # Method/static additions require SQL shape even when the operand
+            # proof fails. Avoid proving long non-SQL concatenation chains.
+            if not shaped(a, b):
+                continue
             receiver = (
                 _php_sql_receiver(code, m.start(), s)
                 if m.group('meth') else None
@@ -5561,10 +5566,9 @@ def _php_sql_additions(
                     helpers=helpers,
                 )
             )
-            a, b = args[0] if args else (m.end(), covered)
             # an argument list not closed inside the statement (a
             # closure or match block follows) counts as reaching
-            if not proved and shaped(a, b) and (
+            if not proved and (
                 args is None or nested or reaches(a, b)
             ):
                 hits.add(line)

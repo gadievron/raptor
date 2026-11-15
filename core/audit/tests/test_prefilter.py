@@ -1673,6 +1673,39 @@ class TestPhpSqlInjectionCanonical:
         assert sum(1 for ok in expect.values() if ok) > 200
 
 
+class TestPhpSqlInjectionShapeCost:
+    @pytest.mark.parametrize("callee", ["$pdo->query", "DB::query"], ids=["method", "static"])
+    def test_non_sql_dot_chain_does_not_run_operand_proof(self, monkeypatch, callee):
+        calls = []
+        original = _prefilter._php_sql_proved
+
+        def observed(*args, **kwargs):
+            calls.append(True)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(_prefilter, "_php_sql_proved", observed)
+        source = callee + '(' + '"a" . ' * 20000 + '$x);'
+        assert _prefilter._php_sql_additions(source, 1) == set()
+        assert calls == []
+
+    @pytest.mark.parametrize("call,expected", [
+        ('$pdo->query("SELECT x FROM t WHERE id=" . $x);', {1}),
+        ('$pdo->query("SELECT x FROM t WHERE id=" . intval($x));', set()),
+        ('mysqli_query($c, "a" . $x);', {1}),
+    ], ids=["unproved-sql", "proved-sql", "non-sql-procedural"])
+    def test_shape_shortcut_preserves_proof_and_procedural_decisions(self, monkeypatch, call, expected):
+        calls = []
+        original = _prefilter._php_sql_proved
+
+        def observed(*args, **kwargs):
+            calls.append(True)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(_prefilter, "_php_sql_proved", observed)
+        assert _prefilter._php_sql_additions(call, 1) == expected
+        assert calls == [True]
+
+
 class TestPhpSqlInjectionTiming:
     """The rule stays linear: bounded relative to the PHP prefilter with
     the SQL rule stubbed out (the rest of base's per-line work)."""

@@ -116,17 +116,28 @@ def test_cli_keyless_switch_uses_worker_and_keeps_terminal_sanitisation(monkeypa
     loader = importlib.machinery.SourceFileLoader("keyless_ask_test_cli", str(script))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)
+    keys = ("RAPTOR_DIR", "RAPTOR_LLM_QUIET")
+    missing = object()
+    environment = {key: os.environ.get(key, missing) for key in keys}
     names = ("raptor", "httpx", "httpcore")
     loggers = [logging.getLogger(name) for name in names]
     levels = {logger: logger.level for logger in loggers}
     handler_levels = {handler: handler.level for logger in loggers for handler in logger.handlers}
     with ExitStack() as stack:
         stack.enter_context(patch.object(sys, "path", sys.path.copy()))
+        state = stack.enter_context(pytest.MonkeyPatch.context())
+        for key in keys:
+            # Register absent keys before the CLI writes them directly.
+            present = key in os.environ
+            state.setenv(key, os.environ.get(key, ""))
+            if not present:
+                state.delenv(key)
         stack.enter_context(isolated_cli_logging(logger_names=names))
         for handler, level in handler_levels.items():
             stack.callback(handler.setLevel, level)
         loader.exec_module(module)
         assert module.main() == 0
+    assert {key: os.environ.get(key, missing) for key in keys} == environment
     assert {logger: logger.level for logger in loggers} == levels
     assert {handler: handler.level for handler in handler_levels} == handler_levels
     worker.assert_called_once_with(selected, "test prompt", None, max_tokens=4096, temperature=None)
