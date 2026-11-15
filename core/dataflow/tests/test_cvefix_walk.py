@@ -137,20 +137,22 @@ def test_walk_keeps_both_cwes_of_one_commit(monkeypatch, tmp_path: Path):
     """One fix commit mapped to two CWEs must produce two rows, not collapse."""
     meta, results = tmp_path / "meta.db", tmp_path / "results.db"
     con = sqlite3.connect(str(meta))
-    con.executescript(
-        "CREATE TABLE cwe_classification (cve_id TEXT, cwe_id TEXT);"
-        "CREATE TABLE fixes (cve_id TEXT, hash TEXT, repo_url TEXT);"
-        "CREATE TABLE commits (hash TEXT, repo_url TEXT, parents TEXT);"
-        "CREATE TABLE repository (repo_url TEXT, repo_name TEXT, repo_language TEXT);"
-    )
-    repo = "https://github.com/org/app"
-    con.execute("INSERT INTO fixes VALUES(?,?,?)", ("CVE-1", "fixA", repo))
-    con.execute("INSERT INTO commits VALUES(?,?,?)", ("fixA", repo, "['parA']"))
-    con.execute("INSERT INTO repository VALUES(?,?,?)", (repo, "app", "Python"))
-    con.execute("INSERT INTO cwe_classification VALUES(?,?)", ("CVE-1", "CWE-89"))
-    con.execute("INSERT INTO cwe_classification VALUES(?,?)", ("CVE-1", "CWE-79"))
-    con.commit()
-    con.close()
+    try:
+        con.executescript(
+            "CREATE TABLE cwe_classification (cve_id TEXT, cwe_id TEXT);"
+            "CREATE TABLE fixes (cve_id TEXT, hash TEXT, repo_url TEXT);"
+            "CREATE TABLE commits (hash TEXT, repo_url TEXT, parents TEXT);"
+            "CREATE TABLE repository (repo_url TEXT, repo_name TEXT, repo_language TEXT);"
+        )
+        repo = "https://github.com/org/app"
+        con.execute("INSERT INTO fixes VALUES(?,?,?)", ("CVE-1", "fixA", repo))
+        con.execute("INSERT INTO commits VALUES(?,?,?)", ("fixA", repo, "['parA']"))
+        con.execute("INSERT INTO repository VALUES(?,?,?)", (repo, "app", "Python"))
+        con.execute("INSERT INTO cwe_classification VALUES(?,?)", ("CVE-1", "CWE-89"))
+        con.execute("INSERT INTO cwe_classification VALUES(?,?)", ("CVE-1", "CWE-79"))
+        con.commit()
+    finally:
+        con.close()
 
     monkeypatch.setattr(
         cvefix_walk, "process_pair",
@@ -166,17 +168,19 @@ def test_walk_keeps_both_cwes_of_one_commit(monkeypatch, tmp_path: Path):
 def test_promote_updates_only_on_recovery(monkeypatch, tmp_path: Path):
     results = tmp_path / "r.db"
     con = sqlite3.connect(str(results))
-    con.execute(cvefix_walk._SCHEMA)
+    try:
+        con.execute(cvefix_walk._SCHEMA)
 
-    def ins(fix, cwe, before):
-        con.execute("INSERT INTO walk_results VALUES (?,?,?,?,?,?,?,?,?,?)",
-                    (fix, "CVE-" + fix, cwe, "Java", "https://github.com/o/a",
-                     fix + "p", "ok", before, 0, 0.0))
-    ins("f1", "CWE-89", 0)   # buildless miss -> autobuild recovers it
-    ins("f2", "CWE-79", 0)   # buildless miss -> autobuild still finds nothing
-    ins("f3", "CWE-22", 2)   # already yields -> not a promote candidate
-    con.commit()
-    con.close()
+        def ins(fix, cwe, before):
+            con.execute("INSERT INTO walk_results VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        (fix, "CVE-" + fix, cwe, "Java", "https://github.com/o/a",
+                         fix + "p", "ok", before, 0, 0.0))
+        ins("f1", "CWE-89", 0)   # buildless miss -> autobuild recovers it
+        ins("f2", "CWE-79", 0)   # buildless miss -> autobuild still finds nothing
+        ins("f3", "CWE-22", 2)   # already yields -> not a promote candidate
+        con.commit()
+    finally:
+        con.close()
 
     def fake(pair, **kw):
         assert kw.get("build_mode") == "autobuild"
@@ -477,20 +481,22 @@ def test_walk_dedups_same_commit_cwe_across_cves(monkeypatch, tmp_path: Path):
     """One commit credited to two CVE ids (same fix_hash+cwe) is processed once."""
     meta, results = tmp_path / "meta.db", tmp_path / "results.db"
     con = sqlite3.connect(str(meta))
-    con.executescript(
-        "CREATE TABLE cwe_classification (cve_id TEXT, cwe_id TEXT);"
-        "CREATE TABLE fixes (cve_id TEXT, hash TEXT, repo_url TEXT);"
-        "CREATE TABLE commits (hash TEXT, repo_url TEXT, parents TEXT);"
-        "CREATE TABLE repository (repo_url TEXT, repo_name TEXT, repo_language TEXT);"
-    )
-    repo = "https://github.com/org/app"
-    con.execute("INSERT INTO commits VALUES(?,?,?)", ("fixA", repo, "['parA']"))
-    con.execute("INSERT INTO repository VALUES(?,?,?)", (repo, "app", "Python"))
-    for cve in ("CVE-1", "CVE-2"):                     # same commit, same CWE, two CVEs
-        con.execute("INSERT INTO cwe_classification VALUES(?,?)", (cve, "CWE-89"))
-        con.execute("INSERT INTO fixes VALUES(?,?,?)", (cve, "fixA", repo))
-    con.commit()
-    con.close()
+    try:
+        con.executescript(
+            "CREATE TABLE cwe_classification (cve_id TEXT, cwe_id TEXT);"
+            "CREATE TABLE fixes (cve_id TEXT, hash TEXT, repo_url TEXT);"
+            "CREATE TABLE commits (hash TEXT, repo_url TEXT, parents TEXT);"
+            "CREATE TABLE repository (repo_url TEXT, repo_name TEXT, repo_language TEXT);"
+        )
+        repo = "https://github.com/org/app"
+        con.execute("INSERT INTO commits VALUES(?,?,?)", ("fixA", repo, "['parA']"))
+        con.execute("INSERT INTO repository VALUES(?,?,?)", (repo, "app", "Python"))
+        for cve in ("CVE-1", "CVE-2"):                     # same commit, same CWE, two CVEs
+            con.execute("INSERT INTO cwe_classification VALUES(?,?)", (cve, "CWE-89"))
+            con.execute("INSERT INTO fixes VALUES(?,?,?)", (cve, "fixA", repo))
+        con.commit()
+    finally:
+        con.close()
 
     calls = []
     monkeypatch.setattr(cvefix_walk, "process_pair",
