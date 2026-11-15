@@ -1268,7 +1268,10 @@ class QueryRunner:
         results: dict[str, QueryResult] = {}
 
         def _run_one(lang: str, db: Path, pack_dir: Path) -> "QueryResult":
-            return self._run_iris_pack(lang, db, pack_dir, out_dir)
+            return self._run_iris_pack(
+                lang, db, pack_dir, out_dir,
+                concurrent_workers=min(max_workers, len(analyzable)),
+            )
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_lang = {
@@ -1356,6 +1359,7 @@ class QueryRunner:
                 suite_name="raptor-curated",
                 sarif_name=f"codeql_{lang}_curated.sarif",
                 label="curated queries",
+                concurrent_workers=min(max_workers, len(analyzable)),
             )
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -1380,6 +1384,7 @@ class QueryRunner:
 
     def _run_iris_pack(
         self, lang: str, db: Path, pack_dir: Path, out_dir: Path,
+        *, concurrent_workers: int = 1,
     ) -> "QueryResult":
         """Per-language worker for `analyze_iris_packs` — pack install
         followed by analyze."""
@@ -1390,6 +1395,7 @@ class QueryRunner:
             sarif_name=f"codeql_{lang}_iris.sarif",
             label="IRIS LocalFlowSource",
             excluded_queries=(probe,) if probe.is_file() else (),
+            concurrent_workers=concurrent_workers,
         )
 
     def _run_local_pack(
@@ -1397,6 +1403,7 @@ class QueryRunner:
         *, suite_name: str, sarif_name: str, label: str,
         extra_analyze_args: tuple[str, ...] = (), skip_install: bool = False,
         excluded_queries: tuple[Path, ...] = (),
+        concurrent_workers: int = 1,
     ) -> QueryResult:
         # Share offline stdlib discovery with the custom-query entry point.
         # Explicit caller resolution settings retain their existing contract.
@@ -1421,6 +1428,7 @@ class QueryRunner:
             lang, db, pack_dir, out_dir, suite_name=suite_name,
             sarif_name=sarif_name, label=label, extra_analyze_args=extra_analyze_args,
             skip_install=skip_install, query_args=args,
+            concurrent_workers=concurrent_workers,
         )
         result.skipped_rules = skipped
         self._log_rule_skips(skipped)
@@ -1432,6 +1440,7 @@ class QueryRunner:
         extra_analyze_args: tuple[str, ...] = (),
         skip_install: bool = False,
         query_args: list[str],
+        concurrent_workers: int = 1,
     ) -> "QueryResult":
         """Per-language worker shared by `analyze_iris_packs` and
         `analyze_curated_packs` — lazy pack install followed by a
@@ -1530,7 +1539,9 @@ class QueryRunner:
             f"--output={sarif_path}",
             *extra_analyze_args,
         ]
-        CodeQLTunables.from_tuning().append_to(cmd, include_disk_cache=False)
+        CodeQLTunables.from_tuning(
+            concurrent_workers=concurrent_workers,
+        ).append_to(cmd, include_disk_cache=False)
         analysis_start = time.time()
         try:
             proc = sandbox_run(
