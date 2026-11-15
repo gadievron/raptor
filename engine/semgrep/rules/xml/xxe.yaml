@@ -4,8 +4,7 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.xml.xxe.taint.python
     message: >-
-      Untrusted data flows into an XML parser that resolves external entities.
-      Use defusedxml or set resolve_entities=False on lxml parsers.
+      Potentially untrusted data reaches an XML parsing API. Review the resolved library, version, parser settings and entity resolver before concluding external entities are processed. Use restricted XML parsing and verify the effective entity and external-resource policy.
     languages: [python]
     severity: CRITICAL
     mode: taint
@@ -44,11 +43,10 @@ rules:
               - pattern-not: StringIO("...").read()
               - pattern-not: BytesIO("...").read()
     pattern-sinks:
-      # lxml — resolves external entities by default.
-      # pattern-not-inside excludes calls that pass a safe parser
-      # (resolve_entities=False) — the sanitizer on the parser object
-      # itself does not work in taint mode because it is not on the
-      # data-flow path.
+      # lxml calls — effective entity policy depends on the parser/version.
+      # pattern-not-inside configures a lexical exclusion around a
+      # resolve_entities=False assignment and a parser call. This alone
+      # does not prove parser identity or effective configuration.
       - patterns:
           - pattern: lxml.etree.parse($SRC, ...)
           - pattern-not-inside: |
@@ -88,7 +86,7 @@ rules:
       - patterns:
           - pattern: ET.parse($SRC, ...)
           - focus-metavariable: $SRC
-      # xml.sax — parses entities by default
+      # xml.sax calls — inspect feature settings and the entity resolver
       - patterns:
           - pattern: xml.sax.parseString($SRC, ...)
           - focus-metavariable: $SRC
@@ -138,10 +136,7 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.xml.xxe.taint.java
     message: >-
-      Untrusted data flows into an XML parser without XXE protections.
-      Disable external entity processing by setting
-      XMLConstants.FEATURE_SECURE_PROCESSING or disallowing doctype
-      declarations on the factory.
+      Potentially request-derived data reaches an XML parsing API. Review the actual parser instance, factory settings and entity resolver before concluding XXE protections are absent. Restrict external entities and external DTD/schema access using the selected parser's supported controls.
     languages: [java]
     severity: CRITICAL
     mode: taint
@@ -183,9 +178,8 @@ rules:
           - pattern: (XMLInputFactory $F).createXMLStreamReader($NAME, $SRC)
           - focus-metavariable: $SRC
     pattern-sanitizers:
-      # Factory-level hardening — semgrep cannot track factory→builder
-      # assignment, but presence of these calls in the same function is
-      # a strong signal that the parser is safe.
+      # These patterns alone do not establish factory-to-builder identity
+      # or effective hardening; inspect the actual parser configuration.
       - pattern: $FACTORY.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
       - pattern: $FACTORY.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true)
       - pattern: $FACTORY.setProperty(XMLConstants.ACCESS_EXTERNAL_DTD, "")
