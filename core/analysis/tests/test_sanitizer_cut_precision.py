@@ -134,6 +134,52 @@ class TestPrecisionGate:
                        for call in ("html.escape", "shlex.quote"))
             assert measurements[name].verdict == VERDICT_CANDIDATE_ONLY, name
 
+    # The catalogue requires source and sink contracts for these exact Java
+    # HTML fixtures. Preserve their value/control candidates without granting
+    # enforcement authority from an unresolved library/type identity.
+    _MISSING_JAVA_SOURCE_CONTRACT = frozenset({
+        'java_xss_straight_line',
+        'java_xss_symmetric_branches',
+        'java_xss_esapi_chain',
+        'java_xss_try_catch_safe',
+        'java_xss_innerclass_wrapper',
+        'java_xss_static_helper_class',
+        'java_xss_depth2_wrapper',
+        'java_wrap_two_level',
+        'java_wrap_direct',
+        'java_wrap_local_chain',
+        'java_arr_element_direct',
+        'java_arr_scalar_hop',
+        'java_arr_incidental_exempt',
+        'java_arr_sibling_const',
+        'java_conduit_param_sanitized',
+        'java_conduit_join_sanitized',
+        'java_conduit_ifelse_join_sanitized',
+        'java_conduit_sanitized_sibling_const',
+        'java_list_mixed_adds',
+        'java_coll_sibling_const',
+        'java_coll_sanitizer_roundtrip',
+        'java_list_all_sanitizer_adds',
+        'java_pos_set_replace_sanitized',
+        'java_b41_concat_const_prefix_sanitized',
+        'java_b41_locale_first_format',
+        'java_b41_multiline_sanitized',
+    })
+
+    def test_java_source_contract_candidates_remain_visible(self, report):
+        from core.dataflow.known_safe_calls import all_entries
+
+        fixtures = {fixture.name: fixture for fixture in build_corpus()}
+        measurements = {measurement.name: measurement for measurement in report.measurements}
+        entries = [entry for entry in all_entries()
+                   if "java" in entry.languages and entry.sink_class == "xss"
+                   and entry.source_contracts]
+        for name in self._MISSING_JAVA_SOURCE_CONTRACT:
+            fixture = fixtures[name]
+            assert fixture.language == "java" and fixture.cwe == "CWE-79"
+            assert any(entry.library_call in fixture.source for entry in entries), name
+            assert measurements[name].verdict == VERDICT_CANDIDATE_ONLY, name
+
     @requires_ts("java")
     def test_all_safe_shapes_suppress(self, report):
         """Utility pin: every may-suppress fixture currently earns the
@@ -150,7 +196,8 @@ class TestPrecisionGate:
         # distinction the accepted list must shrink rather than mask
         # the regained coverage.
         assert set(report.missed_suppressions) \
-            == self._ACCEPTED_CONSTANT_TEXT_MISSES | self._MISSING_PRIMITIVE_CONTRACT, \
+            == (self._ACCEPTED_CONSTANT_TEXT_MISSES | self._MISSING_PRIMITIVE_CONTRACT
+                | self._MISSING_JAVA_SOURCE_CONTRACT), \
             sorted(report.missed_suppressions)
 
     def test_cross_tab_covers_classes(self, report):
