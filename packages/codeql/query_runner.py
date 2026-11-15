@@ -237,6 +237,7 @@ class QueryResult:
     duration_seconds: float
     errors: list[str]
     suite_name: str
+    # Compatibility field: reported driver-rule entries, not an execution receipt.
     queries_executed: int = 0
     skipped_rules: list[str] = field(default_factory=list)
 
@@ -852,7 +853,7 @@ class QueryRunner:
 
             logger.info("✓ Analysis completed for %s", language)
             logger.info("  Findings: %s", findings_count)
-            logger.info("  Queries executed: %s", queries_executed)
+            logger.info("  Reported rule entries: %s", queries_executed)
             logger.info("  Duration: %.1fs", time.time() - start_time)
             logger.info("  SARIF: %s", sarif_path)
 
