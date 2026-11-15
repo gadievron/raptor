@@ -337,6 +337,8 @@ msg = {
     "file": p[0].file,
     "line": int(p[0].line),
     "col": int(p[0].column),
+    "line_end": int(p[0].line_end),
+    "col_end": int(p[0].column_end),
     "message": "Candidate: parameter '%s' is used as a divisor before a later zero test without recognized uninterrupted protection; review its range and caller contract (CWE-369)" % PARAM,
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -351,6 +353,8 @@ msg = {
     "file": p[0].file,
     "line": int(p[0].line),
     "col": int(p[0].column),
+    "line_end": int(p[0].line_end),
+    "col_end": int(p[0].column_end),
     "message": "Candidate: parameter '%s' is used as a divisor before a later zero test without recognized uninterrupted protection; review its range and caller contract (CWE-369)" % PARAM,
 }
 print("COCCIRESULT:" + json.dumps(msg))

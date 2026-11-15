@@ -75,6 +75,8 @@ msg = {
   "file": p[0].file,
   "line": int(p[0].line),
   "col": int(p[0].column),
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
   "message": "Candidate: repeated sizeof factors contribute to an allocation count or size; review intended units, capacity and API identity (CWE-468)."
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -110,6 +112,8 @@ msg = {
   "file": p2[0].file,
   "line": int(p2[0].line),
   "col": int(p2[0].column),
+  "line_end": int(p2[0].line_end),
+  "col_end": int(p2[0].column_end),
   "message": "Candidate: explicit sizeof contributes to a pointer stride; review intended element units and pointee width (CWE-468)."
 }
 print("COCCIRESULT:" + json.dumps(msg))
