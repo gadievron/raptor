@@ -1759,6 +1759,8 @@ def _python_possible_call(node: ast.AST, *, scope_root: ast.AST | None = None) -
         return True
     if isinstance(node, ast.ExceptHandler) and node.name is not None:
         return True  # Binding/clearing the handler target can release old values.
+    if isinstance(node, ast.Raise) and node.exc is not None:
+        return True  # Exception or cause classes are constructed implicitly.
     return (_python_operator_dispatch(node) or _python_iteration_dispatch(node)
             or _python_unpack_assignment(node) or _python_unpack_load(node)
             or _python_collection_key_dispatch(node) or _python_match_dispatch(node)) or isinstance(

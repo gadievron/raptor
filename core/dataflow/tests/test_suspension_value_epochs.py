@@ -183,3 +183,34 @@ def test_identity_capture_release_external_slot(tmp_path):
         result = sb.try_tier0(fix_diff="+" + guard + "\n", repo_root=tmp_path,
                               sink_uri="app.py", sink_line=len(source.splitlines()), sink_class="xss")
         assert result.status is (sb.Tier0Status.NOT_APPLICABLE if unsafe else sb.Tier0Status.SOUND), (shared, capture, inline, result)
+
+
+def test_raise_class_construction_external_slot(tmp_path):
+    guard = '    if not re.fullmatch(r"[a-z]+", safe): return'
+    for shared, capture, cause in (
+        (shared, capture, cause) for shared in (False, True)
+        for capture in ("direct", "before", "after", "fresh") for cause in (False, True)
+    ):
+        raised = "raise failure from Failure" if cause else "raise Failure"
+        target = "alias" if capture in ("before", "after") else "safe"
+        source = ("import re\nsafe = 'abc'\nclass Failure(Exception):\n    def __new__(cls):\n        global safe\n        safe = '<raw marker>'\n        events.append('constructed')\n        return Exception.__new__(cls)\ndef process():\n"
+                  + ("    global safe\n" if shared else "    safe = 'abc'\n")
+                  + "    failure = ValueError()\n"
+                  + (guard + "\n" if capture != "fresh" else "")
+                  + ("    alias = safe\n" if capture == "before" else "")
+                  + "    try:\n        " + raised + "\n    except Exception:\n        pass\n"
+                  + (guard + "\n" if capture == "fresh" else "")
+                  + ("    alias = safe\n" if capture == "after" else "")
+                  + "    sink(" + target + ")\n")
+        seen, events = [], []
+        namespace = {"sink": seen.append, "events": events}
+        exec(compile(source, "owned-raise-class.py", "exec"), namespace)
+        namespace["process"]()
+        assert events == ["constructed"]
+        unsafe = shared and capture in ("direct", "after")
+        expected = [] if shared and capture == "fresh" else (["<raw marker>"] if unsafe else ["abc"])
+        assert seen == expected
+        (tmp_path / "app.py").write_text(source)
+        result = sb.try_tier0(fix_diff="+" + guard + "\n", repo_root=tmp_path,
+                              sink_uri="app.py", sink_line=len(source.splitlines()), sink_class="xss")
+        assert result.status is (sb.Tier0Status.NOT_APPLICABLE if unsafe else sb.Tier0Status.SOUND), (shared, capture, cause, result)
