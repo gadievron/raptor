@@ -43,3 +43,60 @@ def test_surrogate_pair_spelling_is_not_a_single_scalar_character():
     with pytest.raises(ValueError, match="surrogate code points"):
         require_symbol_name("\ud83d\ude00")
     assert require_symbol_name("😀") == "😀"
+
+
+@pytest.mark.parametrize("text", ["Value", "Value\x00Other", "Value\ud800Other"], ids=("plain-content", "hidden-nul", "hidden-surrogate"))
+def test_name_subclasses_cannot_override_native_admission(text, monkeypatch):
+    events = []
+
+    class ProtocolName(str):
+        def __contains__(self, item):
+            events.append("contains")
+            return False
+
+        def __iter__(self):
+            events.append("iterate")
+            return iter("Value")
+
+        def encode(self, *args, **kwargs):
+            events.append("encode")
+            return b"Different"
+
+        def __str__(self):
+            events.append("string")
+            return "Different"
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("unverified symbol reached native construction")
+
+    name = ProtocolName(text)
+    monkeypatch.setattr(bitvec, "z3", SimpleNamespace(BitVec=forbidden))
+    with pytest.raises(ValueError, match="must be a string"):
+        bitvec.mk_var(name, 8)
+    with pytest.raises(ValueError, match="must be a string"):
+        require_symbol_name(name)
+    assert events == []
+
+
+def test_subclass_registry_name_cannot_mutate_or_allocate(monkeypatch):
+    from core.smt_solver import BVProfile
+    from core.smt_solver import path_feasibility as paths
+
+    class Name(str):
+        def __contains__(self, item):
+            return False
+
+        def __iter__(self):
+            return iter("Value")
+
+    name = Name("Value\x00Other")
+    registry = {name: None}
+    def forbidden(*args, **kwargs):
+        raise AssertionError("invalid metadata reached allocation")
+
+    monkeypatch.setattr(paths, "z3", SimpleNamespace(main_ctx=lambda: object()))
+    monkeypatch.setattr(paths, "_mk_var", forbidden)
+    with pytest.raises(ValueError, match="must be a string"):
+        paths.make_var(name, registry, profile=BVProfile(8))
+    assert len(registry) == 1 and next(iter(registry)) is name
+    assert registry[name] is None
