@@ -14,8 +14,8 @@ from core.testing.module_state import isolated_module_state
 
 _ROOT = Path(__file__).resolve().parents[3]
 _SITES = [
-    ('packages/llm_analysis/tests/test_dataflow_validation.py', 'packages.llm_analysis.dataflow_validation', '_owned_database_memos', ('_db_source_cache', '_db_source_cache_chars', '_db_indexed_files', '_db_callable_inventory')),
-    ('packages/llm_analysis/tests/test_e2e_iris.py', 'packages.llm_analysis.dataflow_validation', '_owned_database_memos', ('_db_source_cache', '_db_source_cache_chars', '_db_indexed_files', '_db_callable_inventory')),
+    ('packages/llm_analysis/tests/test_dataflow_validation.py', 'packages.llm_analysis.dataflow_validation', '_owned_database_memos', ('_db_source_cache', '_db_source_cache_chars', '_db_indexed_files_cached', '_db_callable_inventory_cached')),
+    ('packages/llm_analysis/tests/test_e2e_iris.py', 'packages.llm_analysis.dataflow_validation', '_owned_database_memos', ('_db_source_cache', '_db_source_cache_chars', '_db_indexed_files_cached', '_db_callable_inventory_cached')),
     ('core/dataflow/tests/test_structural_validator.py', 'core.dataflow.structural_validator', '_owned_function_span_memo', ('_extract_functions_cached',)),
 ]
 
@@ -36,7 +36,8 @@ def _prepare(row, tmp_path, warm):
         # No callable probe exists for this test-owned language. Preserve the
         # real inventory function's unavailable -> None contract without CLI.
         owner._layer3_probe_path = lambda language: None
-        for name in ('_read_db_source', '_read_db_source_uncached', '_db_source_cache_clear'):
+        for name in ('_read_db_source', '_read_db_source_uncached', '_db_source_cache_clear',
+                     '_db_indexed_files', '_db_callable_inventory', '_db_coverage_identity'):
             original = getattr(real, name)
             clone = FunctionType(original.__code__, vars(owner), argdefs=original.__defaults__)
             clone.__kwdefaults__ = original.__kwdefaults__
