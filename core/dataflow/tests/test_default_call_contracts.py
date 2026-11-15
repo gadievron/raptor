@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from core.dataflow import tier1_llm as t1
+from core.dataflow import known_safe_calls as ksc, tier1_llm as t1
 
 REQUIREMENT = "single_positional_default_call"
 
@@ -27,13 +27,20 @@ def test_custom_configuration_cannot_earn_a_default_only_certificate(tmp_path: P
     _, result = _review(tmp_path, arguments)
     assert result.status is t1.Tier0Status.NOT_APPLICABLE
     assert result.artifact is None
-    assert result.extras["unverified_source_contracts"] == [REQUIREMENT]
+    assert result.extras["unverified_source_contracts"] == sorted([REQUIREMENT, ksc.HTML_TEXT_CONTENT_CONTEXT])
 
 
 def test_default_call_keeps_a_scoped_source_receipt(tmp_path: Path):
     source, result = _review(tmp_path, "raw")
-    assert result.status is t1.Tier0Status.SOUND
-    evidence = result.extras["call_form_evidence"]
+    assert result.status is t1.Tier0Status.NOT_APPLICABLE
+    assert result.artifact is None
+    assert result.extras["unverified_source_contracts"] == [ksc.HTML_TEXT_CONTENT_CONTEXT]
+    from dataclasses import asdict
+    from core.dataflow.string_type_evidence import default_positional_call_evidence
+
+    receipt = default_positional_call_evidence(source, 3, "bleach.clean")
+    assert receipt is not None
+    evidence = asdict(receipt)
     assert evidence["scope"] == "source-call-form-only"
     assert evidence["library_call"] == "bleach.clean"
     from hashlib import sha256
@@ -86,4 +93,5 @@ def test_graph_candidates_keep_default_call_requirements_until_source_binding(wr
                               source_symbols={"raw"}, sink_arg="safe", extra_bindings=bindings)
     assert result.verdict == VERDICT_CANDIDATE_ONLY and not result.suppress
     assert result.value_bound_bindings
-    assert all(REQUIREMENT in item.unverified_source_contracts for item in result.value_bound_bindings)
+    assert all(item.unverified_source_contracts == frozenset({REQUIREMENT, ksc.HTML_TEXT_CONTENT_CONTEXT})
+               for item in result.value_bound_bindings)

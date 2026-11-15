@@ -188,10 +188,11 @@ _TABLE: tuple[KnownSafeCall, ...] = (
         sink_class="xss",
         languages=("python",),
         input_arg_kind="transform",
-        required_source_contracts=frozenset({DEFAULT_POSITIONAL_CALL}),
+        required_source_contracts=frozenset({DEFAULT_POSITIONAL_CALL, HTML_TEXT_CONTENT_CONTEXT}),
         soundness_note=(
             "bleach.clean sanitises HTML against an allowlist of tags "
-            "and attributes.  Default allowlist is XSS-safe; custom "
+            "and attributes for HTML fragment content.  Output context "
+            "must be source-bound; custom "
             "allowlists are caller's responsibility (we only claim "
             "safety for the default call form, no args beyond the "
             "input string)."

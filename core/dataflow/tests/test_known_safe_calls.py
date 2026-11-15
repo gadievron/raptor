@@ -155,7 +155,7 @@ def test_primitive_and_path_contracts_are_distinct_and_composable():
 def test_bleach_declares_default_configuration_contract():
     entry = ksc.find("bleach.clean", "xss", "python")
     assert entry is not None
-    assert entry.source_contracts == frozenset({ksc.DEFAULT_POSITIONAL_CALL})
+    assert entry.source_contracts == frozenset({ksc.DEFAULT_POSITIONAL_CALL, ksc.HTML_TEXT_CONTENT_CONTEXT})
 
 
 @pytest.mark.parametrize("language", ["javascript", "typescript"])

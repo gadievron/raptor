@@ -65,7 +65,7 @@ def test_constant_position_does_not_discharge_return_effect_requirement():
     _, bindings = _bindings_for(source, "handle")
     binding, = bindings
     assert binding.input_symbols == frozenset({"raw"})
-    assert binding.unverified_source_contracts == _REQUIRED | frozenset({"single_positional_default_call"})
+    assert binding.unverified_source_contracts == _REQUIRED | frozenset({"single_positional_default_call", "html_text_content_sink_context"})
     # The summary cannot prove the first input is an exact string, even
     # when only the second position contributes a bare tainted symbol.
     result = _evaluate(source, "handle", {"raw"}, "safe", 7)
