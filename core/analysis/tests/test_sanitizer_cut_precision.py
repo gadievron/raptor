@@ -174,10 +174,18 @@ class TestPrecisionGate:
         entries = [entry for entry in all_entries()
                    if "java" in entry.languages and entry.sink_class == "xss"
                    and entry.source_contracts]
+        def imported_catalogue_call(entry, source):
+            parts = entry.library_call.split(".")
+            owner_at = next(index for index, part in enumerate(parts) if part[0].isupper())
+            owner = ".".join(parts[:owner_at + 1])
+            short_call = ".".join(parts[owner_at:])
+            return (entry.library_call in source
+                    or ("import " + owner + ";" in source and short_call in source))
+
         for name in self._MISSING_JAVA_SOURCE_CONTRACT:
             fixture = fixtures[name]
             assert fixture.language == "java" and fixture.cwe == "CWE-79"
-            assert any(entry.library_call in fixture.source for entry in entries), name
+            assert any(imported_catalogue_call(entry, fixture.source) for entry in entries), name
             assert measurements[name].verdict == VERDICT_CANDIDATE_ONLY, name
 
     @requires_ts("java")
