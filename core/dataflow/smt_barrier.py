@@ -1773,24 +1773,39 @@ def _python_possible_call(node: ast.AST, *, scope_root: ast.AST | None = None) -
 
 
 def _python_scope_possible_calls(scope_root: ast.AST) -> Callable[[ast.AST], bool]:
-    """Keep definition replacement facts within one immutable source scope."""
-    definition_effects: set[ast.AST] | None = None
-    definitions: set[ast.FunctionDef | ast.AsyncFunctionDef] = set()
+    """Keep binding replacement facts within one immutable source scope."""
+    replacement_effects: set[ast.AST] | None = None
+    replacement_names: dict[ast.AST, str] = {}
 
     def possible_call(node: ast.AST) -> bool:
-        nonlocal definition_effects, definitions
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        nonlocal replacement_effects, replacement_names
+        if not (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                or isinstance(node, ast.MatchAs) and node.name is not None):
             return _python_possible_call(node)
         if not isinstance(scope_root, (ast.FunctionDef, ast.AsyncFunctionDef)):
             return True
-        if definition_effects is None:
+        if replacement_effects is None:
             nodes = tuple(_walk_same_scope(scope_root))
-            definitions = {
-                part for part in nodes
+            replacement_names = {
+                part: part.name for part in nodes
                 if part is not scope_root
-                and isinstance(part, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and isinstance(part, (ast.FunctionDef, ast.AsyncFunctionDef, ast.MatchAs))
+                and part.name is not None
             }
-            names = {part.name for part in definitions}
+            names = set(replacement_names.values())
+            parents = {child: parent for parent in ast.walk(scope_root)
+                       for child in ast.iter_child_nodes(parent)}
+
+            def binding_position(part: ast.AST) -> tuple[int, int]:
+                # Alternative identity-only arms share one match execution;
+                # a first capture in another arm is not a previous value.
+                if isinstance(part, ast.MatchAs):
+                    owner = parents.get(part)
+                    while owner is not None and not isinstance(owner, ast.Match):
+                        owner = parents.get(owner)
+                    if owner is not None:
+                        part = owner
+                return (getattr(part, "lineno", -1), getattr(part, "col_offset", -1))
             body = ast.Module(body=scope_root.body, type_ignores=[])
             declared = {
                 name for part in _walk_same_scope(body)
@@ -1806,19 +1821,19 @@ def _python_scope_possible_calls(scope_root: ast.AST) -> Callable[[ast.AST], boo
             for part in nodes:
                 if part is scope_root:
                     continue
-                position = (getattr(part, "lineno", -1), getattr(part, "col_offset", -1))
+                position = binding_position(part)
                 for name in names:
                     if _node_rebinds_var(part, name):
                         previous = first_bindings.get(name)
                         if previous is None or position < previous:
                             first_bindings[name] = position
-            definition_effects = {
-                part for part in definitions
-                if part.name in shared or part.name in parameter_names
-                or first_bindings[part.name] < (part.lineno, part.col_offset)
+            replacement_effects = {
+                part for part, name in replacement_names.items()
+                if name in shared or name in parameter_names
+                or first_bindings[name] < binding_position(part)
             }
         # A node outside the bound source cannot borrow a first-binding fact.
-        return node not in definitions or node in definition_effects or _python_possible_call(node)
+        return node not in replacement_names or node in replacement_effects or _python_possible_call(node)
 
     return possible_call
 
@@ -1911,7 +1926,9 @@ def _variable_reassigned_between(
         (_python_suspension(node)
          and after_line <= (getattr(node, "lineno", None) or -1) <= before_line)
         or (possible_call(node)
-            and after_line < (getattr(node, "lineno", None) or -1) < before_line)
+            and after_line < (getattr(node, "lineno", None) or -1) <= before_line
+            and ((getattr(node, "lineno", None) or -1) < before_line
+                 or isinstance(node, ast.MatchAs)))
         or (_python_evaluation_dispatch(node)
             and after_line < (getattr(node, "lineno", None) or -1) <= before_line)
         for node in _walk_same_scope(scope_root)
@@ -3017,7 +3034,8 @@ def _python_chain_reaches_sink(
             _python_suspension(node)
             or (possible_call(node)
                 and not isinstance(node, (ast.Assign, ast.AnnAssign))
-                and validator_line < node.lineno < sink_line)
+                and validator_line < node.lineno
+                and (node.lineno < sink_line or isinstance(node, ast.MatchAs)))
             or (_python_evaluation_dispatch(node) and validator_line < node.lineno <= sink_line)
         ):
             # A call or suspension can preserve a captured local value,

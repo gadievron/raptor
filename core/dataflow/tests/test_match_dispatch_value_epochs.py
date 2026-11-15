@@ -51,7 +51,8 @@ def test_match_dispatch_respects_value_epoch(tmp_path, pattern, mode):
 
 
 @pytest.mark.parametrize('pattern', ['_', 'captured', 'None', 'True', 'False',
-                                      'None | True | False', '(None | True) as captured'])
+                                      'None | True | False', '(None | True) as captured',
+                                      '(None as captured) | (True as captured)'])
 def test_identity_only_match_preserves_shared_slot(tmp_path, pattern):
     result = query(tmp_path, pattern)
     assert result.status is sb.Tier0Status.SOUND, result.reasoning
