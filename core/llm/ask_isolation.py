@@ -24,6 +24,7 @@ from core.llm.dispatcher.auth import ProviderRule
 from core.llm.dispatcher.server import LLMDispatcher
 from core.llm.dispatcher.spawn import spawn_worker
 from core.sandbox._capture import BoundedCommunicator
+from core.security.credential_env import ANTHROPIC_FIRST_PARTY_AUTH_VARS
 
 MAX_ASK_BYTES = 8 * 1024 * 1024
 
@@ -48,9 +49,10 @@ def _rule_for(model: ModelConfig) -> ProviderRule:
         raise IsolatedAskError("Keyless ask currently requires a simple provider model identifier")
     if not _sdk_available(sdk[model.provider]):
         raise IsolatedAskError("Keyless ask requires the provider's native SDK")
+    alternate_auth = (name for name in ANTHROPIC_FIRST_PARTY_AUTH_VARS
+                      if name != "ANTHROPIC_API_KEY")
     if model.provider == "anthropic" and any(os.environ.get(name) for name in (
-        "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_CUSTOM_HEADERS", "CLAUDE_CODE_OAUTH_TOKEN",
-        "ANTHROPIC_BASE_URL",
+        *alternate_auth, "ANTHROPIC_CUSTOM_HEADERS", "ANTHROPIC_BASE_URL",
     )):
         raise IsolatedAskError("Custom Anthropic authentication or endpoints require the compatibility path")
     if model.provider == "gemini" and any(
