@@ -1928,7 +1928,7 @@ def _variable_reassigned_between(
         or (possible_call(node)
             and after_line < (getattr(node, "lineno", None) or -1) <= before_line
             and ((getattr(node, "lineno", None) or -1) < before_line
-                 or isinstance(node, ast.MatchAs)))
+                 or isinstance(node, (ast.MatchAs, ast.ExceptHandler))))
         or (_python_evaluation_dispatch(node)
             and after_line < (getattr(node, "lineno", None) or -1) <= before_line)
         for node in _walk_same_scope(scope_root)
@@ -3035,7 +3035,7 @@ def _python_chain_reaches_sink(
             or (possible_call(node)
                 and not isinstance(node, (ast.Assign, ast.AnnAssign))
                 and validator_line < node.lineno
-                and (node.lineno < sink_line or isinstance(node, ast.MatchAs)))
+                and (node.lineno < sink_line or isinstance(node, (ast.MatchAs, ast.ExceptHandler))))
             or (_python_evaluation_dispatch(node) and validator_line < node.lineno <= sink_line)
         ):
             # A call or suspension can preserve a captured local value,
