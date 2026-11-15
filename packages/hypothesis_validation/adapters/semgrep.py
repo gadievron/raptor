@@ -135,10 +135,19 @@ class SemgrepAdapter(ToolAdapter):
         else:
             summary = "no findings"
 
+        coverage_error = ""
+        if result.files_failed or result.skipped_rules:
+            coverage_error = (
+                "incomplete Semgrep analysis: "
+                f"{len(result.files_failed)} file failure(s), "
+                f"{len(result.skipped_rules)} skipped rule(s)"
+            )
+
         return ToolEvidence(
             tool=self.name,
             rule=rule,
-            success=True,
+            success=not coverage_error,
             matches=matches,
             summary=summary,
+            error=coverage_error,
         )
