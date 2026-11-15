@@ -326,6 +326,27 @@ def _may_escape_nodes_on_path(
     return [n for n in backward if getattr(n, "may_escape", False) or n in additional_nodes]
 
 
+def _c_buffer_call_effect_nodes(graph, value_bindings, sink, cleaning_callables) -> frozenset:
+    """Collect C/C++ call effects after the supplied value definitions.
+
+    This is conditional effect analysis, not sanitizer eligibility or a
+    contract receipt. The caller retains source-to-sink path filtering.
+    """
+    additional_escapes: set = set()
+    after_clean = _bfs_reachable_excluding(
+        graph, {binding.node for binding in value_bindings}, set(),
+    )
+    for node in after_clean:
+        calls = set(getattr(node, "calls", ()))
+        if node == sink:
+            # Nested or repeated calls at the endpoint have unordered effects.
+            if len(calls) > 1 or len(getattr(node, "call_sites", ())) > 1:
+                additional_escapes.add(node)
+        elif calls - cleaning_callables:
+            additional_escapes.add(node)
+    return frozenset(additional_escapes)
+
+
 def _propagate_taint(
     graph,
     rd: ReachingDefs,
@@ -2040,23 +2061,10 @@ def evaluate_finding(
         # different physical line of a multi-line statement is NOT
         # exempt) and any field store / arraycopy / untracked array
         # keeps the downgrade.
-        additional_escapes: set = set()
-        if language in {"c", "cpp"}:
-            # A fresh returned buffer can escape through a bare pointer or
-            # an alias without syntactic indirection. No callee-effect/type
-            # facts establish that later unknown calls preserve its bytes.
-            after_clean = _bfs_reachable_excluding(
-                graph, {binding.node for binding in proof_value_bindings}, set(),
-            )
-            for node in after_clean:
-                calls = set(getattr(node, "calls", ()))
-                if node == sink:
-                    # Only the designated sink call is the endpoint; nested
-                    # calls in the same payload have unordered effects.
-                    if len(calls) > 1 or len(getattr(node, "call_sites", ())) > 1:
-                        additional_escapes.add(node)
-                elif calls - proof_callables:
-                    additional_escapes.add(node)
+        additional_escapes = (
+            _c_buffer_call_effect_nodes(graph, proof_value_bindings, sink, proof_callables)
+            if language in {"c", "cpp"} else frozenset()
+        )
         escape_nodes = _may_escape_nodes_on_path(
             graph, sources_set, sink, excluded=set(),
             additional_nodes=frozenset(additional_escapes),
