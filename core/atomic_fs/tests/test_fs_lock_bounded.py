@@ -323,17 +323,19 @@ class TestHintContainment:
         lock = tmp_path / "a.json.lock"
         lock.write_bytes(b"")
         holder_fd = os.open(str(lock), os.O_WRONLY)
-        victim_fd = os.open(str(lock), os.O_WRONLY)
-        result: list[bool] = []
-        done = threading.Event()
-
-        def waiter() -> None:
-            result.append(fs_lock.acquire_flock_bounded(
-                victim_fd, lock, subject="hint probe", stamp=True))
-            done.set()
-
-        thread = threading.Thread(target=waiter, daemon=True)
+        victim_fd = None
+        thread = None
         try:
+            victim_fd = os.open(str(lock), os.O_WRONLY)
+            result: list[bool] = []
+            done = threading.Event()
+
+            def waiter() -> None:
+                result.append(fs_lock.acquire_flock_bounded(
+                    victim_fd, lock, subject="hint probe", stamp=True))
+                done.set()
+
+            thread = threading.Thread(target=waiter, daemon=True)
             import fcntl
             fcntl.flock(holder_fd, fcntl.LOCK_EX)
             fs_lock.validate_lock_fd(victim_fd, lock)
@@ -349,8 +351,9 @@ class TestHintContainment:
             assert result == [False]
         finally:
             os.close(holder_fd)
-            os.close(victim_fd)
-            if thread.ident is not None:
+            if victim_fd is not None:
+                os.close(victim_fd)
+            if thread is not None and thread.ident is not None:
                 thread.join(timeout=10)
                 assert not thread.is_alive(), "lock waiter did not stop after holder cleanup"
 
