@@ -1,5 +1,6 @@
 """Compaction rewrite streams keep descriptor and primary-error ownership."""
 
+from contextlib import ExitStack
 import errno
 import io
 import os
@@ -18,64 +19,66 @@ def rewrite(tmp_path, monkeypatch):
     _reemission_run(tmp_path, n_functions=1, n_segments=3)
     journal = tmp_path / JOURNAL_FILENAME
     original = journal.read_bytes()
-    guard_path = tmp_path / 'owned-guard'
-    guard_path.write_bytes(b'owned unrelated descriptor')
-    guard = os.open(guard_path, os.O_RDONLY)
-    state = {'root': tmp_path, 'journal': journal, 'original': original,
-             'guard': guard, 'live': {guard}, 'close_calls': [], 'replacement': None,
-             'setup_error': None, 'write_error': None, 'stream_close_error': None, 'raw_close_error': None}
+    with ExitStack() as guard_owner:
+        guard_path = tmp_path / 'owned-guard'
+        guard_path.write_bytes(b'owned unrelated descriptor')
+        guard = os.open(guard_path, os.O_RDONLY)
+        guard_owner.callback(os.close, guard)
+        state = {'root': tmp_path, 'journal': journal, 'original': original,
+                 'guard': guard, 'live': set(), 'close_calls': [], 'replacement': None,
+                 'setup_error': None, 'write_error': None, 'stream_close_error': None, 'raw_close_error': None}
 
-    def mkstemp(*args, **kwargs):
-        fd, name = tempfile.mkstemp(*args, **kwargs)
-        state['fd'], state['temporary'] = fd, name
-        state['live'].add(fd)
-        return fd, name
+        def mkstemp(*args, **kwargs):
+            fd, name = tempfile.mkstemp(*args, **kwargs)
+            state['fd'], state['temporary'] = fd, name
+            state['live'].add(fd)
+            return fd, name
 
-    def close(fd):
-        state['close_calls'].append(fd)
-        os.close(fd)
-        state['live'].discard(fd)
-        if fd == state.get('fd') and state['raw_close_error'] is not None:
-            raise state['raw_close_error']
+        def close(fd):
+            state['close_calls'].append(fd)
+            os.close(fd)
+            state['live'].discard(fd)
+            if fd == state.get('fd') and state['raw_close_error'] is not None:
+                raise state['raw_close_error']
 
-    def fdopen(fd, mode, **kwargs):
-        if state['setup_error'] is not None:
-            stream = os.fdopen(fd, mode, **kwargs)
-            owns_fd = stream.raw.closefd
-            stream.close()
-            if owns_fd:
-                state['live'].discard(fd)
-                os.dup2(guard, fd)
-                state['live'].add(fd)
-                state['replacement'] = fd
-            raise state['setup_error']
-
-        class Writer(io.BufferedWriter):
-            def write(self, data):
-                if state['write_error'] is not None:
-                    raise state['write_error']
-                return super().write(data)
-
-            def close(self):
-                if self.closed:
-                    return
-                owns_fd = self.raw.closefd
-                super().close()
+        def fdopen(fd, mode, **kwargs):
+            if state['setup_error'] is not None:
+                stream = os.fdopen(fd, mode, **kwargs)
+                owns_fd = stream.raw.closefd
+                stream.close()
                 if owns_fd:
                     state['live'].discard(fd)
-                if state['stream_close_error'] is not None:
-                    raise state['stream_close_error']
+                    os.dup2(guard, fd)
+                    state['live'].add(fd)
+                    state['replacement'] = fd
+                raise state['setup_error']
 
-        return Writer(io.FileIO(fd, mode, closefd=kwargs.get('closefd', True)))
+            class Writer(io.BufferedWriter):
+                def write(self, data):
+                    if state['write_error'] is not None:
+                        raise state['write_error']
+                    return super().write(data)
 
-    monkeypatch.setattr(compact, 'tempfile', SimpleNamespace(mkstemp=mkstemp))
-    monkeypatch.setattr(compact, 'os', SimpleNamespace(**{**vars(os), 'fdopen': fdopen, 'close': close}))
-    try:
-        yield state
-    finally:
-        for fd in list(state['live']):
-            os.close(fd)
-            state['live'].remove(fd)
+                def close(self):
+                    if self.closed:
+                        return
+                    owns_fd = self.raw.closefd
+                    super().close()
+                    if owns_fd:
+                        state['live'].discard(fd)
+                    if state['stream_close_error'] is not None:
+                        raise state['stream_close_error']
+
+            return Writer(io.FileIO(fd, mode, closefd=kwargs.get('closefd', True)))
+
+        monkeypatch.setattr(compact, 'tempfile', SimpleNamespace(mkstemp=mkstemp))
+        monkeypatch.setattr(compact, 'os', SimpleNamespace(**{**vars(os), 'fdopen': fdopen, 'close': close}))
+        try:
+            yield state
+        finally:
+            for fd in list(state['live']):
+                os.close(fd)
+                state['live'].remove(fd)
 
 
 def assert_unpublished(state):
