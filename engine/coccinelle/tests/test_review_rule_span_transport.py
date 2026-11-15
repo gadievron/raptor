@@ -35,6 +35,12 @@ _SCRIPTS = [
     ("sizeof_array_param", 0), ("sizeof_array_param", 1),
     ("malloc_strlen_strcpy", 0), ("malloc_strlen_strcpy", 1),
     ("free_nonbase_ptr", 0), ("free_nonbase_ptr", 1),
+    ("use_after_close", 0),
+    ("use_after_close", 1),
+    ("use_after_close", 2),
+    ("use_after_fclose", 0),
+    ("use_after_fclose", 1),
+    ("use_after_fclose", 2),
 ]
 
 
