@@ -80,6 +80,8 @@ def report(
             raise ValueError("duplicate CSV column names")
         seen_ids: set[str] = set()
         for row in reader:
+            if None in row or any(value is None for value in row.values()):
+                raise ValueError(f"CSV row width does not match header at CSV line {reader.line_num}")
             if "finding_id" in columns:
                 finding_id = row.get("finding_id")
                 if not isinstance(finding_id, str) or not finding_id.strip():
