@@ -62,6 +62,7 @@ class TestOrchestratorPlanning(unittest.TestCase):
 
     def test_plan_for_pe_sys_blocks_with_helpful_message(self):
         with tempfile.NamedTemporaryFile(suffix=".sys", delete=False) as f:
+            self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
             f.write(b"MZ" + b"\x00" * 60)
             tmp = Path(f.name)
         try:
@@ -84,6 +85,7 @@ class TestOrchestratorPlanning(unittest.TestCase):
         if platform.system() != "Linux":
             self.skipTest("ELF binary plan only fuzzable on Linux host")
         with tempfile.NamedTemporaryFile(delete=False) as f:
+            self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
             f.write(b"\x7fELF\x02\x01\x01" + b"\x00" * 1024)
             tmp = Path(f.name)
         try:
@@ -103,6 +105,7 @@ class TestOrchestratorPlanning(unittest.TestCase):
 
     def test_plan_for_source_file_needs_harness(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".c", delete=False) as f:
+            self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
             f.write("int main(void){ return 0; }\n")
             tmp = Path(f.name)
         try:
@@ -119,6 +122,7 @@ class TestOrchestratorPlanning(unittest.TestCase):
 
     def test_plan_with_no_fuzzers_blocks(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".c", delete=False) as f:
+            self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
             f.write("int main(void){ return 0; }\n")
             tmp = Path(f.name)
         try:
@@ -134,6 +138,7 @@ class TestOrchestratorPlanning(unittest.TestCase):
     @pytest.mark.slow
     def test_macos_with_broken_afl_does_not_run_plain_macho_as_libfuzzer(self):
         with tempfile.NamedTemporaryFile(suffix="", delete=False) as f:
+            self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
             f.write(b"\xcf\xfa\xed\xfe" + b"\x00" * 1024)
             tmp = Path(f.name)
         try:
@@ -153,6 +158,7 @@ class TestOrchestratorPlanning(unittest.TestCase):
 
     def test_instrumented_unix_binary_can_use_libfuzzer(self):
         with tempfile.NamedTemporaryFile(suffix="", delete=False) as f:
+            self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
             f.write(b"\xcf\xfa\xed\xfe" + b"\x00" * 1024)
             tmp = Path(f.name)
         try:
@@ -201,6 +207,7 @@ class TestOrchestratorPlanning(unittest.TestCase):
 
     def test_plan_summary_has_required_fields(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".c", delete=False) as f:
+            self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
             f.write("int main(void){ return 0; }\n")
             tmp = Path(f.name)
         try:
@@ -410,6 +417,7 @@ class TestEnvRootfsLifetime(unittest.TestCase):
     def test_env_build_flag_on_file_target_hints_no_op(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".c",
                                          delete=False) as f:
+            self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
             f.write("int main(void){return 0;}\n")
             tmp = Path(f.name)
         try:
