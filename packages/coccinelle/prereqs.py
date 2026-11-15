@@ -288,7 +288,10 @@ def evaluate_finding(
     #   * the sweep must be complete (no rule errored), and
     #   * the finding's file class must be one the walk parses —
     #     header findings under --no-includes never enter defs.
-    if ext == ".h" and not facts.headers_parsed:
+    if not ext:
+        out["checks"]["function_exists"] = None
+        out["details"]["abstained"] = "ext_not_in_fact_base"
+    elif ext == ".h" and not facts.headers_parsed:
         out["checks"]["function_exists"] = None
         out["details"]["abstained"] = "headers_not_parsed"
     elif not facts.complete:
