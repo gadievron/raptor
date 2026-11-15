@@ -57,7 +57,7 @@ def test_match_dispatch_respects_value_epoch(tmp_path, pattern, mode):
                                       '(None as captured) | (True as captured)'])
 def test_identity_only_match_preserves_shared_slot(tmp_path, pattern):
     result = query(tmp_path, pattern)
-    assert_epoch_character_model(result, (sb.Tier0Status.SOUND) is sb.Tier0Status.SOUND)
+    assert_epoch_character_model(result, True)
 
 
 def test_match_capture_overwrite_expires_parameter(tmp_path):
