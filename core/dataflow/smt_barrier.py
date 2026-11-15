@@ -3184,7 +3184,12 @@ def _python_chain_reaches_sink(
         for guard in _walk_same_scope(scope_root):
             if not isinstance(guard, ast.If) or guard.lineno != validator_line:
                 continue
-            body = ast.Module(body=[*guard.body, *guard.orelse], type_ignores=[])
+            # Dominance already requires the failure arm to exit. Only
+            # the success arm supplies effects on a path to this sink.
+            succeeds = guard.orelse if (
+                isinstance(guard.test, ast.UnaryOp) and isinstance(guard.test.op, ast.Not)
+            ) else guard.body
+            body = ast.Module(body=succeeds, type_ignores=[])
             if any(
                 getattr(part, "lineno", None) == validator_line
                 and not isinstance(part, (ast.Assign, ast.AnnAssign))
