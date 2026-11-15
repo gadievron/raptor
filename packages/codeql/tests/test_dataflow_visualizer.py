@@ -201,8 +201,8 @@ class TestGenerateHtmlCappedRead:
         (tmp_path / "a.c").write_text("int a;\n" * 10)
         import packages.codeql.dataflow_visualizer as viz_mod
         monkeypatch.setattr(
-            viz_mod, "read_text_capped",
-            lambda p, *a, **kw: ("int a;\n", True),
+            viz_mod, "read_contained_text_capped",
+            lambda root, candidate, *a, **kw: ("int a;\n", True),
         )
         out = visualizer.generate_html(
             _flow(tmp_path, line=5), "f2", tmp_path,
@@ -215,7 +215,7 @@ class TestGenerateHtmlCappedRead:
         (tmp_path / "a.c").write_text("int a;\n")
         import packages.codeql.dataflow_visualizer as viz_mod
         monkeypatch.setattr(
-            viz_mod, "read_text_capped", lambda p, *a, **kw: None,
+            viz_mod, "read_contained_text_capped", lambda root, candidate, *a, **kw: None,
         )
         out = visualizer.generate_html(_flow(tmp_path), "f3", tmp_path)
         html = out.read_text(encoding="utf-8")
