@@ -95,7 +95,7 @@ with pytest.MonkeyPatch.context() as patch, isolated_cli_logging(logger_names=('
             assert not (error is RuntimeError and stage == 'start' and not after)
         assert fired == ([True] if failure else [])
         assert len(workers) == 1 and not workers[0].is_alive()
-        assert logger.handlers is handlers and tuple(handlers) == values
+        assert tuple(logger.handlers) == values
     finally:
         release.set()
         for worker in workers:

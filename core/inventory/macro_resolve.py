@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 # Prefer a non-whitespace body endpoint before a terminal continuation.
 # The fallback preserves the full body when no trailer can be removed,
 # without retrying the whitespace suffix at every position inside a run.
-_MACRO_DEF_RE = re.compile(
+_MACRO_DEF_RE = re.compile(  # line-model: _read_macro_text uses universal-newline TextIOWrapper before matching.
     r"^[^\S\n]*#[^\S\n]*define[^\S\n]+(\w+)"
     r"(?:(\([^)\n]*\))[^\S\n]*|[^\S\n]+)"
     r"([^\n]*[^\s](?=[^\S\n]*\\$)|[^\n]+)(?:[^\S\n]*\\)?$",

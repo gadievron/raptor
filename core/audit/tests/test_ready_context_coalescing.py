@@ -66,10 +66,15 @@ def test_actual_pipeline_coalesces_only_already_ready_context(tmp_path, monkeypa
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
 
     class Client:
+        _attempt_admission_protocol = 1
+
         def is_budget_exhausted(self):
             return False
 
         def generate_structured(self, prompt, schema, **kwargs):
+            admit = kwargs.pop("accounting_attempt_admission", None)
+            if admit is not None:
+                assert admit() is True
             prompts.append((current["ctx"]["function"], prompt))
             if current["ctx"]["function"] == "callee":
                 response = {"status": "suspicious", "body": "Callee concern remains unresolved",
