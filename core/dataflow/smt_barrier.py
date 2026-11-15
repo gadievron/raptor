@@ -1778,6 +1778,7 @@ def _python_scope_possible_calls(scope_root: ast.AST) -> Callable[[ast.AST], boo
     """Keep binding replacement facts within one immutable source scope."""
     replacement_effects: set[ast.AST] | None = None
     replacement_names: dict[ast.AST, str] = {}
+    group_handlers: set[ast.AST] | None = None
 
     def replacement_name(node: ast.AST) -> str | None:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.MatchAs)):
@@ -1789,7 +1790,17 @@ def _python_scope_possible_calls(scope_root: ast.AST) -> Callable[[ast.AST], boo
         return None
 
     def possible_call(node: ast.AST) -> bool:
-        nonlocal replacement_effects, replacement_names
+        nonlocal replacement_effects, replacement_names, group_handlers
+        if isinstance(node, ast.ExceptHandler) and node.name is None:
+            if group_handlers is None:
+                # Splitting exception groups can invoke overridden derive,
+                # split or subgroup methods even without a bound target.
+                group_handlers = {
+                    handler for owner in _walk_same_scope(scope_root)
+                    if isinstance(owner, ast.TryStar) for handler in owner.handlers
+                }
+            if node in group_handlers:
+                return True
         if replacement_name(node) is None:
             if _TYPE_ALIAS_NODE is not None and isinstance(node, _TYPE_ALIAS_NODE):
                 return True  # An unknown alias target cannot borrow a binding fact.
