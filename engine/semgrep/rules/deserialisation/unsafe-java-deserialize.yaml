@@ -1,6 +1,7 @@
 rules:
   - id: raptor.deserialisation.java.objectinputstream
-    message: Unsafe Java deserialization (ObjectInputStream); prefer safer deserializers and validation.
+    message: >-
+      An ObjectInputStream constructor appears in this code. Review the input origin, object filters and subsequent reads before treating it as unsafe deserialisation. Avoid reconstructing objects from untrusted streams.
     languages: [java, kotlin]
     severity: HIGH
     pattern: new ObjectInputStream($STREAM)
