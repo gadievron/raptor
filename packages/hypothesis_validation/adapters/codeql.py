@@ -855,6 +855,9 @@ def _parse_sarif(sarif_path: Path) -> list[dict] | None:
             if not isinstance(results, list):
                 raise ValueError("SARIF results must be a list when present")
             for result in results:
+                rule_id = result.get("ruleId", "")
+                if not isinstance(rule_id, str):
+                    raise ValueError("SARIF ruleId must be a string when present")
                 msg = result.get("message", {})
                 text = msg.get("text", "") if isinstance(msg, dict) else str(msg)
                 file = ""
@@ -864,10 +867,12 @@ def _parse_sarif(sarif_path: Path) -> list[dict] | None:
                     phys = locs[0].get("physicalLocation", {})
                     file = (phys.get("artifactLocation", {}) or {}).get("uri", "")
                     line = int((phys.get("region", {}) or {}).get("startLine", 0))
+                if not isinstance(file, str):
+                    raise ValueError("SARIF artifact URI must be a string when present")
                 matches.append({
                     "file": file,
                     "line": line,
-                    "rule": result.get("ruleId", ""),
+                    "rule": rule_id,
                     "message": text,
                 })
     except Exception:  # noqa: BLE001 — adapter MUST-NOT-raise contract
