@@ -182,27 +182,27 @@ def test_ubuntu_and_gha_ingest_from_their_buckets(tmp_path) -> None:
 def test_unmapped_ecosystem_warns_visibly(tmp_path, caplog) -> None:
     """An ecosystem the bucket map hasn't been taught about must warn,
     not silently return zero advisories."""
-    db = OsvOfflineDB(
-        tmp_path / "osv.sqlite", http=_ZipServingHttp({}))
-    with caplog.at_level(logging.WARNING, logger="packages.sca.osv_offline"):
-        stats = db.ensure_fresh(["SomeFutureRegistry"])
-    assert stats == []
-    assert any(
-        "unsupported ecosystem" in r.message and "SomeFutureRegistry" in r.message
-        for r in caplog.records
-    )
+    with closing(OsvOfflineDB(
+        tmp_path / "osv.sqlite", http=_ZipServingHttp({}))) as db:
+        with caplog.at_level(logging.WARNING, logger="packages.sca.osv_offline"):
+            stats = db.ensure_fresh(["SomeFutureRegistry"])
+        assert stats == []
+        assert any(
+            "unsupported ecosystem" in r.message and "SomeFutureRegistry" in r.message
+            for r in caplog.records
+        )
 
 
 def test_known_no_coverage_ecosystem_stays_silent(tmp_path, caplog) -> None:
     """vcpkg is a deliberate no-OSV-bucket decision — debug skip, no
     operator-facing warning, no download attempt."""
     http = _ZipServingHttp({})
-    db = OsvOfflineDB(tmp_path / "osv.sqlite", http=http)
-    with caplog.at_level(logging.WARNING, logger="packages.sca.osv_offline"):
-        stats = db.ensure_fresh(["vcpkg"])
-    assert stats == []
-    assert http.calls == []
-    assert not [r for r in caplog.records if "vcpkg" in r.message]
+    with closing(OsvOfflineDB(tmp_path / "osv.sqlite", http=http)) as db:
+        with caplog.at_level(logging.WARNING, logger="packages.sca.osv_offline"):
+            stats = db.ensure_fresh(["vcpkg"])
+        assert stats == []
+        assert http.calls == []
+        assert not [r for r in caplog.records if "vcpkg" in r.message]
 
 
 # ---------------------------------------------------------------------------
