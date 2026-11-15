@@ -523,15 +523,20 @@ class CodeQLAdapter(ToolAdapter):
         # whichever query registered first would misattribute the other
         # query's results — so colliding stems are dropped from the
         # lookup and their results flow into the unattributed handling
-        # below.
+        # below. Full @id collisions are equally ambiguous, including a
+        # collision between a declared @id and another query's stem.
+        # A known ambiguous full identifier must not retry by suffix.
         rule_to_qp: dict[str, str] = {}
-        ambiguous_stems: set[str] = set()
-        for qp in unique_paths:
-            stem = Path(qp).stem
-            if stem in rule_to_qp and rule_to_qp[stem] != qp:
-                ambiguous_stems.add(stem)
+        ambiguous_rule_ids: set[str] = set()
+
+        def register_rule_id(rule_id: str, query_path: str) -> None:
+            if rule_id in rule_to_qp and rule_to_qp[rule_id] != query_path:
+                ambiguous_rule_ids.add(rule_id)
             else:
-                rule_to_qp.setdefault(stem, qp)
+                rule_to_qp.setdefault(rule_id, query_path)
+
+        for qp in unique_paths:
+            register_rule_id(Path(qp).stem, qp)
             try:
                 # Bounded header scan for @id — the metadata comment
                 # normally sits in the first few hundred bytes; 64 KiB
@@ -546,19 +551,19 @@ class CodeQLAdapter(ToolAdapter):
                     if stripped.startswith("@id "):
                         at_id = stripped[4:].strip()
                         if at_id:
-                            rule_to_qp[at_id] = qp
+                            register_rule_id(at_id, qp)
                         break
             except OSError:
                 pass
-        for stem in ambiguous_stems:
-            rule_to_qp.pop(stem, None)
+        for rule_id in ambiguous_rule_ids:
+            rule_to_qp.pop(rule_id, None)
 
         matches_by_qp: dict[str, list[dict]] = {qp: [] for qp in unique_paths}
         unattributed: list[dict] = []
         for m in all_matches:
             rid = m.get("rule", "")
             target = rule_to_qp.get(rid)
-            if target is None and "/" in rid:
+            if target is None and rid not in ambiguous_rule_ids and "/" in rid:
                 # ruleId may be qualified like "py/sql-injection"
                 target = rule_to_qp.get(rid.rsplit("/", 1)[-1])
             if target is not None:
