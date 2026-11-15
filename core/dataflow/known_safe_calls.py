@@ -38,6 +38,7 @@ DOMPURIFY_PROFILE = "dompurify_instance_config_and_immutable_output"
 SQL_ESCAPE_PROFILE = "sql_escape_driver_input_mode_and_literal_context"
 DEFAULT_POSITIONAL_CALL = "single_positional_default_call"
 PATH_JOIN_CONTAINMENT = "trusted_path_base_components_and_containment"
+HTML_TEXT_CONTENT_CONTEXT = "html_text_content_sink_context"
 
 
 @dataclass(frozen=True)
@@ -319,6 +320,7 @@ _TABLE: tuple[KnownSafeCall, ...] = (
         sink_class="xss",
         languages=("java",),
         input_arg_kind="transform",
+        required_source_contracts=frozenset({HTML_TEXT_CONTENT_CONTEXT}),
         soundness_note=(
             "OWASP Java Encoder forHtmlContent escapes &, <, > for HTML "
             "element-content context. Safe for text-node emission; the "
