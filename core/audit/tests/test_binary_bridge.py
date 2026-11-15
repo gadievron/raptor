@@ -39,70 +39,72 @@ def _create_graph_store(run_dir: Path, edges: list) -> None:
     db_path = graph_dir / "binary-graph.sqlite"
 
     conn = sqlite3.connect(db_path)
-    conn.execute("CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT)")
-    conn.execute("INSERT INTO metadata(key,value) VALUES ('schema_version','1')")
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS snapshots (
-            id TEXT PRIMARY KEY, binary_sha256 TEXT,
-            binary_path TEXT, created_at TEXT
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS nodes (
-            snapshot_id TEXT, id TEXT, kind TEXT,
-            stable_key TEXT, name TEXT DEFAULT '',
-            address TEXT DEFAULT '', props_json TEXT DEFAULT '{}',
-            PRIMARY KEY(snapshot_id, id)
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS edges (
-            snapshot_id TEXT, id TEXT, kind TEXT,
-            src_id TEXT, dst_id TEXT,
-            confidence TEXT DEFAULT '', props_json TEXT DEFAULT '{}',
-            PRIMARY KEY(snapshot_id, id)
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS evidence (
-            snapshot_id TEXT, id TEXT, kind TEXT, tier TEXT,
-            confidence TEXT, reproducible INTEGER, source TEXT,
-            tool TEXT, summary TEXT, props_json TEXT DEFAULT '{}',
-            PRIMARY KEY(snapshot_id, id)
-        )
-    """)
-    conn.execute("CREATE TABLE IF NOT EXISTS node_evidence (snapshot_id TEXT, node_id TEXT, evidence_id TEXT)")
-    conn.execute("CREATE TABLE IF NOT EXISTS edge_evidence (snapshot_id TEXT, edge_id TEXT, evidence_id TEXT)")
-    conn.execute("CREATE TABLE IF NOT EXISTS artifacts (snapshot_id TEXT, kind TEXT, path TEXT, sha256 TEXT DEFAULT '')")
+    try:
+        conn.execute("CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT)")
+        conn.execute("INSERT INTO metadata(key,value) VALUES ('schema_version','1')")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS snapshots (
+                id TEXT PRIMARY KEY, binary_sha256 TEXT,
+                binary_path TEXT, created_at TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS nodes (
+                snapshot_id TEXT, id TEXT, kind TEXT,
+                stable_key TEXT, name TEXT DEFAULT '',
+                address TEXT DEFAULT '', props_json TEXT DEFAULT '{}',
+                PRIMARY KEY(snapshot_id, id)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS edges (
+                snapshot_id TEXT, id TEXT, kind TEXT,
+                src_id TEXT, dst_id TEXT,
+                confidence TEXT DEFAULT '', props_json TEXT DEFAULT '{}',
+                PRIMARY KEY(snapshot_id, id)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS evidence (
+                snapshot_id TEXT, id TEXT, kind TEXT, tier TEXT,
+                confidence TEXT, reproducible INTEGER, source TEXT,
+                tool TEXT, summary TEXT, props_json TEXT DEFAULT '{}',
+                PRIMARY KEY(snapshot_id, id)
+            )
+        """)
+        conn.execute("CREATE TABLE IF NOT EXISTS node_evidence (snapshot_id TEXT, node_id TEXT, evidence_id TEXT)")
+        conn.execute("CREATE TABLE IF NOT EXISTS edge_evidence (snapshot_id TEXT, edge_id TEXT, evidence_id TEXT)")
+        conn.execute("CREATE TABLE IF NOT EXISTS artifacts (snapshot_id TEXT, kind TEXT, path TEXT, sha256 TEXT DEFAULT '')")
 
-    snap_id = "snap1"
-    conn.execute(
-        "INSERT INTO snapshots VALUES (?,?,?,?)",
-        (snap_id, "abc123", "/path/to/binary", "2026-01-01T00:00:00"),
-    )
-
-    for i, edge in enumerate(edges):
-        src_id = f"node:fn:{i}"
-        dst_id = f"node:import:{i}"
+        snap_id = "snap1"
         conn.execute(
-            "INSERT INTO nodes VALUES (?,?,?,?,?,?,?)",
-            (snap_id, src_id, "function", f"key_{i}",
-             edge["caller"], "0x1000", "{}"),
-        )
-        conn.execute(
-            "INSERT INTO nodes VALUES (?,?,?,?,?,?,?)",
-            (snap_id, dst_id, edge.get("dst_kind", "import"), f"key_dst_{i}",
-             edge["sink"], "0x2000", "{}"),
-        )
-        conn.execute(
-            "INSERT INTO edges VALUES (?,?,?,?,?,?,?)",
-            (snap_id, f"edge:{i}", edge["kind"],
-             src_id, dst_id, edge.get("confidence", "candidate"),
-             json.dumps(edge.get("props", {}))),
+            "INSERT INTO snapshots VALUES (?,?,?,?)",
+            (snap_id, "abc123", "/path/to/binary", "2026-01-01T00:00:00"),
         )
 
-    conn.commit()
-    conn.close()
+        for i, edge in enumerate(edges):
+            src_id = f"node:fn:{i}"
+            dst_id = f"node:import:{i}"
+            conn.execute(
+                "INSERT INTO nodes VALUES (?,?,?,?,?,?,?)",
+                (snap_id, src_id, "function", f"key_{i}",
+                 edge["caller"], "0x1000", "{}"),
+            )
+            conn.execute(
+                "INSERT INTO nodes VALUES (?,?,?,?,?,?,?)",
+                (snap_id, dst_id, edge.get("dst_kind", "import"), f"key_dst_{i}",
+                 edge["sink"], "0x2000", "{}"),
+            )
+            conn.execute(
+                "INSERT INTO edges VALUES (?,?,?,?,?,?,?)",
+                (snap_id, f"edge:{i}", edge["kind"],
+                 src_id, dst_id, edge.get("confidence", "candidate"),
+                 json.dumps(edge.get("props", {}))),
+            )
+
+        conn.commit()
+    finally:
+        conn.close()
 
 
 # ── find_binary_run_dirs ─────────────────────────────────────────────
