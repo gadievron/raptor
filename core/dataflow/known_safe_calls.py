@@ -305,10 +305,11 @@ _TABLE: tuple[KnownSafeCall, ...] = (
         sink_class="xss",
         languages=("java",),
         input_arg_kind="transform",
+        required_source_contracts=frozenset({HTML_OUTPUT_POLICY}),
         soundness_note=(
             "Apache Commons Lang escapeHtml4 escapes per HTML 4.0 spec; "
-            "output is HTML-safe.  Note: escapeHtml3 is also safe but "
-            "less common — add separately if needed."
+            "output context and attribute policy remain separate requirements. "
+            "HTML attribute values must be quoted."
         ),
     ),
     KnownSafeCall(
