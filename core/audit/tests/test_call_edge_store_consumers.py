@@ -81,9 +81,11 @@ def _map_with_marker(result, *, shed: bool = True) -> dict:
 
 def _tamper_one_edge(graph: Path) -> None:
     raw = sqlite3.connect(graph)
-    raw.execute("UPDATE nodes SET name='evil' WHERE name='f'")
-    raw.commit()
-    raw.close()
+    try:
+        raw.execute("UPDATE nodes SET name='evil' WHERE name='f'")
+        raw.commit()
+    finally:
+        raw.close()
 
 
 class TestOrchestratorSeam:
