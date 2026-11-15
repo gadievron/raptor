@@ -1763,7 +1763,7 @@ def _validate_var_registry(vars_, profile, *, context=None):
     if dict.__len__(vars_) == 0:
         return
     context = z3.main_ctx() if context is None else context
-    for name, value in vars_.items():
+    for name, value in dict.items(vars_):
         _validate_var_binding(name, value, profile, context)
 
 
