@@ -224,3 +224,28 @@ def test_open_mode_flag_filters_stay_quiet(flags):
 def test_socket_cloexec_flags_stay_quiet(flags):
     position = SimpleNamespace(file="owned.c", line=4, column=2, line_end=5, column_end=18)
     assert _report("socket_no_cloexec", 0, position, TYPE=flags) == ""
+
+
+def test_dynamic_shift_reports_keep_distinct_full_spans():
+    first = SimpleNamespace(file="owned.c", line="4", column="2", line_end="5", column_end="18")
+    second = SimpleNamespace(file="owned.c", line="4", column="2", line_end="6", column_end="23")
+    for left, count, expected_rule in [
+        ("1", "32", "shift_overflow_int"),
+        ("1UL", "64", "shift_overflow_long"),
+        ("2", "-1", "shift_overflow_negative"),
+    ]:
+        bindings = {"LEFT": left, "COUNT": count}
+        first_output = _report("shift_overflow", 0, first, **bindings)
+        second_output = _report("shift_overflow", 0, second, **bindings)
+        # Owned plain-prefix report transport, not native matching or nonce admission.
+        matches = _parse_results(first_output + second_output + first_output, "shift_overflow")
+        assert len(matches) == 3
+        rows = _dedup_matches(matches)
+        assert len(rows) == 2
+        assert [(row.line, row.column, row.line_end, row.column_end) for row in rows] == [
+            (4, 2, 5, 18), (4, 2, 6, 23),
+        ]
+        assert all(row.rule == expected_rule and row.message for row in rows)
+        assert rows[0].message == rows[1].message
+    for left, count in [("1", "8"), ("1", "not_a_literal")]:
+        assert _report("shift_overflow", 0, first, LEFT=left, COUNT=count) == ""
