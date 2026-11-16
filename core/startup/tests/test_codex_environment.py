@@ -329,19 +329,25 @@ def test_old_broker_requires_restart_before_changing_environment(context, monkey
 
 
 
-@pytest.mark.parametrize("inherited_state", ["ordinary", "stale-launch", "missing-tmpdir"])
+@pytest.mark.parametrize("parent_state", ["ordinary", "stale-launch", "missing-tmpdir"])
 def test_stop_bootstrap_and_metadata_paths_do_not_load_broker_catalog(
-    tmp_path, monkeypatch, inherited_state,
+    tmp_path, monkeypatch, parent_state,
 ):
+    """Keep stop bootstrap independent of stale parent launch state.
+
+    The standalone helper must replace inherited scratch state before the
+    child starts. These cases test that isolation, not whether the hook
+    accepts invalid scratch metadata.
+    """
     import sys
     from pathlib import Path
 
     from core.testing.standalone_cli import run_standalone_cli
 
     root = Path(__file__).resolve().parents[3]
-    if inherited_state == 'stale-launch':
+    if parent_state == 'stale-launch':
         monkeypatch.setenv('_RAPTOR_SCRATCH_AUTH', '{}')
-    elif inherited_state == 'missing-tmpdir':
+    elif parent_state == 'missing-tmpdir':
         monkeypatch.setenv('TMPDIR', str(tmp_path / 'missing'))
     program = '''
 import hashlib, io, json, os, runpy, sys
