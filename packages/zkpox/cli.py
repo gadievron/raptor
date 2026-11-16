@@ -19,15 +19,18 @@ from pathlib import Path
 _MAX_MANIFEST_BYTES = 2 * 1024 * 1024
 
 
-def _require_native(subcommand: str) -> int:
+def _require_native(subcommand: str) -> bool:
+    """Return True if the native workspace is present, False otherwise."""
     native = Path(__file__).parent / "native"
+    if (native / "Cargo.toml").is_file():
+        return True
     print(
         f"zkpox {subcommand}: requires the native workspace "
         f"({native / 'Cargo.toml'}).\n"
         f"See packages/zkpox/README.md for build prerequisites.",
         file=sys.stderr,
     )
-    return 1
+    return False
 
 
 def _cmd_bundle(args) -> int:
@@ -118,6 +121,14 @@ def _cmd_reproduce(args) -> int:
             f"!= manifest {str(manifest['witness_hash'])[:16]}...\n"
         )
         return 2
+    if manifest.get("witness_len") is not None \
+            and len(witness_bytes) != manifest["witness_len"]:
+        sys.stderr.write(
+            f"witness.bin length mismatch: file is "
+            f"{len(witness_bytes)} bytes, manifest witness_len is "
+            f"{manifest['witness_len']}; refusing to reproduce\n"
+        )
+        return 2
 
     bundle = ZKPoXBundle(
         witness_hash=manifest["witness_hash"],
@@ -142,9 +153,8 @@ def _cmd_reproduce(args) -> int:
     )
     attach_reproduction(bundle, result)
 
-    manifest_path.write_text(
-        json.dumps(bundle.as_dict(), indent=2) + "\n"
-    )
+    from core.json import save_json
+    save_json(manifest_path, bundle.as_dict())
 
     print(render_bundle(bundle))
     print(f"  reproduced: {result.reproduced} "
@@ -153,6 +163,17 @@ def _cmd_reproduce(args) -> int:
         return 0
     return 1 if result.attempted else 2
 
+
+
+def _cmd_sp1(subcommand: str, args) -> int:
+    """Placeholder for SP1 native tier subcommands.
+
+    The prove/verify/inspect/open implementations live in the Rust
+    crate (packages/zkpox/native/); this Python entry point will
+    drive the compiled binary once the workspace is committed.
+    """
+    sys.stderr.write(f"zkpox {subcommand}: not yet implemented\n")
+    return 1
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
@@ -219,5 +240,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "reproduce":
         return _cmd_reproduce(args)
     if args.cmd in ("prove", "verify", "inspect", "open"):
-        return _require_native(args.cmd)
+        if not _require_native(args.cmd):
+            return 1
+        return _cmd_sp1(args.cmd, args)
     return 2
