@@ -142,9 +142,6 @@
     "artifacts:orphan_reader::probe-dump.txt": {
       "note": "written by the embedded EbpfProbeDump Ghidra post-script (Java source lives as a string in packages/ghidra/ebpf_probe.py), not by repo Python; ghidra_decode builds the path, hands it to the sandboxed analyzeHeadless invocation, and reads the dump back for ground-truth comparison, so the indexer only ever sees the read"
     },
-    "artifacts:orphan_reader::project.json": {
-      "note": "legacy in-run-dir project marker: nothing in the repo writes a literal project.json today (the registry stores <name>.json; exports embed .project.json) \u2014 the readers are the pin-less legacy-dir shape probes (core/concepts/study.py, libexec/raptor-study-prep) kept so pre-pin operator dirs still promote. Previously suppressed as ambiguous only because the study-prep probe shared a function with a tempfile writer; the merge-promote refactor made that function read-only and surfaced the pre-existing orphan-reader shape."
-    },
     "artifacts:orphan_reader::raptor-audit-cfg-*.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
@@ -168,6 +165,9 @@
     },
     "artifacts:orphan_reader::study-discards.json": {
       "note": "writer exists (core/concepts/study.py writes it via save_json; core/audit/orchestrator.py reads) \u2014 the artifact indexer does not resolve the substrate writer call through the path variable, so the read looks orphaned"
+    },
+    "artifacts:orphan_reader::summary.jsonl": {
+      "note": "External CodeQL C/C++ extractor output: CodeQL writes diagnostic/extractors/cpp/summary.jsonl during database creation. packages/codeql/database_manager.py::report_cpp_extraction reads its invocation counts for new and cached databases; no in-repo writer is expected. Validated against diagnostic files emitted by CodeQL 2.23.8 and 2.27.3."
     },
     "artifacts:orphan_reader::trajectory-*.json": {
       "note": "salvage-file reader: the writer emits trajectory-<hex>.json via a computed name on run_id collision (_write_atomic fallback), so the literal glob has no textual writer; reader and writer are pinned together by the store round-trip tests"
@@ -210,9 +210,6 @@
     },
     "artifacts:write_only_artifact::.osv.json": {
       "note": "f\"{cve_id}.osv.json\" writer key (packages/cve_diff cli via save_json) normalised without its prefix; the reader is cross_check.py's load_json_bounded on the same f-string name \u2014 twin of the baselined orphan_reader::*.osv.json glob entry"
-    },
-    "artifacts:write_only_artifact::.project.json": {
-      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
     "artifacts:write_only_artifact::.reason.json": {
       "note": "durable operator/audit record by design: <part>.reason.json preserves the quarantine reason next to the quarantined part for operator triage; no production reader intended"
@@ -430,6 +427,12 @@
     "artifacts:write_only_artifact::jazzer-corpus.json": {
       "note": "operator-facing run record: names the project's own Jazzer seed corpus (src/test/resources/<pkg>/<Class>Inputs, the jazzer JUnit convention) the campaign staged \u2014 same posture as crate-corpus.json / generated-corpus.json"
     },
+    "artifacts:write_only_artifact::knowledge-results.json": {
+      "note": "Terminal operator diagnostic/export of knowledge-request processing, recorded context delivery/omission/failure, material bindings and cycle/call provenance. AuditKnowledgeRuntime.write_artifacts writes it at normal review-drain completion and executor/drain failure cleanup; events mirror to audit-log.jsonl. Live runtime objects drive scheduling. Deliberately not a resume/cache/checker input; role context_provenance_not_verification_evidence. Tests validate the export. No production reader is expected."
+    },
+    "artifacts:write_only_artifact::ledger.json": {
+      "note": "Constant/path indirection: core/engagement/ledger.py load_ledger and set_artifact_status read LEDGER_FILENAME through ledger_path and load_json. The engagement report also lists this existing artifact; its mention is not a new write-only data flow."
+    },
     "artifacts:write_only_artifact::matches.jsonl": {
       "note": "variant-sweep output (replay_sweep.write_report, library API driven by run_sweep consumers): ranked sweep matches for operator review; the path is printed at the end of the run, same class as suppressions.jsonl"
     },
@@ -480,9 +483,6 @@
     },
     "artifacts:write_only_artifact::r.yml": {
       "note": "externally consumed: raptor-self-test writes a scratch Semgrep rule file that semgrep (external tool) reads via --config"
-    },
-    "artifacts:write_only_artifact::raptor_openant_report.json": {
-      "note": "operator-facing output: /openant standalone run writes the machine-readable run summary; consumed by the operator only \u2014 project merge lists it in KNOWN_FILES (deliberately not artefact-copied, like raptor_agentic_report.json) but no production code reads it back; findings visibility rides openant_findings.json"
     },
     "artifacts:write_only_artifact::release-order.json": {
       "note": "operator-facing run artifact: release_order channel prepass receipts (core/audit/release_order.py), consumed via /review and manual triage \u2014 no production reader by design (the audit-log artifact pattern)"
@@ -540,9 +540,6 @@
     },
     "artifacts:write_only_artifact::study-questions.md": {
       "note": "operator-facing RENDERING of reading-list.json (the one store) written at study completion; derived and regenerable by design \u2014 production code must keep reading the JSON store, never this file"
-    },
-    "artifacts:write_only_artifact::study-report.md": {
-      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
     "artifacts:write_only_artifact::study-stale.json": {
       "note": "operator-facing mirror of the staleness quarantine; the machine-consumed re-derive signal rides the reading list (pending items drained on the next study pass)"
@@ -691,9 +688,6 @@
     "dead:dead_function:core/audit/frida_observe.py:collect_observed_functions": {
       "note": "zero-reference symbol at baseline cut \u2014 triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"
     },
-    "dead:dead_function:core/concepts/audit_bridge.py:_model_content_digest": {
-      "note": "staged helper: canonical content-digest identity for a parsed domain model (thin wrapper over _model_content_canonical, which is live); its consumer arrives with the follow-on grepfold series (kit-13), so zero callers on this tree is expected until that lands"
-    },
     "dead:dead_function:core/iris/api.py:load_project_assumptions": {
       "note": "zero-reference symbol at baseline cut \u2014 triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"
     },
@@ -702,6 +696,9 @@
     },
     "dead:dead_function:packages/exploit_feasibility/analyzer.py:check_system_exploitability": {
       "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
+    },
+    "dead:dead_method:core/analysis/binary_oracle.py:_OwnedOutputReader.readinto": {
+      "note": "RawIOBase protocol \u2014 called by Python IO layer, not by name"
     },
     "dead:dead_method:core/audit/tests/test_return_census.py:TestCpgUsage._fake_server_rows": {
       "note": "test scaffolding kept for the planned CPG-backed census cases; harmless"
@@ -720,6 +717,9 @@
     },
     "dead:dead_method:core/llm/dispatcher/client.py:_TokenRenewalAuth.sync_auth_flow": {
       "note": "httpx framework hook: httpx.Client/AsyncClient invoke the Auth subclass's sync_auth_flow/async_auth_flow generators dynamically during send() \u2014 no in-repo caller names them (same pattern as any httpx.Auth override)"
+    },
+    "dead:dead_method:core/testing/tests/_project_case_setup_ownership.py:Result.addError": {
+      "note": "unittest TestResult callback invoked dynamically by TestCase.run on setup errors. This override records the original exception object; the private setup-ownership helper and its outer test consume observed_primary/primary_identity to verify error preservation. No direct callback call is required."
     },
     "dead:dead_method:packages/autonomous/corpus_generator.py:CorpusGenerator.generate_mutated_seed": {
       "note": "kept: feature seed \u2014 autonomous fuzzing loop (operator decision 2026-08-16, reaffirmed 2026-08-17); unwired since introduction"
@@ -775,9 +775,6 @@
     "dead:dead_method:packages/fuzzing/corpus_manager.py:CorpusManager.add_seeds": {
       "note": "zero-reference symbol at baseline cut \u2014 triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"
     },
-    "dead:dead_method:packages/fuzzing/corpus_manager.py:CorpusManager.create_from_directory": {
-      "note": "zero-reference symbol at baseline cut \u2014 triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"
-    },
     "dead:dead_method:packages/web/checks/base.py:Check._llm_analyse": {
       "note": "kept: feature seed \u2014 enveloped-LLM analysis leg for checks (the scanner already hands llm= to every check via _instantiate_check; no check consumes it yet)"
     },
@@ -811,17 +808,14 @@
     "kwargs:missing_required:packages/exploitability_validation/tests/test_witness_stage.py:packages.exploitability_validation.witness_stage:run_witness_stage:run_dir": {
       "note": "deliberate negative test: test_run_dir_is_required calls run_witness_stage without run_dir inside pytest.raises(TypeError, match='run_dir') to pin that the provenance binding stays the caller's explicit choice"
     },
-    "kwargs:unknown_kwarg:core/audit/sweep.py:packages.coccinelle.runner:run_rule:extra_targets": {
-      "note": "resolver false positive: sweep.py imports run_rule function-scoped from BOTH packages.semgrep.runner (line ~608) and packages.coccinelle.runner (later helpers); the extra_targets call site is inside the semgrep-imported scope and packages.semgrep.runner:run_rule accepts extra_targets, but the module-granularity name resolution maps the call to the coccinelle signature"
-    },
     "kwargs:unknown_kwarg:packages/joern/tests/test_server.py:packages.joern.server:JoernServer.__init__:nonexistent_kwarg": {
       "note": "deliberate bad kwarg: TestTeardownWithoutInit regression test constructs a JoernServer whose __init__ raises TypeError before its body runs, pinning that __del__ -> stop() stays quiet on a never-initialised instance"
     },
     "plumbing:orphan_config_field:core/audit/fail_open_roles.py:SecurityFlag.safe_when": {
       "note": "pending wiring: safe_when is the fail-open channel's planned per-flag suppression predicate"
     },
-    "plumbing:orphan_config_field:core/binary/elf.py:_SectionHeader.sh_link": {
-      "note": "kept: spec-defined ELF section-header member (2026-08-17 config-orphan pass). The canonical .dynstr resolution is sections[dynsym.sh_link]; today elf.py matches by name+type (elf.py:198-205), which fails on renamed sections from exotic toolchains \u2014 sh_link is the upgrade path. Struct unpack offsets come from the format string, so the field is layout-inert."
+    "plumbing:orphan_config_field:core/audit/prepared_declaration_custody.py:DeclarationCapture.database_sha256": {
+      "note": "Retained public immutable capture-record metadata returned by capture_declaration/DeclarationOwner.capture and exposed through AcquiredDeclaration.selected.capture. The digest describes the retained whole database bytes for callers. Internal custody intentionally uses issued-object identity and exact bytes/intervals, not the digest as build authentication or authority; no internal serialized consumer is claimed."
     },
     "plumbing:orphan_config_field:core/build/build_detector.py:BuildSystem.detected_files": {
       "note": "construction-time provenance: the detector stores which build files drove the detection (the same list its confidence score is computed from) on the result object for debugging and tests; nothing dereferences the field programmatically by design"
