@@ -91,7 +91,7 @@ jobs:
         with:
           cache-key-prefix: venv-sandbox-wrappers-browser
           uv-export-extra-args: >-
-            --extra binary --extra r2pipe --extra frida --extra llm --extra grammars --extra web --extra zkpox
+            --extra binary --extra r2pipe --extra frida --extra llm --extra grammars --extra web
             ${{ (contains(matrix.families, 'gadget-parsers') || contains(matrix.families, 'elf-worker')) && '--group sandbox-wrappers' || '' }}
           save-on-rebuild: 'true'
       - name: Install Linux parser tools and Chromium dependencies
