@@ -539,6 +539,13 @@ _REPORT_CONSTRUCTORS = frozenset({"ReportSection"})
 # writer needs an explicit add (forcing a security review at file-add
 # time).
 _REPORT_WRITER_FILES = (
+    # Exact typed-document and terminal-summary boundaries reviewed for combined306.
+    "core/analysis/gadget_reporting.py",
+    # Historical basis rows are typed Block data; portable renderers escape cells.
+    "core/audit/assessment_basis_reporting.py",
+    "core/dataflow/corpus_report_completion.py",
+    "core/dataflow/parity_report_completion.py",
+    "packages/llm_analysis/reporting.py",
     # Native hook JSON; title components are bounded and terminal-sanitised.
     "core/startup/session_title.py",
     "packages/sca/sbom_inventory/cli.py",
