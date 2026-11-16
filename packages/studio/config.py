@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from core.project.project import DEFAULT_OUTPUT_BASE, PROJECTS_DIR
+from core.project.project import DEFAULT_OUTPUT_BASE
 
 # Repo root — packages/studio/config.py → packages/ → repo root; the same
 # self-location convention raptor's libexec scripts use.
@@ -23,7 +23,11 @@ RAPTOR_HOME = Path(__file__).resolve().parents[2]
 # truth). STUDIO_PROJECTS_DIR is a studio-side view override for demo and
 # test registries; it never redirects raptor itself, so jobs launched
 # from a demo registry still write to raptor's real locations.
-RAPTOR_PROJECTS_DIR = Path(os.environ.get("STUDIO_PROJECTS_DIR") or PROJECTS_DIR)
+def _resolve_projects_dir() -> Path:
+    from core.project.project import PROJECTS_DIR
+    return Path(os.environ.get("STUDIO_PROJECTS_DIR") or PROJECTS_DIR)
+
+RAPTOR_PROJECTS_DIR = _resolve_projects_dir()
 
 # Default base for new projects' output dirs — raptor's own default.
 # Current raptor exports it absolute (anchored at RaptorConfig's out/
