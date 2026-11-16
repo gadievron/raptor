@@ -83,7 +83,7 @@ warnings.filterwarnings(
 )
 
 
-# Default tracer-ready timeout. The tracer's PTRACE_SEIZE +
+# Shared target-setup/tracer-ready timeout. The tracer's PTRACE_SEIZE +
 # SETOPTIONS dance is microseconds on a healthy host; the budget only
 # binds the WEDGED-tracer case (a dead tracer delivers EOF instantly),
 # so it trades wedge-detection latency against false kills on a badly
@@ -523,7 +523,8 @@ def run_landlock_audit(
     libseccomp work. Restores observe-mode signal that the bare
     ``subprocess.run`` fallback couldn't capture.
 
-    Synchronisation: target child blocks on a sync pipe until the
+    Synchronisation: parent first waits for target ptracer setup before
+    launching the sibling tracer. Target child blocks on a sync pipe until the
     parent confirms the tracer has SEIZE'd it. Without this gate,
     the target's first traced syscall would fire SCMP_ACT_TRACE
     with no tracer attached → kernel SIGSYS-kills the process.
@@ -561,17 +562,17 @@ def run_landlock_audit(
         audit_run_dir, _out_name(bool(observe_mode)),
     )
     config_fd = -1
-    p_go_r = p_go_w = t_ready_r = t_ready_w = -1
+    p_go_r = p_go_w = p_ready_r = p_ready_w = t_ready_r = t_ready_w = -1
     out_r = out_w = err_r = err_w = -1
     target_pid = tracer_pid = -1
     verify_evidence = False
 
     def _cleanup_fds() -> None:
-        nonlocal p_go_r, p_go_w, t_ready_r, t_ready_w
+        nonlocal p_go_r, p_go_w, p_ready_r, p_ready_w, t_ready_r, t_ready_w
         nonlocal out_r, out_w, err_r, err_w
-        owned = (p_go_r, p_go_w, t_ready_r, t_ready_w,
+        owned = (p_go_r, p_go_w, p_ready_r, p_ready_w, t_ready_r, t_ready_w,
                  out_r, out_w, err_r, err_w)
-        p_go_r = p_go_w = t_ready_r = t_ready_w = -1
+        p_go_r = p_go_w = p_ready_r = p_ready_w = t_ready_r = t_ready_w = -1
         out_r = out_w = err_r = err_w = -1
         _retire_parent_resources(
             *(lambda fd=fd: _close_safely(fd) for fd in owned),
@@ -623,6 +624,7 @@ def run_landlock_audit(
         config_fd = _write_audit_config(audit_config)
         config_arg = _evidence_mod.fd_path(config_fd)
         p_go_r, p_go_w = os.pipe()
+        p_ready_r, p_ready_w = os.pipe()
         t_ready_r, t_ready_w = os.pipe()
         # The tracer subprocess inherits t_ready_w via execvpe →
         # mark inheritable (PEP 446 sets O_CLOEXEC by default).
@@ -661,6 +663,7 @@ def run_landlock_audit(
         verify_evidence = True
         # ----- Fork the target -----
         # (fork-warning suppression is the module-level filter above)
+        _startup_deadline = time.monotonic() + _TRACER_READY_TIMEOUT_S
         target_pid = os.fork()
 
         if target_pid == 0:
@@ -681,6 +684,7 @@ def run_landlock_audit(
             # child-runs-parent-code double execution _spawn's
             # child guard already refuses.
             try:
+                _close_safely(p_ready_r)
                 if _capture_any:
                     _close_safely(out_r)
                     _close_safely(err_r)
@@ -751,6 +755,9 @@ def run_landlock_audit(
                 if rlimit_preexec is not None:
                     rlimit_preexec()
                 _set_ptracer_any_in_child(_parent_libc)
+                # A sibling tracer may not SEIZE us until this opt-in is done.
+                os.write(p_ready_w, b"R")
+                _close_safely(p_ready_w)
 
                 # Block until parent says tracer is attached.
                 byte = os.read(p_go_r, 1)
@@ -805,6 +812,28 @@ def run_landlock_audit(
             _closing_fd, err_w = err_w, -1
             _close_safely(_closing_fd)
 
+        # Wait for target initialization before the sibling tracer can attach.
+        # Without this acknowledgement, SEIZE can race PR_SET_PTRACER under
+        # Yama scope 1 even when the ordinary parent/child ptrace probe passes.
+        _closing_fd, p_ready_w = p_ready_w, -1
+        _close_safely(_closing_fd)
+        try:
+            _target_ready = _readable_fds(
+                [p_ready_r], max(0.0, _startup_deadline - time.monotonic()),
+            )
+            if not _target_ready:
+                raise RuntimeError(
+                    "audit-mode target did not confirm ptrace readiness "
+                    "within the startup deadline"
+                )
+            if os.read(p_ready_r, 1) != b"R":
+                raise RuntimeError(
+                    "audit-mode target failed before confirming ptrace readiness"
+                )
+        finally:
+            _closing_fd, p_ready_r = p_ready_r, -1
+            _close_safely(_closing_fd)
+
         # ----- Fork the tracer -----
         # Resolve imports and prepare argv before fork; the child only
         # adjusts descriptors and execs the captured launch specification.
@@ -854,7 +883,9 @@ def run_landlock_audit(
         ready = b""
         ready_timed_out = False
         try:
-            rlist = _readable_fds([t_ready_r], _TRACER_READY_TIMEOUT_S)
+            rlist = _readable_fds(
+                [t_ready_r], max(0.0, _startup_deadline - time.monotonic()),
+            )
             if rlist:
                 ready = os.read(t_ready_r, 1)
             else:
