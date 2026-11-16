@@ -1041,6 +1041,10 @@ setting them manually either does nothing or weakens a boundary.
 | `SAGE_ENABLED` | `raptor-sage-setup` | Written as `true` into `.claude/settings.local.json` so sessions enable SAGE; default `false`, canonical boolean spellings via `core.config.env_flag` (`1`/`true`/`yes`/`on`, case-insensitive; unrecognised values warn and keep the default). Removed by teardown. |
 | `SAGE_IDENTITY_PATH`, `SAGE_PROJECT`, `SAGE_PROVIDER` | `raptor-sage-setup` → `.mcp.json` | Agent identity/namespace for the SAGE MCP wrapper (container-internal defaults). |
 | `SAGE_EMBED_DIM` | `raptor-sage-setup` | Compose-time embedding dimension (default 768); no Python reads it at runtime — pairs with `SAGE_EMBED_MODEL` before setup. |
+| `STUDIO_DATA_DIR` | `~/.raptor-studio` | raptor-studio's own state: job-queue SQLite DB, job logs, and project-extras sidecars (`packages/studio/config.py`). |
+| `STUDIO_PROJECTS_DIR` | unset | Studio-side project-registry *view* override for demo/test registries (`packages/studio/config.py`). Studio otherwise reads raptor's canonical `core/project` registry; this never redirects raptor itself — jobs launched from an overridden view still use raptor's real locations. |
+| `STUDIO_ALLOW_REMOTE` | unset | Channel set by `raptor_studio.py --allow-remote`: `1` disables the studio app's loopback Host-header validation (`packages/studio/security.py`). The launcher owns it; setting it by hand bypasses the bind-address gate and its warning. |
+| `STUDIO_AUTH_TOKEN` | unset | Shared secret every studio client must present when set (`Authorization: Bearer`, the `studio_auth` cookie, or a one-time `?token=` exchange). Provisioned randomly by `raptor_studio.py --allow-remote`; pre-set it to keep a stable token across restarts. |
 
 Child-env transport with no table row of its own: `_JAVA_OPTIONS`
 (the Joern server child env pins `-Djava.io.tmpdir` to a run-scoped
