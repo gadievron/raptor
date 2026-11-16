@@ -25,6 +25,7 @@ Available Modes:
     doctor      - Status report for local setup (no claude needed)
     frida       - Dynamic instrumentation via Frida (alpha)
     openant     - OpenAnt AST+LLM source-code vulnerability scan
+    zkpox       - Zero-knowledge proof of exploit: prove / verify (beta)
 
 Examples:
     # Full autonomous workflow
@@ -1744,7 +1745,8 @@ def show_mode_help(mode: str, preamble: bool = True) -> None:
             'doctor': mode_doctor,
             'sca': mode_sca,
             'frida': mode_frida,
-        'openant': mode_openant,
+            'openant': mode_openant,
+            'zkpox': mode_zkpox,
         }
         mode_handlers[mode](["--help"])
         return
