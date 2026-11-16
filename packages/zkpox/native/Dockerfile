@@ -74,10 +74,10 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
 
 # ============================================================================
 # SP1 — `cargo-prove` plus the custom `succinct` rustup toolchain
-# Pinned to v6.1.0 to match versions.txt; sp1up downloads the Linux x86_64
+# Pinned to v6.5.0 to match versions.txt; sp1up downloads the Linux x86_64
 # binary by default, which is what GitHub Actions ubuntu-latest also gets.
 # ============================================================================
-ARG SP1_VERSION=v6.1.0
+ARG SP1_VERSION=v6.5.0
 RUN curl -fsSL https://sp1up.succinct.xyz | bash \
     && /root/.sp1/bin/sp1up --version "${SP1_VERSION#v}" \
     && cp -r /root/.sp1 /opt/sp1 \
