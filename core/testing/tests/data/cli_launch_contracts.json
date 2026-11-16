@@ -122,7 +122,7 @@
     ".github/tests/test_sca_pr_comment.py": "0c2ebbe32732c6f77142752d3508cc7f75076aaa29a3b5fc50a1b3d1448ad7e0",
     ".github/tests/test_sca_self_bump_report.py": "12c19cc5f4ada9f709d3eec25b56d1efef0eeeadd59b5b7b2cf1aa58a5b6cd9b",
     ".github/tests/test_scan_restart_identity.py": "91073d4a33c48713d0453835179214a313c7ff547d12a941b7361f04ad878485",
-    ".github/tests/test_scheduled_ci_provisioning.py": "f60b1987b0c7c0e03cabba3490387af0282d2ad7ecdaa5dceae126c5a1eb41dd",
+    ".github/tests/test_scheduled_ci_provisioning.py": "181ec4eea2a5c8be8bebfa84def7235bda6a020cef9e0590f5e9627e60e32938",
     ".github/tests/test_setup_venv_cache.py": "b8a2aeb88d93dda48b7c32db9cc178e23082f8759611ed14654a970e4fefd94d",
     ".github/tests/test_static_boundary_contracts.py": "c85fa61c51f66c2bd85e8d85b43f5c73eb7096b4577cc877ee8a579023d3882c",
     ".github/tests/test_symlink_hop_bound.py": "f031725cd5dfeb073b6885a1d53e079022c069571aeab4f4006f5df1fd6a99ff",
@@ -222,7 +222,7 @@
     "core/audit/tests/test_lifecycle_call_timeouts.py": "78e6822a199bde5aecc5d9441ddfbf6655231cd480d62060a9cefa03c5a19c3a",
     "core/audit/tests/test_live_transport_guards.py": "5a1b0e2e474c4508747372bfb180509eb3b81ea49871716b6e1a99082f62d34b",
     "core/audit/tests/test_max_workers_flag.py": "2822ad2c540f781bf533568e4bdf702b4ec89190427e855906fecb3ba5535ef6",
-    "core/audit/tests/test_model_body_markers.py": "0f9705f984aa7e011f13d70f19820167b9f2ad93ed9643ddc5455fe05cf079f3",
+    "core/audit/tests/test_model_body_markers.py": "5367fe671fe291ed72b58cff8c5739aceeedca6fbbb3a713acf10a44b2f11b4a",
     "core/audit/tests/test_peer_group_domain_wiring.py": "04849ebe15b4bc1dff72ad585948238c69d88b867329c3d982afa918fa7369fe",
     "core/audit/tests/test_peer_group_l1_l4_wiring.py": "bbe8b6fa6bd67d1756e4aaa876104085f59b3ccd2ee53decf4de05eac6276687",
     "core/audit/tests/test_peer_group_route_wiring.py": "b388d720d2f49ce6db639e465c19431044e28d4131bfa1bc2438adad2633f4ba",
@@ -1290,6 +1290,7 @@
     "packages/web/tests/test_ffuf_live.py": "09fb3fdc5ae03dd8bd47fdf1881aa9754345f5105b57fd084784bfe4bd55736d",
     "packages/web/tests/test_file_reader_migrations.py": "ba2e2b52d2f7d907a9cc207f86e2c64fe231e19e9428a95a2b16e3188fc1ac13",
     "packages/web/tests/test_nuclei_live.py": "32ec449bad2ed8827453757b520ca5c354014f0d1c73cc9baf97654771f8b686",
+    "packages/web/tests/test_origin_verify_fifo.py": "f54d28ee5102fe89eaab14823f2002608365f2cbffd9f9abe41f5388de61f2b4",
     "packages/web/tests/test_poc.py": "ea6315d58681dd2916b17b68683d53df66cf907ae3c8eaee3c34dfb1a3398170",
     "packages/zkpox/tests/test_libexec_raptor_zkpox.py": "7ce9a88871918c1a56e6604e935116133fa9c230349c8625f110e0e32ea32b8a",
     "packages/zkpox/tests/test_reproduce.py": "62a97b5b9ff29131cf090c8ce6a0055e5612f21ed7d7f6f37731cc5166ec56b9",
@@ -45159,6 +45160,14 @@
       "count": 1,
       "contract": "non-cli-probe",
       "purpose": "packages/web/tests/test_nuclei_live.py:direct_nuclei._run: external tool or library/OS probe; exact command/environment source is pinned, and this category is not a claim of standalone launch isolation."
+    },
+    {
+      "path": "packages/web/tests/test_origin_verify_fifo.py",
+      "scope": "test_fifo_without_writer_is_rejected_without_blocking",
+      "signature": "1d33bf947a424e3f4aa7920806915b0015d81f6dfb2b748edbe6969496b8deaa",
+      "count": 1,
+      "contract": "non-cli-probe",
+      "purpose": "Fixed Python API probe reads an owned FIFO path and asserts regular-file refusal. run_in_process_group owns the private child group, bounds execution to three seconds, and reaps the child and closes pipes on timeout or error; successful exit and the FIFO-refused output are required."
     },
     {
       "path": "packages/web/tests/test_poc.py",
