@@ -56,7 +56,7 @@ pytestmark = [
         reason=(
             f"zkpox-prove or zkpox-verify not built. Build with: "
             f"cargo build --release "
-            f"--manifest-path core/zkpox/Cargo.toml --features full-verify"
+            f"--manifest-path packages/zkpox/native/Cargo.toml --features full-verify"
         ),
     ),
     pytest.mark.skipif(
