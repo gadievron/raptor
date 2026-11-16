@@ -57,7 +57,81 @@ def load_claim_presentation(out_dir: Path) -> dict | None:
     return {"mode": "shadow", "authoritative": False, "artifact": _SHADOW_FILE,
             "policy_version": policy, "claim_count": len(claims), "claims": rows,
             "state_counts": state_counts,
-            "claims_omitted": max(0, len(claims) - len(rows))}
+            "claims_omitted": max(0, len(claims) - len(rows)),
+            "conditional_evidence": _conditional_evidence(payload, rows)}
+
+
+def _conditional_evidence(payload: dict, rows: list[dict]) -> dict:
+    """Project saved availability, never re-admit evidence or establish freshness."""
+    availability = payload.get("preparation_availability", [])
+    unavailable = {"state": "unavailable", "records": []}
+    if not isinstance(availability, list):
+        return unavailable
+    records: list[dict] = []
+    # Only an exact displayed claim/revision can receive a recorded conclusion.
+    indexed = {(row["claim_id"], row["revision_id"]): row for row in rows}
+    for item in availability:
+        if not isinstance(item, dict):
+            return unavailable
+        signature = item.get("requested_conclusion")
+        if signature is None:
+            continue
+        reference = item.get("claim_reference")
+        if not isinstance(reference, dict):
+            return unavailable
+        key = (reference.get("claim_id"), reference.get("revision_id"))
+        if any(not isinstance(value, str) for value in key):
+            return unavailable
+        if key not in indexed:
+            continue
+        if (not isinstance(signature, dict)
+                or set(signature) != {"statement", "conclusion_kind", "effect_scope", "conditions"}
+                or any(not isinstance(signature.get(field), str) or not signature[field]
+                       or len(signature[field]) > 2048
+                       for field in ("statement", "conclusion_kind", "effect_scope"))
+                or not isinstance(signature["conditions"], list)
+                or not 1 <= len(signature["conditions"]) <= 32
+                or any(not isinstance(value, str) or not value or len(value) > 1024
+                       for value in signature["conditions"])
+                or item.get("assessment") != "shadow-only"
+                or item.get("authoritative") is not False
+                or item.get("issuer_cwe_verified") is not False
+                or item.get("effect_scope") != signature["effect_scope"]
+                or not isinstance(item.get("reason"), str) or len(item["reason"]) > 500):
+            return unavailable
+        if key in {(record["claim_id"], record["revision_id"]) for record in records}:
+            return unavailable
+        records.append({"claim_id": key[0], "revision_id": key[1],
+                        "conclusion": signature, "publication_reason": item["reason"],
+                        "authoritative": False, "issuer_cwe_verified": False})
+    return {"state": "recorded", "records": records}
+
+
+def _conditional_blocks(record: dict) -> list[Block]:
+    evidence = record.get("conditional_evidence")
+    if not isinstance(evidence, dict):
+        return []
+    if evidence.get("state") != "recorded":
+        return [Block("paragraph", title="Conditional evidence unavailable",
+                      text="The saved conditional details could not be read; claim states and legacy assessments are unchanged.")]
+    records = evidence.get("records", [])
+    if not records:
+        return []
+    children = [Block("paragraph", text=(
+        "Recorded source-model implications under the listed assumptions. "
+        "Publication reasons describe the saved run; this report does not revalidate current source or retained evidence. "
+        "These records do not establish target behaviour, CWE correctness or a confirmed vulnerability."))]
+    for item in records:
+        signature = item["conclusion"]
+        children.append(Block("section", title="Conditional claim " + item["claim_id"], children=[
+            Block("paragraph", text=signature["statement"]),
+            Block("table", columns=["Recorded attribute", "Value"], rows=[
+                ["Revision", item["revision_id"]], ["Publication", item["publication_reason"]],
+                ["Conclusion kind", signature["conclusion_kind"]], ["Scope", signature["effect_scope"]]]),
+            Block("table", title="Required assumptions (not established target facts)",
+                  columns=["Condition"], rows=[[value] for value in signature["conditions"]]),
+        ]))
+    return [Block("section", title="Conditional evidence (recorded; not authoritative)", children=children)]
 
 
 def claim_presentation_blocks(report: dict) -> list[Block]:
@@ -91,7 +165,8 @@ def claim_presentation_blocks(report: dict) -> list[Block]:
     if record["claims_omitted"]:
         children.append(Block("paragraph", text=f"Showing {len(record['claims'])} of {record['claim_count']} claims; complete recorded shadow remains in {_SHADOW_FILE}."))
     children.append(Block("paragraph", text=f"Recorded policy: {record['policy_version']}. See {_SHADOW_FILE} for retained provenance and limitations."))
-    return [Block("section", title="Claim adjudication (shadow; not authoritative)", children=children)]
+    return [Block("section", title="Claim adjudication (shadow; not authoritative)", children=children),
+            *_conditional_blocks(record)]
 
 
 def _limitation(row: dict) -> str:

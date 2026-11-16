@@ -132,3 +132,68 @@ def test_saved_shadow_report_without_totals_still_renders(tmp_path):
     assert "old-claim" in markdown and "unresolved" in markdown
     assert "Recorded claim states" not in markdown
     assert "Shadow comparison only" in markdown
+
+
+# Reuse the actual local issuer/validator fixture; no provider or legacy engine.
+from core.audit.tests.test_conditional_claim_pipeline import (  # noqa: E402
+    declaration, intake, live, publish, review,  # noqa: F401, F811 -- pytest fixture
+)
+
+
+def test_conditional_publisher_reaches_report_with_all_conditions_without_promotion(live):  # noqa: F811 -- imported fixture
+    from core.audit.conditional_member_policy import conclusion_signature
+    review(live, [declaration()])
+    intake(live)
+    shadow = publish(live)
+    before = copy.deepcopy(shadow)
+    report = generate_report(live.out)
+    evidence = report["claim_adjudication"]["conditional_evidence"]
+    item, = evidence["records"]
+    signature = conclusion_signature()
+    assert item["conclusion"]["statement"] == signature.statement
+    assert item["conclusion"]["conditions"] == list(signature.conditions)
+    assert item["publication_reason"] == "retained-conditional-support"
+    assert item["authoritative"] is False and item["issuer_cwe_verified"] is False
+    assert report["findings"] == []
+    _, document = build_audit_document(report, live.out)
+    for fmt in ("json", "markdown"):
+        rendered = get_renderer(fmt).render(document).content.decode()
+        assert "Conditional evidence (recorded; not authoritative)" in rendered
+        assert "does not revalidate current source" in rendered
+        assert signature.statement in rendered
+        for condition in signature.conditions:
+            assert condition in rendered
+    assert json.loads((live.out / "claim-adjudication-shadow.json").read_text()) == before
+    # A later consumed publication must not resurrect the former support.
+    publish(live)
+    later = generate_report(live.out)
+    assert all(row["publication_reason"] != "retained-conditional-support"
+               for row in later["claim_adjudication"]["conditional_evidence"]["records"])
+
+
+def test_malformed_conditional_details_preserve_ordinary_claim_states(tmp_path):
+    from core.audit.claim_presentation import load_claim_presentation
+    payload = {"schema_version": 1, "mode": "shadow", "authoritative": False,
+               "policy_version": "recorded-policy", "claims": [
+                   {"claim_id": "claim", "revision_id": "revision", "state": "unresolved"}],
+               "preparation_availability": [{"claim_reference": {
+                   "claim_id": "claim", "revision_id": "revision"},
+                   "requested_conclusion": {"conditions": "untrusted"}}]}
+    (tmp_path / "claim-adjudication-shadow.json").write_text(json.dumps(payload))
+    projected = load_claim_presentation(tmp_path)
+    assert projected["mode"] == "shadow"
+    assert projected["state_counts"]["unresolved"] == 1
+    assert projected["conditional_evidence"] == {"state": "unavailable", "records": []}
+
+
+def test_stale_source_publication_cannot_display_retained_support(live):  # noqa: F811 -- imported fixture
+    review(live, [declaration()])
+    intake(live)
+    path = live.root / "protocol/parser.c"
+    path.write_text(path.read_text() + "\n/* source changed */\n")
+    shadow = publish(live)
+    assert not any(row["supported_obligations"] for row in shadow["claims"])
+    report = generate_report(live.out)
+    assert not any(row["publication_reason"] == "retained-conditional-support"
+                   for row in report["claim_adjudication"]["conditional_evidence"]["records"])
+    assert report["findings"] == []

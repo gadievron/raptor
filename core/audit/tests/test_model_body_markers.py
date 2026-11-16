@@ -1719,6 +1719,12 @@ PINNED_REVIEW_RESULT_WRITES: dict = {
     ("core/audit/llm_review.py", "make_review_fn.<locals>.review_fn",
      "value-expression", "7116fa7da6c252ef"):
         "defang_model_fields(drop_pipeline_owned(result)): the strip itself",
+    ("core/audit/llm_review.py", "make_review_fn.<locals>.review_fn",
+     "computed-key", "3ec8888ad9a9d20c"):
+        "DELIVERY_FIELD is conditional_request_delivery, classified in "
+        "PIPELINE_OWNED_REVIEW_KEYS; written only after drop_pipeline_owned. "
+        "schema_offered plus request_field_diagnostic add bounded availability "
+        "metadata, never model text, evidence, admission or verdict authority",
     ("core/audit/edge_review.py", "run_edge_pass.<locals>._review_one",
      "value-expression", "5adafa76d431b8d1"):
         "call.result is the parsed edge-review model dict; stripped below",
