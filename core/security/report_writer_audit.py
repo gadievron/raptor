@@ -854,6 +854,38 @@ class AllowlistEntry:
 # the test suite: empty / TODO notes are rejected).
 _ALLOWLIST: tuple[AllowlistEntry, ...] = (
     AllowlistEntry(
+        file="packages/static-analysis/scanner.py",
+        func_name="main",
+        kind="raw_serialiser_at_sink",
+        detail="dumps_display",
+        audit_note=(
+            "dumps_display is raptor's own output formatter "
+            "(core.output.dumps_display), not raw LLM text"
+        ),
+    ),
+    AllowlistEntry(
+        file="core/threat_model/__init__.py",
+        func_name="render_report",
+        kind="unsanitised_llm_value",
+        detail="source",
+        audit_note=(
+            "the raw read feeds _mermaid_id, which renders a sha256 "
+            "hex digest of the value — content-destroying; the label "
+            "render of the same field routes through _mermaid_label"
+        ),
+    ),
+    AllowlistEntry(
+        file="core/threat_model/__init__.py",
+        func_name="render_report",
+        kind="unsanitised_llm_value",
+        detail="sink",
+        audit_note=(
+            "the raw read feeds _mermaid_id, which renders a sha256 "
+            "hex digest of the value — content-destroying; the label "
+            "render of the same field routes through _mermaid_label"
+        ),
+    ),
+    AllowlistEntry(
         file="core/audit/assessment_basis_reporting.py",
         func_name="assessment_basis_blocks", kind="unsanitised_llm_value",
         detail='file',

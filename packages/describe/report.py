@@ -495,11 +495,18 @@ def format_text(report: DescribeReport) -> str:
     # is named by the archive author, so raw ESC/bidi could land on
     # the operator's terminal here. Same escape the license section
     # applies above.
-    lines.append(
-        f"To start analysis, run `raptor.py agentic --repo "
-        f"{sanitise_for_terminal(str(analysis_target), max_len=256)}` "
-        f"(runs sandboxed)."
-    )
+    if s.firmware_like:
+        lines.append(
+            f"To start analysis, run `raptor.py agentic --firmware-root "
+            f"{sanitise_for_terminal(str(analysis_target), max_len=256)}` "
+            f"(runs sandboxed)."
+        )
+    else:
+        lines.append(
+            f"To start analysis, run `raptor.py agentic --repo "
+            f"{sanitise_for_terminal(str(analysis_target), max_len=256)}` "
+            f"(runs sandboxed)."
+        )
 
     return "\n".join(lines)
 
@@ -518,6 +525,8 @@ def format_json(report: DescribeReport) -> str:
         "target_type": s.target_type,
         "total_files": s.total_files,
         "total_lines": s.total_lines,
+        "elf_count": s.elf_count,
+        "firmware_like": s.firmware_like,
         "file_extensions": s.file_extensions,
         "language_lines": s.language_lines,
         "git": (

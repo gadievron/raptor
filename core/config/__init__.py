@@ -1367,6 +1367,7 @@ class RaptorConfig:
         "AZURE_OPENAI_API_KEY",
         "AZURE_OPENAI_ENDPOINT",
         "GOOGLE_APPLICATION_CREDENTIALS",  # GCP service account JSON path
+
     )
 
     _LLM_NATIVE_KEYS = (
