@@ -95,8 +95,13 @@ class _StubClient:
 
 
 def _run_main(mod, argv, monkeypatch, tmp_path):
-    client_mod = types.ModuleType("core.llm.client")
-    client_mod.LLMClient = _StubClient
+    from core.llm.config import CLAUDECODE_SESSION_MODEL
+
+    config_mod = types.ModuleType("core.llm.config")
+    config_mod.LLMConfig = lambda **kwargs: _StubConfig()
+    config_mod.CLAUDECODE_SESSION_MODEL = CLAUDECODE_SESSION_MODEL
+    transcript_mod = types.ModuleType("core.llm.transcript")
+    transcript_mod.build_llm_client = lambda config: _StubClient(config)
     lifecycle_mod = types.ModuleType("core.llm.dispatcher.lifecycle")
     lifecycle_mod.ensure_route_for_model_configs = lambda *a, **k: None
     monkeypatch.setattr(sys, "argv", ["raptor-llm-ask", *argv])
@@ -108,7 +113,8 @@ def _run_main(mod, argv, monkeypatch, tmp_path):
             for handler in logging.getLogger(name).handlers:
                 cleanup.callback(handler.setLevel, handler.level)
         cleanup.enter_context(scoped_function_imports(mod, ("main",), {
-            "core.llm.client": client_mod,
+            "core.llm.config": config_mod,
+            "core.llm.transcript": transcript_mod,
             "core.llm.dispatcher.lifecycle": lifecycle_mod,
         }))
         return mod.main()

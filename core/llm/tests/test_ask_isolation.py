@@ -97,21 +97,50 @@ def test_worker_response_identity_and_size_are_checked():
             ask_isolation.decode_ask_response(json.dumps(data | change).encode(), model)
 
 
-def test_cli_keyless_switch_uses_worker_and_keeps_terminal_sanitisation(monkeypatch, capsys):
-    from core.llm import client as client_module
-    from core.llm.config import LLMConfig
-    from core.llm.providers import LLMResponse
+@pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+@pytest.mark.parametrize("timeout", [120, 0.125])
+def test_keyless_setup_preflight_does_not_start_dispatcher(native_setup, monkeypatch, provider, timeout):
+    def no_dispatch(*args, **kwargs):
+        pytest.fail("setup eligibility started a dispatcher or worker")
+
+    monkeypatch.setattr(ask_isolation, "LLMDispatcher", no_dispatch)
+    monkeypatch.setattr(ask_isolation, "spawn_worker", no_dispatch)
+    selected = ModelConfig(provider=provider, model_name="fixture-model", api_key="parent-only", timeout=timeout)
+    assert ask_isolation.supports_isolated_ask(selected)
+
+
+@pytest.mark.parametrize("change", [
+    {"provider": "openai"}, {"provider": "bedrock"}, {"provider": "claudecode"},
+    {"api_key": None}, {"enabled": False}, {"api_base": "https://custom.example.test/v1"},
+    {"model_name": "models/fixture-model"}, {"timeout": 0}, {"timeout": None},
+    {"timeout": float("inf")}, {"max_context": 0},
+], ids=["openai", "bedrock", "claudecode", "no-key", "disabled", "custom-endpoint",
+        "model-path", "no-timeout", "null-timeout", "infinite-timeout", "invalid-context"])
+def test_incompatible_setup_is_classified_before_routing(native_setup, change):
+    selected = ModelConfig(provider="anthropic", model_name="fixture-model", api_key="parent-only")
+    assert not ask_isolation.supports_isolated_ask(replace(selected, **change))
+
+
+def test_missing_sdk_keeps_compatibility_routing(monkeypatch):
+    from core.llm import detection
+
+    monkeypatch.setattr(detection, "_sdk_available", lambda name: False)
+    selected = ModelConfig(provider="gemini", model_name="fixture-model", api_key="parent-only")
+    assert not ask_isolation.supports_isolated_ask(selected)
+
+
+def test_non_posix_setup_keeps_compatibility_routing(monkeypatch):
+    monkeypatch.setattr(ask_isolation, "os", SimpleNamespace(name="nt"))
+    selected = ModelConfig(provider="gemini", model_name="fixture-model", api_key="parent-only")
+    assert not ask_isolation.supports_isolated_ask(selected)
+
+
+def _run_ask_cli(monkeypatch, *args):
+    """Run the actual CLI with owned import, environment and logging state."""
     from core.testing.logging_state import isolated_cli_logging
 
-    selected = ModelConfig(provider="anthropic", model_name="fixture-model", api_key="parent-only")
-    config = LLMConfig(primary_model=selected, fallback_models=[], enable_caching=False)
-    parent = SimpleNamespace(config=config, generate=Mock(side_effect=AssertionError("direct call")))
-    worker = Mock(return_value=LLMResponse("answer\x1b[2J", selected.model_name, selected.provider, 1, 0, "stop"))
-    monkeypatch.setattr(client_module, "LLMClient", lambda: parent)
-    monkeypatch.setattr(ask_isolation, "run_isolated_ask", worker)
     monkeypatch.setenv("_RAPTOR_TRUSTED", "1")
-    monkeypatch.delenv("RAPTOR_LLM_QUIET", raising=False)
-    monkeypatch.setattr(sys, "argv", ["raptor-llm-ask", "--keyless-worker", "test prompt"])
+    monkeypatch.setattr(sys, "argv", ["raptor-llm-ask", *args])
     script = Path(__file__).resolve().parents[3] / "libexec" / "raptor-llm-ask"
     loader = importlib.machinery.SourceFileLoader("keyless_ask_test_cli", str(script))
     spec = importlib.util.spec_from_loader(loader.name, loader)
@@ -127,7 +156,6 @@ def test_cli_keyless_switch_uses_worker_and_keeps_terminal_sanitisation(monkeypa
         stack.enter_context(patch.object(sys, "path", sys.path.copy()))
         state = stack.enter_context(pytest.MonkeyPatch.context())
         for key in keys:
-            # Register absent keys before the CLI writes them directly.
             present = key in os.environ
             state.setenv(key, os.environ.get(key, ""))
             if not present:
@@ -136,13 +164,146 @@ def test_cli_keyless_switch_uses_worker_and_keeps_terminal_sanitisation(monkeypa
         for handler, level in handler_levels.items():
             stack.callback(handler.setLevel, level)
         loader.exec_module(module)
-        assert module.main() == 0
+        result = module.main()
     assert {key: os.environ.get(key, missing) for key in keys} == environment
     assert {logger: logger.level for logger in loggers} == levels
     assert {handler: handler.level for handler in handler_levels} == handler_levels
+    return result
+
+
+def _stub_ask_setup(monkeypatch, selected):
+    from core.llm import config as config_module, transcript
+    from core.llm.config import LLMConfig
+    from core.llm.dispatcher import lifecycle
+    from core.llm.providers import LLMResponse
+
+    config = LLMConfig(primary_model=selected, fallback_models=[], specialized_models={}, enable_caching=False)
+    response = LLMResponse("answer\x1b[2J", selected.model_name, selected.provider, 1, 0, "stop")
+    parent = SimpleNamespace(config=config, generate=Mock(return_value=response),
+                             generate_structured=Mock(return_value=SimpleNamespace(
+                                 result={"answer": "structured"}, model=selected.model_name, cost=0)))
+    builder = Mock(return_value=parent)
+    worker = Mock(return_value=response)
+    route = Mock()
+    monkeypatch.setattr(config_module, "LLMConfig", lambda **kwargs: config)
+    monkeypatch.setattr(transcript, "build_llm_client", builder)
+    monkeypatch.setattr(ask_isolation, "run_isolated_ask", worker)
+    monkeypatch.setattr(lifecycle, "ensure_route_for_model_configs", route)
+    return parent, builder, worker, route
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+@pytest.mark.parametrize("explicit_model", [False, True], ids=["default-model", "explicit-model"])
+def test_cli_automatically_uses_worker_and_keeps_terminal_sanitisation(
+    native_setup, monkeypatch, capsys, provider, explicit_model,
+):
+    selected = ModelConfig(provider=provider, model_name="fixture-model", api_key="parent-only")
+    parent, builder, worker, route = _stub_ask_setup(monkeypatch, selected)
+    args = ["--model", selected.model_name] if explicit_model else []
+    assert _run_ask_cli(monkeypatch, *args, "test prompt") == 0
     worker.assert_called_once_with(selected, "test prompt", None, max_tokens=4096, temperature=None)
+    builder.assert_not_called()
     parent.generate.assert_not_called()
+    route.assert_not_called()
     assert "\x1b" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("change", [
+    {"provider": "openai"}, {"provider": "bedrock"},
+    {"api_base": "https://custom.example.test/v1"}, {"timeout": 0},
+], ids=["other-provider", "cloud-provider", "custom-endpoint", "unbounded-timeout"])
+def test_cli_unsupported_setup_keeps_existing_provider_path(native_setup, monkeypatch, change):
+    selected = replace(ModelConfig(provider="anthropic", model_name="fixture-model", api_key="parent-only"), **change)
+    parent, builder, worker, route = _stub_ask_setup(monkeypatch, selected)
+    assert _run_ask_cli(monkeypatch, "test prompt") == 0
+    builder.assert_called_once_with(parent.config)
+    parent.generate.assert_called_once_with("test prompt", system_prompt=None, model_config=selected, max_tokens=4096)
+    route.assert_called_once_with([selected], label="raptor-llm-ask")
+    worker.assert_not_called()
+
+
+@pytest.mark.parametrize("provider,env_name", [
+    ("anthropic", "CLAUDE_CODE_OAUTH_TOKEN"), ("gemini", "GOOGLE_CLOUD_PROJECT"),
+])
+def test_cli_alternate_setup_keeps_existing_provider_path(native_setup, monkeypatch, provider, env_name):
+    selected = ModelConfig(provider=provider, model_name="fixture-model", api_key="parent-only")
+    parent, builder, worker, _route = _stub_ask_setup(monkeypatch, selected)
+    monkeypatch.setenv(env_name, "fixture-alternate-setup")
+    assert _run_ask_cli(monkeypatch, "test prompt") == 0
+    builder.assert_called_once_with(parent.config)
+    parent.generate.assert_called_once()
+    worker.assert_not_called()
+
+
+def test_cli_worker_failure_never_constructs_direct_client(native_setup, monkeypatch, capsys):
+    selected = ModelConfig(provider="gemini", model_name="fixture-model", api_key="parent-only")
+    parent, builder, worker, route = _stub_ask_setup(monkeypatch, selected)
+    worker.side_effect = IsolatedAskError("proxy unavailable")
+    assert _run_ask_cli(monkeypatch, "test prompt") == 1
+    worker.assert_called_once()
+    builder.assert_not_called()
+    parent.generate.assert_not_called()
+    route.assert_not_called()
+    assert "proxy unavailable" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("mode", ["record", "replay"])
+def test_cli_transcript_mode_reaches_worker_without_parent_client(native_setup, monkeypatch, tmp_path, mode):
+    selected = ModelConfig(provider="gemini", model_name="fixture-model", api_key="parent-only")
+    parent, builder, worker, _route = _stub_ask_setup(monkeypatch, selected)
+    monkeypatch.setenv("RAPTOR_LLM_TRANSCRIPT", f"{mode}:{tmp_path / 'transcript.jsonl'}")
+    assert _run_ask_cli(monkeypatch, "test prompt") == 0
+    worker.assert_called_once()
+    builder.assert_not_called()
+    parent.generate.assert_not_called()
+
+
+def test_cli_preflight_error_is_not_a_compatibility_fallback(native_setup, monkeypatch):
+    selected = ModelConfig(provider="gemini", model_name="fixture-model", api_key="parent-only")
+    parent, builder, worker, route = _stub_ask_setup(monkeypatch, selected)
+    monkeypatch.setattr(ask_isolation, "supports_isolated_ask", Mock(side_effect=RuntimeError("setup failed")))
+    assert _run_ask_cli(monkeypatch, "test prompt") == 1
+    builder.assert_not_called()
+    parent.generate.assert_not_called()
+    worker.assert_not_called()
+    route.assert_not_called()
+
+
+def test_cli_zero_token_override_uses_configured_limit(native_setup, monkeypatch):
+    selected = ModelConfig(provider="gemini", model_name="fixture-model", api_key="parent-only", max_tokens=768)
+    _parent, _builder, worker, _route = _stub_ask_setup(monkeypatch, selected)
+    assert _run_ask_cli(monkeypatch, "--max-tokens", "0", "test prompt") == 0
+    worker.assert_called_once_with(selected, "test prompt", None, max_tokens=768, temperature=None)
+
+
+def test_cli_structured_output_keeps_existing_provider_path(native_setup, monkeypatch, tmp_path):
+    selected = ModelConfig(provider="anthropic", model_name="fixture-model", api_key="parent-only")
+    parent, builder, worker, _route = _stub_ask_setup(monkeypatch, selected)
+    schema = tmp_path / "schema.json"
+    schema.write_text(json.dumps({"type": "object", "properties": {"answer": {"type": "string"}}}))
+    assert _run_ask_cli(monkeypatch, "--json-schema", str(schema), "test prompt") == 0
+    builder.assert_called_once_with(parent.config)
+    parent.generate_structured.assert_called_once()
+    worker.assert_not_called()
+
+
+def test_cli_primary_probe_never_selects_request_route(native_setup, monkeypatch, capsys):
+    selected = ModelConfig(provider="anthropic", model_name="fixture-model", api_key="parent-only")
+    _parent, builder, worker, route = _stub_ask_setup(monkeypatch, selected)
+    eligibility = Mock(side_effect=AssertionError("probe selected a route"))
+    monkeypatch.setattr(ask_isolation, "supports_isolated_ask", eligibility)
+    assert _run_ask_cli(monkeypatch, "--show-primary") == 0
+    assert capsys.readouterr().out == "anthropic/fixture-model\n"
+    eligibility.assert_not_called()
+    builder.assert_not_called()
+    worker.assert_not_called()
+    route.assert_not_called()
+
+
+def test_cli_temporary_worker_flag_is_removed(monkeypatch):
+    with pytest.raises(SystemExit) as error:
+        _run_ask_cli(monkeypatch, "--keyless-worker", "test prompt")
+    assert error.value.code == 2
 
 
 # A provider-seam test adapter, not a fake native SDK. It makes a real proxy
@@ -200,8 +361,9 @@ raise SystemExit(main())
 @pytest.mark.integration
 @pytest.mark.parametrize("provider,header", [("anthropic", "x-api-key"), ("gemini", "x-goog-api-key")])
 @pytest.mark.parametrize("native_sdk", [False, True], ids=["provider-seam", "native-sdk"])
+@pytest.mark.parametrize("via_cli", [False, True], ids=["bootstrap", "default-cli"])
 def test_fresh_worker_has_no_keys_or_config_reads_and_parent_injects_auth(
-    native_setup, monkeypatch, tmp_path, provider, header, native_sdk,
+    native_setup, monkeypatch, tmp_path, capsys, provider, header, native_sdk, via_cli,
 ):
     if native_sdk:
         pytest.importorskip("anthropic" if provider == "anthropic" else "google.genai")
@@ -259,8 +421,17 @@ def test_fresh_worker_has_no_keys_or_config_reads_and_parent_injects_auth(
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     config = ModelConfig(provider=provider, model_name="fixture-model", api_key="selected-account", timeout=10)
     try:
-        response = ask_isolation.run_isolated_ask(config, "test prompt", None)
-        assert response.content == "worker-ok"
+        if via_cli:
+            from core.llm import config as config_module
+            from core.llm.config import LLMConfig
+
+            setup = LLMConfig(primary_model=config, fallback_models=[], specialized_models={})
+            monkeypatch.setattr(config_module, "LLMConfig", lambda **kwargs: setup)
+            assert _run_ask_cli(monkeypatch, "test prompt") == 0
+            assert capsys.readouterr().out == "worker-ok\n"
+        else:
+            response = ask_isolation.run_isolated_ask(config, "test prompt", None)
+            assert response.content == "worker-ok"
         assert len(observed) == 1
         headers = {name.lower(): value for name, value in observed[0].items()}
         assert headers[header] == "selected-account"

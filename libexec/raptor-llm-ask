@@ -16,8 +16,12 @@ The prompt is built from positional arguments (joined by spaces) plus any
 --file contents prepended as context.  If no positional args and stdin is
 a pipe, stdin is the prompt.
 
+Free-form native Anthropic and Gemini API-key asks use a keyless worker:
+one attempt, no model fallback or response cache. Other setups and
+structured output retain their provider's existing behaviour.
+
 --show-primary prints the default primary model (provider/model) that a
-run without --model resolves — through the same LLMClient resolution
+run without --model resolves — through the same LLMConfig resolution
 path a pipeline run uses — and exits without sending a prompt.  Use it
 to smoke-test what a run will actually route to; an explicit --model
 probe resolves through the override path and can pass while the run's
@@ -58,7 +62,9 @@ _MAX_SCHEMA_BYTES = 8 * 1024 * 1024
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Send a prompt to an LLM and print the response",
+        description="Send a prompt to an LLM and print the response. "
+                    "Standard native Anthropic/Gemini API-key text asks use "
+                    "one attempt without model fallback or response caching.",
     )
     parser.add_argument(
         "--model", default=None,
@@ -106,19 +112,10 @@ def main() -> int:
              "exit without sending a prompt",
     )
     parser.add_argument(
-        "--keyless-worker", action="store_true",
-        help="Opt in to a separate keyless worker for a free-form native Anthropic/Gemini ask. "
-             "Requires a standard API-key setup; disables retries, model fallback and response caching. "
-             "Does not enforce OS isolation.",
-    )
-    parser.add_argument(
         "prompt", nargs="*",
         help="Prompt text (reads stdin if omitted and stdin is a pipe)",
     )
     args = parser.parse_args()
-
-    if args.keyless_worker and (args.show_primary or args.json_schema):
-        parser.error("--keyless-worker currently supports free-form asks only")
 
     if args.show_primary and args.model:
         # --model resolves through the explicit-override path; the
@@ -166,8 +163,8 @@ def main() -> int:
         system_prompt = args.system_file.read_text(
             encoding="utf-8", errors="replace")
 
-    # --- create client + model config ---
-    from core.llm.client import LLMClient
+    # Resolve setup in the trusted parent before constructing any client.
+    from core.llm.config import LLMConfig
 
     if quiet:
         # The probe's whole point is diagnosing a misrouted default
@@ -187,18 +184,17 @@ def main() -> int:
             # fallbacks resolve in LLMConfig's field factories), but
             # with response caching off so a probe never creates
             # cache directories in the operator's cwd.
-            from core.llm.config import LLMConfig
-            client = LLMClient(LLMConfig(enable_caching=False))
+            config = LLMConfig(enable_caching=False)
         else:
-            client = LLMClient()
+            config = LLMConfig()
     except Exception as exc:
-        print(f"error: could not create LLM client: {_sft(str(exc), max_len=300)}",
+        print(f"error: could not resolve LLM configuration: {_sft(str(exc), max_len=300)}",
               file=sys.stderr)
         return 1
 
     if args.model:
         try:
-            model_config = client.config.config_for_model(args.model)
+            model_config = config.config_for_model(args.model)
         except (ValueError, AttributeError) as exc:
             print(f"error: could not resolve model {args.model!r}: {exc}",
                   file=sys.stderr)
@@ -207,7 +203,7 @@ def main() -> int:
         # No --model: the configured default (models.json primary /
         # env autodetect / claudecode last resort) — same resolution
         # every pipeline consumer gets from a bare LLMConfig().
-        model_config = client.config.primary_model
+        model_config = config.primary_model
         if model_config is None:
             print(
                 "error: no model configured — pass --model <name> or "
@@ -218,13 +214,28 @@ def main() -> int:
 
     if args.show_primary:
         # Resolution above went through the run's own path
-        # (LLMClient → config.primary_model); print the answer and
+        # (LLMConfig → primary_model); print the answer and
         # stop before any dispatcher bring-up or provider call.
         print(f"{model_config.provider}/{model_config.model_name}")
         if args.debug:
-            print(f"--- fallbacks={len(client.config.fallback_models)} ---",
+            print(f"--- fallbacks={len(config.fallback_models)} ---",
                   file=sys.stderr)
         return 0
+
+    try:
+        isolated_ask = False
+        if not args.json_schema and model_config.provider in ("anthropic", "gemini"):
+            from core.llm.ask_isolation import supports_isolated_ask
+
+            isolated_ask = supports_isolated_ask(model_config)
+        if not isolated_ask:
+            from core.llm.transcript import build_llm_client
+
+            client = build_llm_client(config)
+    except Exception as exc:
+        print(f"error: could not prepare LLM request: {_sft(str(exc), max_len=300)}",
+              file=sys.stderr)
+        return 1
 
     # Bedrock is dispatcher-only (this process holds the AWS
     # credentials; the SDK client itself never does). Pipeline runs
@@ -236,7 +247,7 @@ def main() -> int:
         from core.llm.dispatcher.lifecycle import (
             ensure_route_for_model_configs,
         )
-        if not args.keyless_worker:
+        if not isolated_ask:
             ensure_route_for_model_configs(
                 [model_config], label="raptor-llm-ask",
             )
@@ -281,11 +292,12 @@ def main() -> int:
                       f"cost=${response.cost:.4f} ---",
                       file=sys.stderr)
         else:
-            if args.keyless_worker:
+            if isolated_ask:
                 from core.llm.ask_isolation import run_isolated_ask
                 response = run_isolated_ask(
                     model_config, prompt, system_prompt,
-                    max_tokens=args.max_tokens, temperature=args.temperature,
+                    max_tokens=args.max_tokens or model_config.max_tokens,
+                    temperature=args.temperature,
                 )
             else:
                 response = client.generate(

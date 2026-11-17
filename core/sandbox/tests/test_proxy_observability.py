@@ -601,6 +601,14 @@ class TestSummaryAndHeartbeat:
             s = _open_tunnel(proxy.port, backend_port)
             s.sendall(b"ping")
             assert s.recv(4) == b"ping"
+            with caplog.at_level(logging.INFO, logger="core.sandbox.proxy"):
+                proxy._log_stats_line("heartbeat", force=True)
+            heartbeat = next(r.getMessage() for r in caplog.records
+                             if "egress proxy heartbeat:" in r.getMessage())
+            assert "window=since_start uptime=" in heartbeat
+            assert "tunnel_slots[current_active=1 peak_active=1]" in heartbeat
+            # Relay bytes fold at close, even though ping has already passed.
+            assert "closed_tunnel_bytes_total[c2u=0 u2c=0]" in heartbeat
             s.close()
             _connect_denied(proxy.port)
             _wait_until(
@@ -616,9 +624,15 @@ class TestSummaryAndHeartbeat:
                      if "egress proxy summary:" in r.getMessage()]
         assert len(summaries) == 1
         line = summaries[0]
-        assert "accepted=1" in line
-        assert "denied=1" in line
-        assert "bytes[c2u=4 u2c=4]" in line
+        assert "window=since_start uptime=" in line
+        assert "connections_total[accepted=1 denied=1 failed=0]" in line
+        # The refused request can overlap retirement of the echo connection.
+        assert any(f"tunnel_slots[active_at_shutdown=0 peak_active={peak}]" in line
+                   for peak in (1, 2))
+        assert "closed_tunnel_bytes_total[c2u=4 u2c=4]" in line
+        assert "uid_events_total[" in line
+        assert "scan_permits[deferred_total=" in line
+        assert "relay_total[eof_propagated=" in line
 
     def test_summary_includes_drain_window_completions(
             self, reset_proxy, loopback_permitted, caplog):
@@ -658,9 +672,9 @@ class TestSummaryAndHeartbeat:
         assert len(summaries) == 1
         line = summaries[0]
         assert "accepted=1" in line
-        assert "bytes[c2u=4 u2c=4]" in line, (
+        assert "closed_tunnel_bytes_total[c2u=4 u2c=4]" in line, (
             f"drain-window completion missing from the summary: {line}")
-        assert "tunnels=0 active" in line
+        assert "tunnel_slots[active_at_shutdown=0 peak_active=1]" in line
 
     def test_heartbeat_line_is_change_gated(self, reset_proxy):
         proxy = proxy_mod.EgressProxy(allowed_hosts={"x"})

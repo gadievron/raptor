@@ -1,4 +1,4 @@
-"""Trusted bootstrap for the opt-in single-provider keyless ask worker.
+"""Trusted bootstrap for the single-provider keyless ask worker.
 
 No OS isolation is claimed here. The worker receives public model metadata,
 a dispatcher capability and prompt data, rather than provider keys or config.
@@ -17,7 +17,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from core.json import dumps_canonical
-from core.llm.catalog import prepare_catalog
+from core.llm.catalog import CatalogError, prepare_catalog
 from core.llm.catalog_bootstrap import send_catalog
 from core.llm.config import ModelConfig
 from core.llm.dispatcher.auth import ProviderRule
@@ -31,6 +31,24 @@ MAX_ASK_BYTES = 8 * 1024 * 1024
 
 class IsolatedAskError(RuntimeError):
     """No implicit direct-auth fallback is allowed from this path."""
+
+
+def supports_isolated_ask(model: ModelConfig) -> bool:
+    """Check setup compatibility before selecting a keyless request route.
+
+    This does not start a proxy, construct a provider or send a request.
+    Failures after this selection must never select the compatibility path.
+    """
+    if os.name != "posix":
+        return False
+    try:
+        _rule_for(model)
+        # Legacy configurations can carry values such as timeout=0/None
+        # that the bounded worker catalog deliberately cannot represent.
+        prepare_catalog([model])
+    except (IsolatedAskError, CatalogError):
+        return False
+    return True
 
 
 def _rule_for(model: ModelConfig) -> ProviderRule:

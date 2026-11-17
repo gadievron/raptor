@@ -50,7 +50,7 @@ jobs:
       - name: Install pinned test runner
         run: python -m pip install "$(grep -oE 'pytest==[0-9.]+' pyproject.toml)"
       - name: Download and validate list
-        run: python .github/scripts/refresh_public_suffix_list.py
+        run: python .github/scripts/refresh_public_suffix_list.py --summary-file "$RUNNER_TEMP/public-suffix-refresh.md"
       - name: Test refreshed boundaries
         run: python -m pytest -q core/domains/tests
       - name: Open or update refresh PR
@@ -58,7 +58,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
+          set -eu
+          summary="$RUNNER_TEMP/public-suffix-refresh.md"
+          printf '\nValidation: downloaded list parsed successfully; domain boundary tests passed.\n' >> "$summary"
+          cat "$summary" >> "$GITHUB_STEP_SUMMARY"
           if git diff --quiet -- core/domains/data/public_suffix_list.dat; then
+            printf '\nPR: no data changes; no PR created or updated.\n' >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           branch=auto/public-suffix-list-refresh
@@ -69,8 +74,23 @@ jobs:
           git add core/domains/data/public_suffix_list.dat
           git commit -m 'chore(security): refresh Public Suffix List'
           git push --force origin "HEAD:refs/heads/$branch"
-          if [ "$(gh pr list --repo "$REPO" --head "$branch" --json number --jq length)" = 0 ]; then
-            gh pr create --repo "$REPO" --head "$branch" \
+          existing=$(gh pr list --repo "$REPO" --head "$branch" --json number --jq '.[0].number // empty')
+          if [ -z "$existing" ]; then
+            pr_url=$(gh pr create --repo "$REPO" --head "$branch" \
               --title 'chore(security): refresh Public Suffix List' \
-              --body 'Updates the bundled Mozilla Public Suffix List, including private hosting suffixes. Boundary regression tests passed against the refreshed list. Review suffix changes before merging.'
+              --body-file "$summary")
+            status=created
+          else
+            gh pr edit --repo "$REPO" "$existing" --body-file "$summary"
+            pr_url=$(gh pr view --repo "$REPO" "$existing" --json url --jq .url)
+            status=updated
           fi
+          printf '\nPR %s: %s\n' "$status" "$pr_url" >> "$GITHUB_STEP_SUMMARY"
+          # Match the sibling refresh workflows: unavailable labels are nonfatal.
+          for label in automated data-refresh; do
+            if gh pr edit --repo "$REPO" "$branch" --add-label "$label" 2>/dev/null; then
+              printf -- '- Label `%s`: applied\n' "$label" >> "$GITHUB_STEP_SUMMARY"
+            else
+              printf -- '- Label `%s`: could not apply; refresh PR retained\n' "$label" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done

@@ -381,7 +381,7 @@
     "core/llm/scorecard/tests/test_cli.py": "cce74f183697c136e936689047e0d57b0252c0fb145f5a5413f68708d284a368",
     "core/llm/tests/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "core/llm/tests/conftest.py": "f6a3fd21e9fc63ba1a90c1271acddd79a750e410661e9cd2be515c2ff75dc1bc",
-    "core/llm/tests/test_ask_isolation.py": "9ee011dd4f79c0b996c30f218cfd6987856b90ea8712f3c776b5ce34537de046",
+    "core/llm/tests/test_ask_isolation.py": "4c211dd19db2cf952d60b858e35e968c41b028233a38af1787a22990ab5c747a",
     "core/llm/tests/test_cc_adapter.py": "5386df552d365fbd8fc3da4b27f1e49f2b187bbddc517520924cd274e2f549bf",
     "core/llm/tests/test_cc_streaming_pipes.py": "94ca544103e51618633ef0c46c79124e5a72ec66468a68d5e4f9bbf0d1a66b3b",
     "core/llm/tests/test_client_thread_ownership.py": "835e7f6f9f0d9a939d25ffa2ff9e63865db7c9ba6cd24b3a745ce5b4e8fe86db",
@@ -389,7 +389,7 @@
     "core/llm/tests/test_dispatcher_integration.py": "751174d2735479122e1d4d89c166a1e088592a2472f8331444bf46fd991d03b1",
     "core/llm/tests/test_http_pool.py": "80090f9a5ca398a6398b692b0c648d99a9df08c2ece336c25a16a2ea7bb8a42a",
     "core/llm/tests/test_lazy_sdk_availability.py": "d8247545fede8f48b2c95e2b2a756edfb8dff8a8456c954154af4cd5d69f4603",
-    "core/llm/tests/test_llm_ask_json_lane_scrub.py": "753699b0fbb46ccaaa933d21db6da2feb0d485ba7970a61b9557f2b0b8938d68",
+    "core/llm/tests/test_llm_ask_json_lane_scrub.py": "c0680f40c33d606140d3e5917162a1199824ac5259a08f773fee336d08285e56",
     "core/llm/tests/test_llm_ask_show_primary.py": "c65bfd91aafc8750247fada878454b545aa8bc48b0d97376e4a750553fd10cde",
     "core/llm/tests/test_system_prompt_cache_lifecycle.py": "cfe84c7b21b813c99e1be7e36400eecb0ebf3e0f6fda3f6570e57bfe1a2cb815",
     "core/llm/tests/test_understand_cli_shim.py": "3af9d062d7acf8c8d4ca2eec40f3bdc963648b5f531febe6bb5a5f996a9bfb53",
@@ -49955,19 +49955,107 @@
     },
     {
       "path": "core/llm/tests/test_ask_isolation.py",
-      "scope": "test_cli_keyless_switch_uses_worker_and_keeps_terminal_sanitisation",
+      "scope": "_run_ask_cli",
       "signature": "7d2d63ec4198900c34a26e00b7401965ab21a85d78263da04f48a85cd178313c",
       "count": 1,
       "contract": "owned-in-process",
-      "purpose": "Loads the repository raptor-llm-ask CLI in process with its LLMClient and isolated worker replaced by owned mocks; ExitStack restores sys.path and logging, and the test asserts worker routing and terminal sanitisation without provider execution."
+      "purpose": "Loads the repository ask CLI in process; ExitStack owns sys.path, direct CLI environment writes and logging state, with restoration assertions. Caller fixtures own setup and worker behavior."
     },
     {
       "path": "core/llm/tests/test_ask_isolation.py",
-      "scope": "test_cli_keyless_switch_uses_worker_and_keeps_terminal_sanitisation",
+      "scope": "_run_ask_cli",
       "signature": "f288a7e4629178635b744a4783b9e4d142bba5670a188656a952f2aaa0afca9a",
       "count": 1,
       "contract": "owned-in-process",
-      "purpose": "Loads the repository raptor-llm-ask CLI in process with its LLMClient and isolated worker replaced by owned mocks; ExitStack restores sys.path and logging, and the test asserts worker routing and terminal sanitisation without provider execution."
+      "purpose": "Loads the repository ask CLI in process; ExitStack owns sys.path, direct CLI environment writes and logging state, with restoration assertions. Caller fixtures own setup and worker behavior."
+    },
+    {
+      "path": "core/llm/tests/test_ask_isolation.py",
+      "scope": "test_cli_automatically_uses_worker_and_keeps_terminal_sanitisation",
+      "signature": "a71a0c7ab4da2624fca023e87ad8c07e21a0e48bfe0568588ebec9d0e9fe21ac",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "Calls the owned CLI loader with scoped setup, builder, worker and route mocks; verifies default/explicit native model worker selection, absence of parent client/route execution and terminal sanitisation."
+    },
+    {
+      "path": "core/llm/tests/test_ask_isolation.py",
+      "scope": "test_cli_unsupported_setup_keeps_existing_provider_path",
+      "signature": "aecd9a07b5c557e29ac61456cb88baaf682dea29bd7afe86de9b13942af3e46b",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "Calls the owned CLI loader with scoped setup, builder, worker and route mocks; verifies incompatible provider, endpoint or timeout selects the existing parent provider path without worker execution."
+    },
+    {
+      "path": "core/llm/tests/test_ask_isolation.py",
+      "scope": "test_cli_alternate_setup_keeps_existing_provider_path",
+      "signature": "aecd9a07b5c557e29ac61456cb88baaf682dea29bd7afe86de9b13942af3e46b",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "Calls the owned CLI loader with scoped alternate-auth environment and setup/client/worker mocks; verifies compatibility client execution without worker use."
+    },
+    {
+      "path": "core/llm/tests/test_ask_isolation.py",
+      "scope": "test_cli_worker_failure_never_constructs_direct_client",
+      "signature": "aecd9a07b5c557e29ac61456cb88baaf682dea29bd7afe86de9b13942af3e46b",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "Calls the owned CLI loader with a failing worker mock; verifies failure reporting without constructing a direct client or selecting a parent route."
+    },
+    {
+      "path": "core/llm/tests/test_ask_isolation.py",
+      "scope": "test_cli_transcript_mode_reaches_worker_without_parent_client",
+      "signature": "aecd9a07b5c557e29ac61456cb88baaf682dea29bd7afe86de9b13942af3e46b",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "Calls the owned CLI loader with scoped transcript environment and worker/client mocks; verifies record/replay setup reaches the worker without parent generation."
+    },
+    {
+      "path": "core/llm/tests/test_ask_isolation.py",
+      "scope": "test_cli_preflight_error_is_not_a_compatibility_fallback",
+      "signature": "aecd9a07b5c557e29ac61456cb88baaf682dea29bd7afe86de9b13942af3e46b",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "Calls the owned CLI loader with a failing preflight mock; verifies error return without client construction, route setup or worker execution."
+    },
+    {
+      "path": "core/llm/tests/test_ask_isolation.py",
+      "scope": "test_cli_zero_token_override_uses_configured_limit",
+      "signature": "fbd433c91a554b24043f3672edecf4eec8ac6181c8093d82dc6ddec73e3910e5",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "Calls the owned CLI loader with scoped setup and worker mocks; verifies zero token override uses the configured token limit."
+    },
+    {
+      "path": "core/llm/tests/test_ask_isolation.py",
+      "scope": "test_cli_structured_output_keeps_existing_provider_path",
+      "signature": "6d737f2dca73d014f9c195efef18b18fb2bd4b7a0860d65ee3f1a004ae2e331f",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "Calls the owned CLI loader with a test-owned schema and scoped setup/client/worker mocks; verifies structured generation stays on the existing provider path."
+    },
+    {
+      "path": "core/llm/tests/test_ask_isolation.py",
+      "scope": "test_cli_primary_probe_never_selects_request_route",
+      "signature": "ce5027a3b4eaf1386b55bc27e3fc9f975cf70c629222976ae77d0dfe28740916",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "Calls the owned CLI loader with scoped setup and refusal mocks; verifies primary-model output without eligibility checks, worker execution, client construction or route setup."
+    },
+    {
+      "path": "core/llm/tests/test_ask_isolation.py",
+      "scope": "test_cli_temporary_worker_flag_is_removed",
+      "signature": "fa325169fb92589fe22417a82f9e2725169067a8f134a27bbe66175fb22e4ff1",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "Calls the owned CLI loader with the removed flag; expects argument-parser SystemExit code 2 before any request setup. Helper and pytest scopes restore CLI process state."
+    },
+    {
+      "path": "core/llm/tests/test_ask_isolation.py",
+      "scope": "test_fresh_worker_has_no_keys_or_config_reads_and_parent_injects_auth",
+      "signature": "aecd9a07b5c557e29ac61456cb88baaf682dea29bd7afe86de9b13942af3e46b",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "Calls the owned in-process CLI loader with the real isolated worker and captive loopback upstream; fake selected credentials, scoped environment/config/spawn substitutions, server shutdown and bounded thread join are test-owned. Asserts worker credential absence, parent auth injection and no config reads."
     },
     {
       "path": "core/testing/tests/test_annotation_holder_retirement_ownership.py",

@@ -3413,7 +3413,8 @@ class EgressProxy:
             False on hosts without netlink at all — that is the
             platform's permanent shape, not a degradation.
           * ``tunnels_active`` / ``tunnels_peak`` — gauge + high-water
-            mark of concurrently open tunnels.
+            mark of occupied tunnel slots, including connections awaiting
+            their request or allow/deny decision.
           * ``connections_accepted`` / ``_denied`` / ``_failed`` —
             headline groupings of the record-time verdicts (see
             _STATS_DENIED_RESULTS / _STATS_FAILED_RESULTS for what
@@ -3456,6 +3457,10 @@ class EgressProxy:
         nothing peer- or target-derived — so the line satisfies the
         log-sanitisation posture by construction.
 
+        Totals and peaks cover this proxy's lifetime. Byte totals include
+        closed tunnels only; open tunnels fold their bytes at close. The
+        active gauge is current at a heartbeat and final at shutdown.
+
         Emits nothing when a handler that would service this INFO
         record sits on an already-closed stream (interpreter/harness
         teardown): the write error would surface as logging's internal
@@ -3479,14 +3484,18 @@ class EgressProxy:
             "lookups ride the bounded /proc scan"
             if snap["peer_uid_netlink_latched"] else "")
         logger.info(
-            "egress proxy %s: uptime=%.0fs accepted=%d denied=%d "
-            "failed=%d tunnels=%d active/%d peak "
-            "bytes[c2u=%d u2c=%d] "
-            "uid[netlink=%d scan=%d miss=%d latch_fallback=%d "
-            "failclosed=%d] scan_permits[deferred=%d peak=%d] "
-            "relay[eof=%d teardown=%d timed_out=%d]%s",
+            "egress proxy %s: window=since_start uptime=%.0fs "
+            "connections_total[accepted=%d denied=%d failed=%d] "
+            "tunnel_slots[%s=%d peak_active=%d] "
+            "closed_tunnel_bytes_total[c2u=%d u2c=%d] "
+            "uid_events_total[netlink_hit=%d scan_hit=%d scan_miss=%d "
+            "latch_fallback=%d failclosed_connects=%d] "
+            "scan_permits[deferred_total=%d peak_active=%d] "
+            "relay_total[eof_propagated=%d pair_teardowns=%d "
+            "tunnels_timed_out=%d]%s",
             kind, snap["uptime_s"], snap["connections_accepted"],
             snap["connections_denied"], snap["connections_failed"],
+            "active_at_shutdown" if kind == "summary" else "current_active",
             snap["tunnels_active"], snap["tunnels_peak"],
             c["bytes_c2u"], c["bytes_u2c"],
             c["uid_netlink_hit"], c["uid_scan_hit"], c["uid_scan_miss"],
