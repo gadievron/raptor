@@ -1,9 +1,9 @@
 {
   "_source": {
-    "cves_in_corpus": 2251,
-    "cves_queried": 2164,
-    "cves_with_any_evidence_ref": 188,
-    "cves_with_exploit_host_url": 18,
+    "cves_in_corpus": 24678,
+    "cves_queried": 24275,
+    "cves_with_any_evidence_ref": 712,
+    "cves_with_exploit_host_url": 92,
     "exploit_host_allowlist": [
       "0day.today",
       "exploit-db.com",
@@ -13,16 +13,338 @@
       "packetstormsecurity.org",
       "seclists.org"
     ],
-    "fetched_at": "2026-10-06T12:27:54Z",
+    "fetched_at": "2026-11-17T15:19:02Z",
     "license": "Derived signal: presence + URL only. Source URLs are public observable facts; evidence content is NOT fetched or stored.",
     "name": "OSV EVIDENCE references (corpus-scoped)",
     "provenance": "Walks every CVE referenced in project_samples/ findings, queries OSV /vulns/{id}, and extracts references where type=='EVIDENCE'. Corpus-scoped because OSV exposes no CVE-listing endpoint; the universe is bounded by what our scans actually surface.",
     "url": "https://api.osv.dev/v1/vulns/{id}"
   },
   "signals": {
+    "CVE-2011-3374": {
+      "evidence_urls": [
+        "https://seclists.org/fulldisclosure/2011/Sep/221"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2014-8146": {
+      "evidence_urls": [
+        "http://seclists.org/fulldisclosure/2015/May/14"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2014-8147": {
+      "evidence_urls": [
+        "http://seclists.org/fulldisclosure/2015/May/14"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2014-8625": {
+      "evidence_urls": [
+        "http://seclists.org/oss-sec/2014/q4/539"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2015-3622": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/131711/libtasn1-Heap-Overflow.html",
+        "http://seclists.org/fulldisclosure/2015/Apr/109"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2015-5600": {
+      "evidence_urls": [
+        "http://seclists.org/fulldisclosure/2015/Jul/92"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2015-5602": {
+      "evidence_urls": [
+        "https://www.exploit-db.com/exploits/37710/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2015-7554": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/135078/libtiff-4.0.6-Invalid-Write.html",
+        "http://seclists.org/fulldisclosure/2015/Dec/119"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2015-8668": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/135080/libtiff-4.0.6-Heap-Overflow.html"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2016-1583": {
+      "evidence_urls": [
+        "https://www.exploit-db.com/exploits/39992/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2016-2185": {
+      "evidence_urls": [
+        "http://seclists.org/bugtraq/2016/Mar/90"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2016-2186": {
+      "evidence_urls": [
+        "http://seclists.org/bugtraq/2016/Mar/85"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2016-2188": {
+      "evidence_urls": [
+        "http://seclists.org/bugtraq/2016/Mar/87"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2016-3074": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/136757/libgd-2.1.1-Signedness.html",
+        "http://seclists.org/fulldisclosure/2016/Apr/72",
+        "https://www.exploit-db.com/exploits/39736/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2016-3715": {
+      "evidence_urls": [
+        "https://www.exploit-db.com/exploits/39767/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2016-4578": {
+      "evidence_urls": [
+        "https://www.exploit-db.com/exploits/46529/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2016-4971": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/162395/GNU-wget-Arbitrary-File-Upload-Code-Execution.html",
+        "https://www.exploit-db.com/exploits/40064/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2016-5018": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/155873/Tomcat-9.0.0.M1-Sandbox-Escape.html"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2016-5195": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/139277/Kernel-Live-Patch-Security-Notice-LSN-0012-1.html",
+        "http://packetstormsecurity.com/files/139286/DirtyCow-Linux-Kernel-Race-Condition.html",
+        "http://packetstormsecurity.com/files/139287/DirtyCow-Local-Root-Proof-Of-Concept.html",
+        "http://packetstormsecurity.com/files/139922/Linux-Kernel-Dirty-COW-PTRACE_POKEDATA-Privilege-Escalation.html",
+        "http://packetstormsecurity.com/files/139923/Linux-Kernel-Dirty-COW-PTRACE_POKEDATA-Privilege-Escalation.html",
+        "https://www.exploit-db.com/exploits/40611/",
+        "https://www.exploit-db.com/exploits/40616/",
+        "https://www.exploit-db.com/exploits/40839/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2016-6321": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/139370/GNU-tar-1.29-Extract-Pathname-Bypass.html"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2017-1000408": {
+      "evidence_urls": [
+        "http://seclists.org/oss-sec/2017/q4/385",
+        "https://www.exploit-db.com/exploits/43331/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2017-1000409": {
+      "evidence_urls": [
+        "http://seclists.org/oss-sec/2017/q4/385",
+        "https://www.exploit-db.com/exploits/43331/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2017-10140": {
+      "evidence_urls": [
+        "http://seclists.org/oss-sec/2017/q3/285"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2017-16994": {
+      "evidence_urls": [
+        "https://www.exploit-db.com/exploits/43178/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2017-18078": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/146184/systemd-Local-Privilege-Escalation.html",
+        "https://www.exploit-db.com/exploits/43935/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2017-18344": {
+      "evidence_urls": [
+        "https://www.exploit-db.com/exploits/45175/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2017-3730": {
+      "evidence_urls": [
+        "https://www.exploit-db.com/exploits/41192/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2017-5972": {
+      "evidence_urls": [
+        "https://packetstormsecurity.com/files/141083/CentOS7-Kernel-Denial-Of-Service.html"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2018-0494": {
+      "evidence_urls": [
+        "https://www.exploit-db.com/exploits/44601/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2018-1000001": {
+      "evidence_urls": [
+        "https://www.exploit-db.com/exploits/43775/",
+        "https://www.exploit-db.com/exploits/44889/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2018-1120": {
+      "evidence_urls": [
+        "http://seclists.org/oss-sec/2018/q2/122",
+        "https://www.exploit-db.com/exploits/44806/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2018-1121": {
+      "evidence_urls": [
+        "http://seclists.org/oss-sec/2018/q2/122",
+        "https://www.exploit-db.com/exploits/44806/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2018-11235": {
+      "evidence_urls": [
+        "https://www.exploit-db.com/exploits/44822/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2018-11412": {
+      "evidence_urls": [
+        "https://www.exploit-db.com/exploits/44832/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2018-11508": {
+      "evidence_urls": [
+        "https://www.exploit-db.com/exploits/46208/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2018-12327": {
+      "evidence_urls": [
+        "https://gist.github.com/fakhrizulkifli/9b58ed8e0354e8deee50b0eebd1c011f",
+        "https://www.exploit-db.com/exploits/44909/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2018-12904": {
+      "evidence_urls": [
+        "https://www.exploit-db.com/exploits/44944/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2018-13405": {
+      "evidence_urls": [
+        "https://www.exploit-db.com/exploits/45033/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2018-14634": {
+      "evidence_urls": [
+        "https://www.exploit-db.com/exploits/45516/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2018-15473": {
+      "evidence_urls": [
+        "https://www.exploit-db.com/exploits/45210/",
+        "https://www.exploit-db.com/exploits/45233/",
+        "https://www.exploit-db.com/exploits/45939/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2018-15686": {
+      "evidence_urls": [
+        "https://www.exploit-db.com/exploits/45714/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2018-15687": {
+      "evidence_urls": [
+        "https://www.exploit-db.com/exploits/45715/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2018-16323": {
+      "evidence_urls": [
+        "https://www.exploit-db.com/exploits/45890/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2018-17456": {
+      "evidence_urls": [
+        "https://www.exploit-db.com/exploits/45548/",
+        "https://www.exploit-db.com/exploits/45631/"
+      ],
+      "has_osv_evidence": true
+    },
     "CVE-2018-17572": {
       "evidence_urls": [
         "https://gist.github.com/Raghavrao29/1cb84f1f2d8ce993fd7b2d1366d35f48"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2018-18955": {
+      "evidence_urls": [
+        "https://www.exploit-db.com/exploits/45915/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2018-3639": {
+      "evidence_urls": [
+        "https://www.exploit-db.com/exploits/44695/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2018-5407": {
+      "evidence_urls": [
+        "https://www.exploit-db.com/exploits/45785/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2018-6323": {
+      "evidence_urls": [
+        "https://www.exploit-db.com/exploits/44035/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2018-7273": {
+      "evidence_urls": [
+        "https://www.exploit-db.com/exploits/44325/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2019-0053": {
+      "evidence_urls": [
+        "https://www.exploit-db.com/exploits/45982"
       ],
       "has_osv_evidence": true
     },
@@ -32,9 +354,44 @@
       ],
       "has_osv_evidence": true
     },
+    "CVE-2019-12881": {
+      "evidence_urls": [
+        "https://gist.github.com/oxagast/472866fb2c3d439e10499d7141d0a520"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2019-13272": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/154245/Kernel-Live-Patch-Security-Notice-LSN-0054-1.html",
+        "http://packetstormsecurity.com/files/154957/Linux-Polkit-pkexec-Helper-PTRACE_TRACEME-Local-Root.html",
+        "http://packetstormsecurity.com/files/156929/Linux-PTRACE_TRACEME-Local-Root.html",
+        "http://packetstormsecurity.com/files/165051/Linux-Kernel-5.1.x-PTRACE_TRACEME-pkexec-Local-Privilege-Escalation.html"
+      ],
+      "has_osv_evidence": true
+    },
     "CVE-2019-17558": {
       "evidence_urls": [
         "http://packetstormsecurity.com/files/157078/Apache-Solr-8.3.0-Velocity-Template-Remote-Code-Execution.html"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2019-18276": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/155498/Bash-5.0-Patch-11-Privilege-Escalation.html"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2019-2215": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/154911/Android-Binder-Use-After-Free.html",
+        "http://packetstormsecurity.com/files/156495/Android-Binder-Use-After-Free.html"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2019-3842": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/152610/systemd-Seat-Verification-Active-Session-Spoofing.html",
+        "https://www.exploit-db.com/exploits/46743/"
       ],
       "has_osv_evidence": true
     },
@@ -52,6 +409,25 @@
       ],
       "has_osv_evidence": true
     },
+    "CVE-2019-6110": {
+      "evidence_urls": [
+        "https://www.exploit-db.com/exploits/46193/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2019-6974": {
+      "evidence_urls": [
+        "https://www.exploit-db.com/exploits/46388/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2019-9213": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/156053/Reliable-Datagram-Sockets-RDS-rds_atomic_free_op-Privilege-Escalation.html",
+        "https://www.exploit-db.com/exploits/46502/"
+      ],
+      "has_osv_evidence": true
+    },
     "CVE-2020-11022": {
       "evidence_urls": [
         "http://packetstormsecurity.com/files/162159/jQuery-1.2-Cross-Site-Scripting.html"
@@ -64,6 +440,12 @@
       ],
       "has_osv_evidence": true
     },
+    "CVE-2020-12351": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/162131/Linux-Kernel-5.4-BleedingTooth-Remote-Code-Execution.html"
+      ],
+      "has_osv_evidence": true
+    },
     "CVE-2020-12827": {
       "evidence_urls": [
         "http://packetstormsecurity.com/files/158111/MJML-4.6.2-Path-Traversal.html",
@@ -71,9 +453,30 @@
       ],
       "has_osv_evidence": true
     },
+    "CVE-2020-21583": {
+      "evidence_urls": [
+        "https://packetstormsecurity.com/files/132061/hwclock-Privilege-Escalation.html"
+      ],
+      "has_osv_evidence": true
+    },
     "CVE-2020-9283": {
       "evidence_urls": [
         "http://packetstormsecurity.com/files/156480/Go-SSH-0.0.2-Denial-Of-Service.html"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2021-21300": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/163978/Git-LFS-Clone-Command-Execution.html"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2021-22555": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/163878/Kernel-Live-Patch-Security-Notice-LSN-0080-1.html",
+        "http://packetstormsecurity.com/files/164155/Kernel-Live-Patch-Security-Notice-LSN-0081-1.html",
+        "http://packetstormsecurity.com/files/164437/Netfilter-x_tables-Heap-Out-Of-Bounds-Write-Privilege-Escalation.html",
+        "http://packetstormsecurity.com/files/165477/Kernel-Live-Patch-Security-Notice-LSN-0083-1.html"
       ],
       "has_osv_evidence": true
     },
@@ -95,6 +498,49 @@
       ],
       "has_osv_evidence": true
     },
+    "CVE-2021-31535": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/162737/libX11-Insufficient-Length-Check-Injection.html"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2021-3156": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/161160/Sudo-Heap-Based-Buffer-Overflow.html",
+        "http://packetstormsecurity.com/files/161230/Sudo-Buffer-Overflow-Privilege-Escalation.html",
+        "http://packetstormsecurity.com/files/161270/Sudo-1.9.5p1-Buffer-Overflow-Privilege-Escalation.html",
+        "http://packetstormsecurity.com/files/161293/Sudo-1.8.31p2-1.9.5p1-Buffer-Overflow.html",
+        "http://packetstormsecurity.com/files/176932/glibc-syslog-Heap-Based-Buffer-Overflow.html",
+        "http://seclists.org/fulldisclosure/2021/Jan/79",
+        "http://seclists.org/fulldisclosure/2024/Feb/3"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2021-33909": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/163621/Sequoia-A-Deep-Root-In-Linuxs-Filesystem-Layer.html"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2021-33910": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/163621/Sequoia-A-Deep-Root-In-Linuxs-Filesystem-Layer.html"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2021-3490": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/164015/Linux-eBPF-ALU32-32-bit-Invalid-Bounds-Tracking-Local-Privilege-Escalation.html"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2021-3493": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/162434/Kernel-Live-Patch-Security-Notice-LSN-0076-1.html",
+        "http://packetstormsecurity.com/files/165151/Ubuntu-Overlayfs-Local-Privilege-Escalation.html"
+      ],
+      "has_osv_evidence": true
+    },
     "CVE-2021-3664": {
       "evidence_urls": [
         "https://huntr.dev/bounties/1625557993985-unshiftio/url-parse"
@@ -113,6 +559,24 @@
       ],
       "has_osv_evidence": true
     },
+    "CVE-2022-1015": {
+      "evidence_urls": [
+        "https://seclists.org/oss-sec/2022/q1/205"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2023-3338": {
+      "evidence_urls": [
+        "https://seclists.org/oss-sec/2023/q2/276"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2023-42753": {
+      "evidence_urls": [
+        "https://seclists.org/oss-sec/2023/q3/216"
+      ],
+      "has_osv_evidence": true
+    },
     "CVE-2024-23897": {
       "evidence_urls": [
         "http://packetstormsecurity.com/files/176840/Jenkins-2.441-LTS-2.426.3-Arbitrary-File-Read.html"
@@ -125,7 +589,25 @@
       ],
       "has_osv_evidence": true
     },
-    "CVE-2026-76844": {
+    "CVE-2025-60876": {
+      "evidence_urls": [
+        "https://gist.github.com/subyumatest/41554af6a72aedaacaec026adc311092"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2026-22184": {
+      "evidence_urls": [
+        "https://seclists.org/fulldisclosure/2026/Jan/3"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2026-76014": {
+      "evidence_urls": [
+        "https://gist.github.com/wyxstarry/5c199ec824928c5ae5816aaecbc6df03"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2026-85091": {
       "evidence_urls": [
         "https://gist.github.com/thesmartshadow/e0b9481792afb7c31e86fee1ff084490"
       ],

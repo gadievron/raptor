@@ -1,0 +1,145 @@
+{
+  "by_ecosystem": {
+    "Alpine:v3.11": {
+      "spearman_rho": 0.5108808611485117,
+      "top_20_precision": 0.14285714285714285,
+      "total": 14,
+      "with_cve": 14,
+      "with_signal": 2
+    },
+    "Alpine:v3.12": {
+      "spearman_rho": 0.5197358320939945,
+      "top_20_precision": 0.15,
+      "total": 24,
+      "with_cve": 24,
+      "with_signal": 3
+    },
+    "Alpine:v3.16": {
+      "spearman_rho": null,
+      "top_20_precision": 0.0,
+      "total": 6,
+      "with_cve": 6,
+      "with_signal": 0
+    },
+    "Alpine:v3.21": {
+      "spearman_rho": 0.7418940148647005,
+      "top_20_precision": 0.75,
+      "total": 62,
+      "with_cve": 62,
+      "with_signal": 15
+    },
+    "Alpine:v3.24": {
+      "spearman_rho": 0.7902063521457756,
+      "top_20_precision": 1.0,
+      "total": 34,
+      "with_cve": 34,
+      "with_signal": 24
+    },
+    "Alpine:v3.8": {
+      "spearman_rho": null,
+      "top_20_precision": 0.0,
+      "total": 1,
+      "with_cve": 1,
+      "with_signal": 0
+    },
+    "Cargo": {
+      "spearman_rho": 0.5660830447113189,
+      "top_20_precision": 0.75,
+      "total": 327,
+      "with_cve": 126,
+      "with_signal": 44
+    },
+    "Debian": {
+      "spearman_rho": 0.21566377843246975,
+      "top_20_precision": 0.85,
+      "total": 65288,
+      "with_cve": 65072,
+      "with_signal": 2067
+    },
+    "Go": {
+      "spearman_rho": 0.33390543406986445,
+      "top_20_precision": 1.0,
+      "total": 4103,
+      "with_cve": 3969,
+      "with_signal": 221
+    },
+    "Maven": {
+      "spearman_rho": 0.4756908234165934,
+      "top_20_precision": 1.0,
+      "total": 1126,
+      "with_cve": 1125,
+      "with_signal": 136
+    },
+    "NuGet": {
+      "spearman_rho": 0.6678228351795538,
+      "top_20_precision": 0.35,
+      "total": 39,
+      "with_cve": 36,
+      "with_signal": 7
+    },
+    "Packagist": {
+      "spearman_rho": 0.52772006750495,
+      "top_20_precision": 0.75,
+      "total": 472,
+      "with_cve": 442,
+      "with_signal": 100
+    },
+    "PyPI": {
+      "spearman_rho": 0.3802844221651869,
+      "top_20_precision": 1.0,
+      "total": 775,
+      "with_cve": 744,
+      "with_signal": 174
+    },
+    "Red Hat": {
+      "spearman_rho": null,
+      "top_20_precision": 1.0,
+      "total": 1,
+      "with_cve": 1,
+      "with_signal": 1
+    },
+    "RubyGems": {
+      "spearman_rho": 0.4897681518087575,
+      "top_20_precision": 1.0,
+      "total": 754,
+      "with_cve": 724,
+      "with_signal": 70
+    },
+    "Ubuntu": {
+      "spearman_rho": 0.44776107954699884,
+      "top_20_precision": 0.7,
+      "total": 8303,
+      "with_cve": 8210,
+      "with_signal": 671
+    },
+    "npm": {
+      "spearman_rho": 0.7524966471752881,
+      "top_20_precision": 1.0,
+      "total": 3981,
+      "with_cve": 3783,
+      "with_signal": 1618
+    }
+  },
+  "corpus_provenance": {
+    "epss_signals.json": "2026-11-17T15:08:58Z",
+    "exploitdb_signals.json": "2026-11-17T15:08:41Z",
+    "github_poc_signals.json": "2026-11-17T15:08:41Z",
+    "kev_signals.json": "2026-11-17T15:08:40Z",
+    "metasploit_signals.json": "2026-11-17T15:08:41Z",
+    "osv_evidence_signals.json": "2026-11-17T15:19:02Z",
+    "vulnrichment_signals.json": "2026-11-17T15:09:32Z"
+  },
+  "findings_total": 85310,
+  "findings_with_score": 85310,
+  "findings_with_signal": 5153,
+  "notes": [
+    "Spearman ρ 0.34 below threshold 0.40"
+  ],
+  "snapshot_date": "2026-11-17",
+  "spearman_rho": 0.3444245505165958,
+  "threshold_spearman": 0.4,
+  "threshold_top_20": 0.5,
+  "top_20_precision": 1.0,
+  "top_50_precision": 1.0,
+  "verdict": "needs_retune"
+}

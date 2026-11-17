@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-10-27T11:15:03Z",
+    "fetched_at": "2026-11-17T15:08:40Z",
     "license": "Public Domain (US Government work)",
     "name": "CISA KEV",
     "provenance": "CISA Known Exploited Vulnerabilities Catalog. Public Domain; embedded verbatim.",
@@ -8599,7 +8599,7 @@
     "CVE-2024-12356": {
       "date_added": "2024-12-19",
       "kev": true,
-      "product": "Privileged Remote Access (PRA) and Remote Support (RS) ",
+      "product": "Privileged Remote Access (PRA) and Remote Support (RS)",
       "ransomware_use": false,
       "vendor": "BeyondTrust"
     },
@@ -8855,6 +8855,13 @@
       "ransomware_use": false,
       "vendor": "Synacor"
     },
+    "CVE-2024-27834": {
+      "date_added": "2026-11-04",
+      "kev": true,
+      "product": "Multiple Products",
+      "ransomware_use": false,
+      "vendor": "Apple"
+    },
     "CVE-2024-28986": {
       "date_added": "2024-08-15",
       "kev": true,
@@ -8928,7 +8935,7 @@
     "CVE-2024-30088": {
       "date_added": "2024-10-15",
       "kev": true,
-      "product": "Windows ",
+      "product": "Windows",
       "ransomware_use": true,
       "vendor": "Microsoft"
     },
@@ -9033,7 +9040,7 @@
     "CVE-2024-38080": {
       "date_added": "2024-07-09",
       "kev": true,
-      "product": "Windows ",
+      "product": "Windows",
       "ransomware_use": false,
       "vendor": "Microsoft"
     },
@@ -9208,7 +9215,7 @@
     "CVE-2024-43047": {
       "date_added": "2024-10-08",
       "kev": true,
-      "product": "Multiple Chipsets ",
+      "product": "Multiple Chipsets",
       "ransomware_use": false,
       "vendor": "Qualcomm"
     },
@@ -9376,7 +9383,7 @@
     "CVE-2024-4978": {
       "date_added": "2024-05-29",
       "kev": true,
-      "product": "Viewer ",
+      "product": "Viewer",
       "ransomware_use": false,
       "vendor": "Justice AV Solutions"
     },
@@ -10874,7 +10881,7 @@
     "CVE-2025-64328": {
       "date_added": "2026-02-03",
       "kev": true,
-      "product": "FreePBX ",
+      "product": "FreePBX",
       "ransomware_use": false,
       "vendor": "Sangoma"
     },
@@ -10944,7 +10951,7 @@
     "CVE-2025-68645": {
       "date_added": "2026-01-22",
       "kev": true,
-      "product": " Zimbra Collaboration Suite (ZCS)",
+      "product": "Zimbra Collaboration Suite (ZCS)",
       "ransomware_use": false,
       "vendor": "Synacor"
     },
@@ -11053,6 +11060,13 @@
       "ransomware_use": false,
       "vendor": "BeyondTrust"
     },
+    "CVE-2026-102895": {
+      "date_added": "2026-11-09",
+      "kev": true,
+      "product": "GPUStack",
+      "ransomware_use": false,
+      "vendor": "GPUStack"
+    },
     "CVE-2026-104286": {
       "date_added": "2026-10-01",
       "kev": true,
@@ -11123,6 +11137,34 @@
       "ransomware_use": false,
       "vendor": "Siemens"
     },
+    "CVE-2026-111357": {
+      "date_added": "2026-10-30",
+      "kev": true,
+      "product": "Connect Secure",
+      "ransomware_use": false,
+      "vendor": "Ivanti"
+    },
+    "CVE-2026-111497": {
+      "date_added": "2026-10-27",
+      "kev": true,
+      "product": "Brotli",
+      "ransomware_use": false,
+      "vendor": "Google"
+    },
+    "CVE-2026-111560": {
+      "date_added": "2026-11-10",
+      "kev": true,
+      "product": "Multiple Products",
+      "ransomware_use": false,
+      "vendor": "Barracuda Networks"
+    },
+    "CVE-2026-111793": {
+      "date_added": "2026-11-10",
+      "kev": true,
+      "product": "Webtop Media Transcoder",
+      "ransomware_use": false,
+      "vendor": "Openwave Messaging Limited"
+    },
     "CVE-2026-114625": {
       "date_added": "2026-10-23",
       "kev": true,
@@ -11130,10 +11172,80 @@
       "ransomware_use": false,
       "vendor": "Arista"
     },
+    "CVE-2026-114713": {
+      "date_added": "2026-11-13",
+      "kev": true,
+      "product": "UnrealIRCd",
+      "ransomware_use": false,
+      "vendor": "UnrealIRCd"
+    },
     "CVE-2026-11645": {
       "date_added": "2026-06-09",
       "kev": true,
       "product": "Chromium V8",
+      "ransomware_use": false,
+      "vendor": "Google"
+    },
+    "CVE-2026-116606": {
+      "date_added": "2026-11-10",
+      "kev": true,
+      "product": "Barracuda Email Security Gateway (ESG)",
+      "ransomware_use": false,
+      "vendor": "Barracuda Networks"
+    },
+    "CVE-2026-116779": {
+      "date_added": "2026-11-09",
+      "kev": true,
+      "product": "FreeSwitch",
+      "ransomware_use": false,
+      "vendor": "SignalWire"
+    },
+    "CVE-2026-118527": {
+      "date_added": "2026-10-30",
+      "kev": true,
+      "product": "Connect Secure",
+      "ransomware_use": false,
+      "vendor": "Ivanti"
+    },
+    "CVE-2026-119977": {
+      "date_added": "2026-11-03",
+      "kev": true,
+      "product": "WordPress Core",
+      "ransomware_use": false,
+      "vendor": "WordPress"
+    },
+    "CVE-2026-123039": {
+      "date_added": "2026-11-13",
+      "kev": true,
+      "product": "Multiple Products",
+      "ransomware_use": false,
+      "vendor": "Check Point"
+    },
+    "CVE-2026-123158": {
+      "date_added": "2026-11-09",
+      "kev": true,
+      "product": "OpenSSH",
+      "ransomware_use": false,
+      "vendor": "OpenBSD"
+    },
+    "CVE-2026-123218": {
+      "date_added": "2026-11-09",
+      "kev": true,
+      "product": "Aspera Faspex",
+      "ransomware_use": false,
+      "vendor": "IBM"
+    },
+    "CVE-2026-124194": {
+      "date_added": "2026-11-10",
+      "kev": true,
+      "product": "Office",
+      "ransomware_use": false,
+      "vendor": "Microsoft"
+    },
+    "CVE-2026-125350": {
+      "date_added": "2026-11-10",
+      "kev": true,
+      "product": "Chromium",
       "ransomware_use": false,
       "vendor": "Google"
     },
@@ -11175,7 +11287,7 @@
     "CVE-2026-1603": {
       "date_added": "2026-03-09",
       "kev": true,
-      "product": " Endpoint Manager (EPM)",
+      "product": "Endpoint Manager (EPM)",
       "ransomware_use": false,
       "vendor": "Ivanti"
     },
@@ -11220,6 +11332,13 @@
       "product": "NetScaler",
       "ransomware_use": false,
       "vendor": "Citrix"
+    },
+    "CVE-2026-19868": {
+      "date_added": "2026-11-06",
+      "kev": true,
+      "product": "SonicOS SSLVPN",
+      "ransomware_use": false,
+      "vendor": "SonicWall"
     },
     "CVE-2026-20045": {
       "date_added": "2026-01-21",
@@ -11312,10 +11431,17 @@
       "ransomware_use": true,
       "vendor": "Cisco"
     },
+    "CVE-2026-20320": {
+      "date_added": "2026-11-10",
+      "kev": true,
+      "product": "BroadWorks",
+      "ransomware_use": false,
+      "vendor": "Cisco"
+    },
     "CVE-2026-20349": {
       "date_added": "2026-08-11",
       "kev": true,
-      "product": "Secure Firewall Adaptive Security Appliance (ASA) and Secure Firewall Threat Defense (FTD) ",
+      "product": "Secure Firewall Adaptive Security Appliance (ASA) and Secure Firewall Threat Defense (FTD)",
       "ransomware_use": false,
       "vendor": "Cisco"
     },
@@ -11602,7 +11728,7 @@
     "CVE-2026-35273": {
       "date_added": "2026-06-12",
       "kev": true,
-      "product": " PeopleSoft Enterprise PeopleTools",
+      "product": "PeopleSoft Enterprise PeopleTools",
       "ransomware_use": true,
       "vendor": "Oracle"
     },
@@ -11647,6 +11773,13 @@
       "product": "Defender",
       "ransomware_use": false,
       "vendor": "Microsoft"
+    },
+    "CVE-2026-41709": {
+      "date_added": "2026-10-28",
+      "kev": true,
+      "product": "VMware ESX",
+      "ransomware_use": false,
+      "vendor": "Broadcom"
     },
     "CVE-2026-41940": {
       "date_added": "2026-04-30",
@@ -11718,6 +11851,13 @@
       "ransomware_use": true,
       "vendor": "Microsoft"
     },
+    "CVE-2026-46300": {
+      "date_added": "2026-10-28",
+      "kev": true,
+      "product": "Kernel",
+      "ransomware_use": false,
+      "vendor": "Linux"
+    },
     "CVE-2026-46817": {
       "date_added": "2026-07-15",
       "kev": true,
@@ -11746,6 +11886,13 @@
       "ransomware_use": false,
       "vendor": "Adobe"
     },
+    "CVE-2026-48356": {
+      "date_added": "2026-10-27",
+      "kev": true,
+      "product": "Commerce and Magento",
+      "ransomware_use": false,
+      "vendor": "Adobe"
+    },
     "CVE-2026-48558": {
       "date_added": "2026-06-29",
       "kev": true,
@@ -11763,7 +11910,7 @@
     "CVE-2026-48907": {
       "date_added": "2026-06-16",
       "kev": true,
-      "product": "Joomla Content Editor ",
+      "product": "Joomla Content Editor",
       "ransomware_use": false,
       "vendor": "Widget Factory"
     },
@@ -11980,7 +12127,7 @@
     "CVE-2026-68820": {
       "date_added": "2026-08-11",
       "kev": true,
-      "product": "Windows Ancillary Function Driver for WinSock ",
+      "product": "Windows Ancillary Function Driver for WinSock",
       "ransomware_use": false,
       "vendor": "Microsoft"
     },
@@ -11994,7 +12141,7 @@
     "CVE-2026-71362": {
       "date_added": "2026-09-24",
       "kev": true,
-      "product": "Commerce and Magento ",
+      "product": "Commerce and Magento",
       "ransomware_use": false,
       "vendor": "Adobe"
     },
@@ -12046,6 +12193,13 @@
       "product": "Commerce and Magento",
       "ransomware_use": false,
       "vendor": "Adobe"
+    },
+    "CVE-2026-76418": {
+      "date_added": "2026-10-29",
+      "kev": true,
+      "product": "Secure Firewall ASA Software and Cisco Secure FTD Software",
+      "ransomware_use": false,
+      "vendor": "Cisco"
     },
     "CVE-2026-76460": {
       "date_added": "2026-09-16",
@@ -12312,6 +12466,13 @@
       "product": "Windows",
       "ransomware_use": false,
       "vendor": "Microsoft"
+    },
+    "CVE-2026-97229": {
+      "date_added": "2026-10-29",
+      "kev": true,
+      "product": "Community Edition and Enterprise Edition",
+      "ransomware_use": false,
+      "vendor": "GitLab"
     }
   }
 }
