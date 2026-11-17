@@ -15,19 +15,26 @@ from core.testing.logging_state import isolated_cli_logging, owned_log_handler
 @pytest.mark.parametrize("presence", ["absent", "empty", "present"])
 @pytest.mark.parametrize("finish", ["normal", "error", "interrupt"])
 def test_formatting_fixture_restores_borrowed_state(presence, finish, tmp_path):
+    # The helper legitimately imports this real constant before installing its
+    # private views. Borrow that module after normal import, not as a fake.
+    from core.llm.config import CLAUDECODE_SESSION_MODEL
+
     names = ("raptor", "httpx", "httpcore")
     keys = ("_RAPTOR_TRUSTED", "RAPTOR_DIR", "RAPTOR_LLM_QUIET", "RAPTOR_SCORECARD_PATH")
     missing = object()
     borrowed = {
-        name: (sys.modules.get(name, missing), attribute)
-        for name, attribute in (
-            ("core.llm.client", "LLMClient"),
-            ("core.llm.dispatcher.lifecycle", "ensure_route_for_model_configs"),
+        name: (sys.modules.get(name, missing), module_attributes)
+        for name, module_attributes in (
+            ("core.llm.client", ("LLMClient",)),
+            ("core.llm.config", ("LLMConfig", "CLAUDECODE_SESSION_MODEL")),
+            ("core.llm.transcript", ("build_llm_client",)),
+            ("core.llm.dispatcher.lifecycle", ("ensure_route_for_model_configs",)),
         )
     }
     attributes = {
-        name: vars(module).get(attribute, missing)
-        for name, (module, attribute) in borrowed.items() if module is not missing
+        (name, attribute): vars(module).get(attribute, missing)
+        for name, (module, module_attributes) in borrowed.items() if module is not missing
+        for attribute in module_attributes
     }
     with pytest.MonkeyPatch.context() as caller, ExitStack() as cleanup:
         cleanup.enter_context(isolated_cli_logging(logger_names=names))
@@ -48,13 +55,19 @@ def test_formatting_fixture_restores_borrowed_state(presence, finish, tmp_path):
             cleanup.callback(owner.close)
             next(owner)
         mod = ModuleType("owned_formatting_cli")
+        mod.expected_config = cases._StubConfig
         mod.expected_client = cases._StubClient
+        mod.expected_session_model = CLAUDECODE_SESSION_MODEL
         mod.failure = {"normal": None, "error": RuntimeError, "interrupt": KeyboardInterrupt}[finish]
         exec('''def main():
     import logging, os
-    from core.llm.client import LLMClient
+    from core.llm.config import LLMConfig, CLAUDECODE_SESSION_MODEL
+    from core.llm.transcript import build_llm_client
     from core.llm.dispatcher.lifecycle import ensure_route_for_model_configs
-    assert isinstance(LLMClient(), expected_client)
+    config = LLMConfig()
+    assert isinstance(config, expected_config), "formatting config constructor was not replaced"
+    assert CLAUDECODE_SESSION_MODEL is expected_session_model
+    assert isinstance(build_llm_client(config), expected_client), "formatting client builder was not replaced"
     ensure_route_for_model_configs([])
     for name in ("", "raptor", "httpx", "httpcore"):
         logger = logging.getLogger(name)
@@ -69,6 +82,19 @@ def test_formatting_fixture_restores_borrowed_state(presence, finish, tmp_path):
 ''', vars(mod))
         original_main = mod.main
         with pytest.MonkeyPatch.context() as body:
+            original_imports = cases.scoped_function_imports
+
+            def checked_imports(module, functions, imports, **kwargs):
+                # A new fixture seam must gain a borrowed-state check here,
+                # even when the synthetic CLI does not exercise that seam.
+                for name, view in imports.items():
+                    assert name in borrowed, f"uncovered formatting fixture module: {name}"
+                    fields = {key for key in vars(view) if not key.startswith("__")}
+                    assert fields <= set(borrowed[name][1]), (
+                        f"uncovered formatting fixture attributes: {name}: {fields}")
+                return original_imports(module, functions, imports, **kwargs)
+
+            body.setattr(cases, "scoped_function_imports", checked_imports)
             if mod.failure is None:
                 assert cases._run_main(mod, [], body, tmp_path) == 7
             else:
@@ -82,10 +108,11 @@ def test_formatting_fixture_restores_borrowed_state(presence, finish, tmp_path):
         assert all(logger.handlers is saved_list and tuple(logger.handlers) == saved
                    for logger, (saved_list, saved) in zip(loggers, handlers))
         assert all(handler.level == level for handler, level in levels)
-        for name, (module, attribute) in borrowed.items():
+        for name, (module, module_attributes) in borrowed.items():
             assert sys.modules.get(name, missing) is module
             if module is not missing:
-                assert vars(module).get(attribute, missing) is attributes[name]
+                for attribute in module_attributes:
+                    assert vars(module).get(attribute, missing) is attributes[name, attribute]
         for owner in reversed(owners):
             if mod.failure is None:
                 with pytest.raises(StopIteration):
