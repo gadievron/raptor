@@ -121,6 +121,12 @@
       "api_path": "/v1"
     },
     {
+      "name": "trustedrouter",
+      "auth_scheme": "Bearer",
+      "upstream_base_url": "https://api.trustedrouter.com",
+      "api_path": "/v1"
+    },
+    {
       "name": "uberllm",
       "auth_scheme": "Bearer",
       "upstream_base_url": "https://api.uberllm.dev",
