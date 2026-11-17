@@ -13,12 +13,11 @@ automatically — the operator asks for it.
 Reproduction is source-dispatched, because "re-run the witness"
 means different things depending on what the witness *is*:
 
-  * ``LLM_EMIT_RUN`` — the witness bytes are exploit *source code*.
-    Reproduce = recompile + run, N times, via
-    ``exploit_verify.compile_and_execute``. Self-contained for the
-    inline-trigger PoCs the crash-analysis prompt now produces. If
-    the recorded outcome is a sanitizer report, the recompile uses
-    the matching ``-fsanitize`` flag so ASAN can fire again.
+  * ``LLM_EMIT_RUN`` — legacy witness bytes are generated *source code*.
+    The public reproduction entry point refuses these bundles before
+    compilation or execution: generated-code observations do not establish
+    declared-target execution. Historical positive results cannot grant
+    target reproduction or Tier 1.5.
 
   * ``FUZZ`` / other input-replay sources — the witness bytes are
     *input* to a target binary. Reproduce = feed the bytes to the
@@ -376,7 +375,7 @@ def reproduce_witness(
         binary_path: required for input-replay sources (FUZZ); the
             target binary to feed the witness to. Its sha256 is
             verified against ``bundle.target_binary_hash`` before
-            use. Ignored for LLM_EMIT_RUN (recompile) sources.
+            use. LLM_EMIT_RUN source bundles are refused without execution.
         n: number of consecutive runs (default 3, must be >= 1).
             The recorded outcome must reproduce in every run that
             EXECUTES for ``reproduced=True`` (at least one must);
@@ -425,9 +424,11 @@ def reproduce_witness(
             )
 
     if bundle.source == "llm_emit_run":
-        return _reproduce_source(
-            bundle, witness_bytes, n=n,
-            sandbox_timeout=sandbox_timeout, log=log,
+        return ReproductionResult(
+            attempted=False, runs=0,
+            expected_outcome=bundle.observed_outcome,
+            reason="Generated artifact has no target-execution receipt; "
+                   "refusing source reproduction before compilation or execution.",
         )
 
     # Input-replay sources (FUZZ and any future input-shaped source).
@@ -525,8 +526,13 @@ def _reproduce_source(
             grades.append(str((detail or {}).get("evidence_grade") or ""))
             break
 
-    return _finalize(expected, observed, n, grades=grades,
-                     details=details, spawn_failures=spawn_failures)
+    result = _finalize(expected, observed, n, grades=grades,
+                       details=details, spawn_failures=spawn_failures)
+    # These bytes are generated program source. Repeated signals establish
+    # only artifact behavior, not execution of the separately declared target.
+    result.reproduced = False
+    result.reason = "Generated artifact observations only; target execution unverified. " + result.reason
+    return result
 
 
 def _reproduce_replay(
@@ -731,6 +737,15 @@ def attach_reproduction(
     with ``write_bundle``).
     """
     bundle.reproduction = result.as_dict()
+    if bundle.source == "llm_emit_run":
+        # Legacy bundles/results cannot regain target authority through a saved
+        # reproduced=True flag or an independently supplied target hash.
+        bundle.reproduction["reproduced"] = False
+        bundle.reproduction["target_verification"] = "unverified"
+        bundle.reproduction["reason"] = (
+            "Generated artifact has no target-execution receipt. " + result.reason)
+        bundle.tier = "0/1"
+        return bundle
     if result.reproduced:
         bundle.tier = "1.5"
     return bundle

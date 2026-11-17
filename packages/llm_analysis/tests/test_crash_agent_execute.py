@@ -160,9 +160,8 @@ def test_compile_and_execute_outcome_none_leaves_field_unset(
 # ----------------------------------------------------------------------
 
 
-def test_witness_records_executed_outcome(tmp_path, monkeypatch):
-    """When execute_outcome is set on the crash context, the
-    recorded Witness uses that outcome, not NOT_RUN."""
+def test_witness_records_artifact_observation_without_target_confirmation(tmp_path, monkeypatch):
+    """A generated program's report is diagnostic, not a target trigger."""
     binary = tmp_path / "target"
     binary.write_bytes(b"ELF")
     agent = _stub_agent(tmp_path, binary)
@@ -179,7 +178,9 @@ def test_witness_records_executed_outcome(tmp_path, monkeypatch):
     )
     assert len(manifests) == 1
     witness = store.get_witness(manifests[0].stem)
-    assert witness.observed_outcome is WitnessOutcome.SANITIZER_REPORT
+    assert witness.observed_outcome is WitnessOutcome.UNKNOWN
+    assert witness.outcome_detail["generated_artifact_outcome"] == "sanitizer_report"
+    assert witness.outcome_detail["target_verification"] == "unverified"
     assert witness.outcome_detail["sanitizer"] == "asan"
     assert witness.outcome_detail["crashed"] is True
 

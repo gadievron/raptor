@@ -4,14 +4,14 @@ reproduction.
 Two families:
   * Unit — result-finalisation logic + dispatch + defensive paths,
     monkeypatched (no real compile/sandbox). Fast.
-  * Integration — real recompile of an LLM_EMIT_RUN witness (BOF
-    source) via compile_and_execute; needs gcc + libasan. Pins
-    that a real sanitizer-report witness reproduces.
+  * Input replay integration uses the actual target; generated-source
+    legacy bundles have pure pre-execution refusal controls.
 """
 
 from __future__ import annotations
 
 import functools
+import logging
 import shutil
 import subprocess
 import sys
@@ -32,9 +32,10 @@ from core.witness.types import (  # noqa: E402
     WitnessSource,
     compute_bytes_hash,
 )
-from packages.zkpox.bundle import assemble_bundle  # noqa: E402
+from packages.zkpox.bundle import ZKPoXBundle, assemble_bundle  # noqa: E402
 from packages.zkpox.reproduce import (  # noqa: E402
     ReproductionResult,
+    _reproduce_source,
     attach_reproduction,
     reproduce_witness,
 )
@@ -59,6 +60,15 @@ def _bundle(
         outcome_detail=detail, target_binary_hash=target_binary_hash,
     ), data)
     w = store.get_witness(compute_bytes_hash(data))
+    if source is WitnessSource.LLM_EMIT_RUN:
+        # Explicit historical bundle fixture: new assembly rejects this source.
+        # Retain it to test artifact observations and legacy read-side refusal.
+        return ZKPoXBundle(
+            witness_hash=w.bytes_hash, witness_len=w.bytes_len,
+            source=source.value, observed_outcome=outcome.value,
+            outcome_detail=detail, target_binary_hash=target_binary_hash,
+            target_source_hash=None, produced_by=None, timestamp=None,
+            attestation={}), data
     return assemble_bundle(w, store), data
 
 
@@ -67,7 +77,7 @@ def _bundle(
 # ----------------------------------------------------------------------
 
 
-def test_all_runs_match_reproduces(tmp_path, monkeypatch):
+def test_matching_artifact_runs_do_not_reproduce_declared_target(tmp_path, monkeypatch):
     bundle, data = _bundle(
         tmp_path, source=WitnessSource.LLM_EMIT_RUN,
         outcome=WitnessOutcome.EXIT_SIGNAL, data=b"// poc",
@@ -78,12 +88,14 @@ def test_all_runs_match_reproduces(tmp_path, monkeypatch):
         ev, "compile_and_execute",
         lambda *a, **k: (True, [], WitnessOutcome.EXIT_SIGNAL, {}),
     )
-    result = reproduce_witness(bundle, data, n=3)
+    result = _reproduce_source(bundle, data, sandbox_timeout=5, log=logging.getLogger(__name__), n=3)
     assert result.attempted is True
     assert result.runs == 3
-    assert result.reproduced is True
+    assert result.reproduced is False
     assert result.deterministic is True
     assert result.observed_outcomes == ["exit_signal"] * 3
+    assert "target execution unverified" in result.reason
+
 
 
 def test_consistent_but_off_target_not_reproduced(tmp_path, monkeypatch):
@@ -99,7 +111,7 @@ def test_consistent_but_off_target_not_reproduced(tmp_path, monkeypatch):
         ev, "compile_and_execute",
         lambda *a, **k: (True, [], WitnessOutcome.EXIT_SIGNAL, {}),
     )
-    result = reproduce_witness(bundle, data, n=3)
+    result = _reproduce_source(bundle, data, sandbox_timeout=5, log=logging.getLogger(__name__), n=3)
     assert result.reproduced is False
     assert result.deterministic is True
     assert "off-target" in result.reason
@@ -120,7 +132,7 @@ def test_nondeterministic_not_reproduced(tmp_path, monkeypatch):
     monkeypatch.setattr(
         ev, "compile_and_execute", lambda *a, **k: next(calls),
     )
-    result = reproduce_witness(bundle, data, n=3)
+    result = _reproduce_source(bundle, data, sandbox_timeout=5, log=logging.getLogger(__name__), n=3)
     assert result.reproduced is False
     assert result.deterministic is False
     assert "non-deterministic" in result.reason
@@ -136,7 +148,7 @@ def test_compile_failure_aborts_with_reason(tmp_path, monkeypatch):
         ev, "compile_and_execute",
         lambda *a, **k: (False, ["err"], None, {}),
     )
-    result = reproduce_witness(bundle, data, n=3)
+    result = _reproduce_source(bundle, data, sandbox_timeout=5, log=logging.getLogger(__name__), n=3)
     assert result.reproduced is False
     assert "recompile failed" in result.reason
 
@@ -157,7 +169,7 @@ def test_sanitizer_flag_inferred_from_outcome(tmp_path, monkeypatch):
         return (True, [], WitnessOutcome.SANITIZER_REPORT, {})
 
     monkeypatch.setattr(ev, "compile_and_execute", fake)
-    reproduce_witness(bundle, data, n=1)
+    _reproduce_source(bundle, data, sandbox_timeout=5, log=logging.getLogger(__name__), n=1)
     assert captured["sanitizers"] == ["address"]
 
 
@@ -709,13 +721,15 @@ def test_source_lane_spawn_failed_supervisor_record_retried(
     calls = iter(seq)
     monkeypatch.setattr(ev, "compile_and_execute",
                         lambda *a, **k: next(calls))
-    result = reproduce_witness(bundle, data, n=2)
+    result = _reproduce_source(bundle, data, sandbox_timeout=5, log=logging.getLogger(__name__), n=2)
     assert result.observed_outcomes == ["exit_signal"] * 2
-    assert result.reproduced is True
+    assert result.reproduced is False
     assert result.spawn_failures == 1
     sf = [d for d in result.run_details
           if d.get("outcome") == "spawn_failure"]
     assert len(sf) == 1 and sf[0]["run"] == 1
+    assert "target execution unverified" in result.reason
+
 
 
 # ----------------------------------------------------------------------
@@ -762,8 +776,8 @@ def test_source_dispatch_rejects_non_positive_n(tmp_path, monkeypatch):
 
 def test_attach_reproduction_bumps_tier_when_reproduced(tmp_path):
     bundle, _ = _bundle(
-        tmp_path, source=WitnessSource.LLM_EMIT_RUN,
-        outcome=WitnessOutcome.EXIT_SIGNAL, data=b"// poc",
+        tmp_path, source=WitnessSource.FUZZ,
+        outcome=WitnessOutcome.EXIT_SIGNAL, data=b"input",
     )
     assert bundle.tier == "0/1"
     result = ReproductionResult(
@@ -782,8 +796,8 @@ def test_attach_reproduction_bumps_tier_on_k_of_n_executed(tmp_path):
     exclusions) bumps the tier, with the k-of-n honesty trail kept in
     the persisted reproduction block."""
     bundle, _ = _bundle(
-        tmp_path, source=WitnessSource.LLM_EMIT_RUN,
-        outcome=WitnessOutcome.EXIT_SIGNAL, data=b"// poc",
+        tmp_path, source=WitnessSource.FUZZ,
+        outcome=WitnessOutcome.EXIT_SIGNAL, data=b"input",
     )
     result = ReproductionResult(
         attempted=True, runs=3, expected_outcome="exit_signal",
@@ -817,6 +831,24 @@ def test_attach_reproduction_keeps_tier_when_not_reproduced(tmp_path):
     attach_reproduction(bundle, result)
     assert bundle.tier == "0/1"  # NOT bumped
     assert bundle.reproduction["reproduced"] is False
+
+
+def test_legacy_artifact_result_cannot_restore_target_reproduction(tmp_path):
+    bundle, _ = _bundle(
+        tmp_path, source=WitnessSource.LLM_EMIT_RUN,
+        outcome=WitnessOutcome.EXIT_SIGNAL, data=b"// historical artifact",
+    )
+    bundle.tier = "1.5"
+    result = ReproductionResult(
+        attempted=True, runs=3, expected_outcome="exit_signal",
+        observed_outcomes=["exit_signal"] * 3, reproduced=True,
+        deterministic=True,
+    )
+    attach_reproduction(bundle, result)
+    assert bundle.tier == "0/1"
+    assert bundle.reproduction["reproduced"] is False
+    assert bundle.reproduction["observed_outcomes"] == ["exit_signal"] * 3
+    assert bundle.reproduction["target_verification"] == "unverified"
 
 
 # ----------------------------------------------------------------------
@@ -893,26 +925,39 @@ int main() {
 """
 
 
-@pytest.mark.slow
-@pytest.mark.usefixtures("_libasan_or_skip", "_untrusted_contract_or_skip")
-def test_real_sanitizer_witness_reproduces(tmp_path):
-    """End-to-end: an LLM_EMIT_RUN witness whose bytes are a BOF
-    source recorded as SANITIZER_REPORT must reproduce — recompile
-    with -fsanitize=address (inferred), run 3×, ASAN fires each
-    time."""
+@pytest.mark.parametrize("outcome", [
+    WitnessOutcome.EXIT_SIGNAL, WitnessOutcome.SANITIZER_REPORT,
+    WitnessOutcome.FLAG_CAPTURED,
+])
+def test_legacy_source_bundle_refused_before_any_execution(tmp_path, monkeypatch, outcome):
     bundle, data = _bundle(
         tmp_path, source=WitnessSource.LLM_EMIT_RUN,
-        outcome=WitnessOutcome.SANITIZER_REPORT,
-        data=_BOF_SOURCE.encode(), sanitizer="asan",
+        outcome=outcome, data=b"historical generated source",
     )
-    result = reproduce_witness(bundle, data, n=3, sandbox_timeout=10)
-    assert result.attempted is True
-    assert result.runs == 3
-    assert result.reproduced is True, (
-        f"expected reproduce; got {result.observed_outcomes} "
-        f"({result.reason})"
-    )
-    assert result.observed_outcomes == ["sanitizer_report"] * 3
+    bundle.tier = "1.5"
+    bundle.reproduction = {"reproduced": True, "evidence_grade": "mechanical"}
+    bundle.outcome_detail.update({"target_verified": True, "intent_verdict": "matches"})
+    import packages.llm_analysis.exploit_verify as ev
+    calls = []
+
+    def forbidden_execution(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("legacy source must not reach compilation or execution")
+
+    monkeypatch.setattr(ev, "compile_and_execute", forbidden_execution)
+    monkeypatch.setattr(core.sandbox, "run_untrusted", forbidden_execution)
+    result = reproduce_witness(bundle, data, n=3)
+    assert calls == []
+    assert result.attempted is False
+    assert result.runs == 0
+    assert result.observed_outcomes == []
+    assert result.reproduced is False
+    assert "before compilation or execution" in result.reason
+    attach_reproduction(bundle, result)
+    assert bundle.tier == "0/1"
+    assert bundle.reproduction["reproduced"] is False
+
+
 
 
 # stdin-driven crasher: reads stdin, NULL-derefs on input starting 'B'.

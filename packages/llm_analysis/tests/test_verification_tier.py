@@ -23,19 +23,19 @@ def _finding(**overrides):
 
 
 class TestDeriveVerificationTier:
-    def test_execution_oracle_confirms(self):
+    def test_artifact_execution_oracle_does_not_confirm_target(self):
         f = _finding(
             execute_outcome="exit_signal",
             execute_detail={"evidence_grade": "mechanical"},
         )
-        assert derive_verification_tier(f) == "confirmed"
+        assert derive_verification_tier(f) == "llm_only"
 
-    def test_sanitizer_report_confirms(self):
+    def test_artifact_sanitizer_report_does_not_confirm_target(self):
         f = _finding(
             execute_outcome="sanitizer_report",
             execute_detail={"evidence_grade": "mechanical"},
         )
-        assert derive_verification_tier(f) == "confirmed"
+        assert derive_verification_tier(f) == "llm_only"
 
     def test_ungraded_execution_outcome_does_not_confirm(self):
         # Verdict-forgery fix: a dynamic outcome without mechanical-
@@ -192,26 +192,26 @@ class TestMechanicalReceipt:
     """The SAGE verdict-store receipt: direction-consistent, enumerated
     spellings only, empty on LLM say-so."""
 
-    def test_mechanical_sanitizer_receipts_exploitable(self):
+    def test_artifact_sanitizer_mints_no_target_receipt(self):
         f = _finding(
             execute_outcome="sanitizer_report",
             execute_detail={"evidence_grade": "mechanical"},
         )
-        assert mechanical_receipt(f, "exploitable") == "dynamic:sanitizer"
+        assert mechanical_receipt(f, "exploitable") == ""
 
-    def test_mechanical_signal_receipts_exploitable(self):
+    def test_artifact_signal_mints_no_target_receipt(self):
         f = _finding(
             execute_outcome="exit_signal",
             execute_detail={"evidence_grade": "mechanical"},
         )
-        assert mechanical_receipt(f, "exploitable") == "dynamic:crash"
+        assert mechanical_receipt(f, "exploitable") == ""
 
-    def test_flag_capture_receipts_exploitable(self):
+    def test_artifact_flag_mints_no_target_receipt(self):
         f = _finding(
             execute_outcome="flag_captured",
             execute_detail={"evidence_grade": "mechanical"},
         )
-        assert mechanical_receipt(f, "exploitable") == "dynamic"
+        assert mechanical_receipt(f, "exploitable") == ""
 
     def test_heuristic_grade_mints_nothing(self):
         # Same forgery gate as the CONFIRMED tier: a printed fake
@@ -342,7 +342,7 @@ class TestMechanicalReceipt:
         # The spellings minted here are exactly what the SAGE recall
         # gate admits — one admission authority, no drift.
         from core.audit.evidence_grade import is_tool_evidence
-        receipted = [
+        unbound = [
             mechanical_receipt(_finding(
                 execute_outcome="sanitizer_report",
                 execute_detail={"evidence_grade": "mechanical"},
@@ -351,6 +351,9 @@ class TestMechanicalReceipt:
                 execute_outcome="exit_signal",
                 execute_detail={"evidence_grade": "mechanical"},
             ), "exploitable"),
+        ]
+        assert unbound == ["", ""]
+        receipted = [
             mechanical_receipt(_finding(analysis={"dataflow_validation": {
                 "verdict": "refuted", "method": "codeql-iris",
             }}), "false_positive"),
@@ -422,7 +425,7 @@ class TestToDictStamping:
         vuln.execute_outcome = "sanitizer_report"
         vuln.execute_detail = {"evidence_grade": "mechanical"}
         d = vuln.to_dict()
-        assert d["verification_tier"] == "confirmed"
+        assert d["verification_tier"] == "llm_only"
 
     def test_ungraded_execution_outcome_stays_uncorroborated(self, tmp_path):
         # Target-forgeable evidence (no mechanical grade) must not

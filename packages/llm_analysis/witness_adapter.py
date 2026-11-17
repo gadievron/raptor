@@ -13,11 +13,9 @@ The witness records:
 
   * ``source = LLM_EMIT_RUN``
   * ``observed_outcome = NOT_RUN`` by default (no execution).
-    When the execution oracle ran (``--execute-exploits`` /
-    ``compile_and_execute``), the caller passes the observed
-    ``executed_outcome`` (``EXIT_SIGNAL`` / ``SANITIZER_REPORT`` /
-    ``FLAG_CAPTURED`` / ...) and it overrides the default — see
-    :func:`witness_from_exploit_result`.
+    When the generated artifact ran, its event is retained as
+    ``generated_artifact_outcome`` diagnostics. The target observation
+    remains UNKNOWN: the current execution path has no target-bound issuer.
   * ``outcome_detail`` carries the compile verdict + intent-match
     verdict so reporting can filter without re-reading the
     exploit text.
@@ -78,21 +76,19 @@ def witness_from_exploit(
     means the judge wasn't run.
 
     ``target_source_path`` is optional; when provided and the file
-    exists, it's hashed and stored so a later run can verify it's
-    still the same source before claiming the witness holds.
+    exists, its declared identity is hashed and stored for later inspection.
+    This does not establish that this source participated in execution.
 
     ``target_binary_path`` is the analogous slot for binaries — used
     when the LLM-emitted exploit was synthesised against a built
     target (e.g. crash-agent's path from a fuzz crash). The
     ``/agentic`` path normally has source only, no binary.
 
-    ``executed_outcome`` overrides the default ``NOT_RUN`` when the
-    caller actually ran the exploit (the PR E path:
-    ``--execute-exploits`` is on, ``compile_and_execute`` returned an
-    outcome). ``executed_detail`` (when present) merges into
-    ``outcome_detail`` so the executed signal / sanitizer / blocked
-    fields land alongside the compile + intent-match verdicts.
-    Default ``None`` keeps the legacy NOT_RUN behaviour.
+    ``executed_outcome`` records only the generated artifact's observation,
+    alongside ``executed_detail``. An attempted artifact run makes the target
+    observation UNKNOWN, never an observed target trigger. Default ``None``
+    keeps NOT_RUN. Hashes, saved flags and intent judgments cannot supply
+    the missing target-execution receipt.
     """
     data = exploit_code.encode("utf-8", errors="replace")
     bytes_hash = compute_bytes_hash(data)
@@ -127,10 +123,16 @@ def witness_from_exploit(
     if target_binary_path is not None and target_binary_path.is_file():
         target_binary_hash = sha256_file(target_binary_path)
 
-    observed_outcome = (
-        executed_outcome if executed_outcome is not None
-        else WitnessOutcome.NOT_RUN
-    )
+    # A target hash identifies a declared artifact, not its participation in
+    # this run. Preserve the generated program's observation as diagnostics,
+    # never as an observed trigger in the target-bound Witness record.
+    observed_outcome = WitnessOutcome.NOT_RUN
+    if executed_outcome is not None:
+        outcome_detail["generated_artifact_outcome"] = executed_outcome.value
+        outcome_detail["observation_scope"] = "generated_artifact"
+        outcome_detail["target_verification"] = "unverified"
+        outcome_detail["target_verification_reason"] = "target_execution_not_observed"
+        observed_outcome = WitnessOutcome.UNKNOWN
 
     witness = Witness(
         bytes_hash=bytes_hash,

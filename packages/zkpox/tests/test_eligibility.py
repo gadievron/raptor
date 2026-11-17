@@ -25,11 +25,12 @@ def _w(
     target_source_hash=None,
     bytes_len=10,
     data: bytes = b"witness",
+    source: WitnessSource = WitnessSource.FUZZ,
 ) -> Witness:
     return Witness(
         bytes_hash=compute_bytes_hash(data),
         bytes_len=bytes_len,
-        source=WitnessSource.LLM_EMIT_RUN,
+        source=source,
         observed_outcome=outcome,
         outcome_detail={},
         target_binary_hash=target_binary_hash,

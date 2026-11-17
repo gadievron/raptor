@@ -382,6 +382,8 @@ def from_witness(witness: Witness) -> VerifiedOutcome:
     :class:`VerifiedOutcome`. Carries a reference (``witness_bytes_hash``)
     to the raw bytes; the witness store remains the backend of record.
     """
+    from core.witness.types import WitnessSource
+
     detail = (
         witness.outcome_detail
         if isinstance(witness.outcome_detail, dict)
@@ -405,11 +407,19 @@ def from_witness(witness: Witness) -> VerifiedOutcome:
     # ``core.threat_model.link_verified_outcomes``.
     if getattr(witness, "provenance_verified", False):
         evidence["provenance_verified"] = True
+    # Store authentication proves record provenance, not that generated code
+    # exercised the declared target. Refuse legacy positive LLM artifact rows
+    # as well as new ones; descriptive flags or hashes cannot restore authority.
+    status = _witness_status(witness.observed_outcome)
+    if witness.source is WitnessSource.LLM_EMIT_RUN:
+        status = OutcomeStatus.INCONCLUSIVE
+        evidence["target_verification"] = "unverified"
+        evidence["target_verification_reason"] = "generated_artifact_not_target_receipt"
     return VerifiedOutcome(
         finding_id=str(detail.get("finding_id") or ""),
         oracle=_witness_oracle(witness.source),
-        status=_witness_status(witness.observed_outcome),
-        reproducible=True,
+        status=status,
+        reproducible=witness.source is not WitnessSource.LLM_EMIT_RUN,
         evidence=evidence,
         cwe_id=detail.get("cwe_id"),
         file=detail.get("file_path"),

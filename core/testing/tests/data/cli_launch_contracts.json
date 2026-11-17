@@ -1188,7 +1188,7 @@
     "packages/llm_analysis/tests/test_agentic_dv_reporting.py": "fdd148a8b719cba3c5e3f5f4d4ce1f693bb09dfc630022af31c177ce289d1345",
     "packages/llm_analysis/tests/test_cli_help.py": "6a31a23d05055433b93ce28b735aea5da2482235409feb1a3e3aa67e34511a55",
     "packages/llm_analysis/tests/test_exploit_verify_execute.py": "d1ef387da6e7c373b973b29898d0b85406e7045bbfe9b4f43313a73d3a19698e",
-    "packages/llm_analysis/tests/test_exploit_verify_forgery.py": "08875b788fb1a148d4285ec5190139d6c153dce0856cf022d81673fc6e8af36b",
+    "packages/llm_analysis/tests/test_exploit_verify_forgery.py": "e8d14446e8c5567eb44ed0cb4374f31673007818cfcec52ddc83c396fa2143b9",
     "packages/llm_analysis/tests/test_package_exports.py": "35980d604a5e8390d0ffacb57f3c44ebd51480d586dac3c63e653773139a7b4f",
     "packages/llm_analysis/tests/test_patch_gate.py": "ca7a835b1574e8f0770f546e9d060577349c9af53e554dcff6040102a643bf87",
     "packages/openant/tests/conftest.py": "cbd0b64e76006469b2f34d729a39f7ab278e4abf0649297c632aadbbeba75aa1",
@@ -1293,7 +1293,7 @@
     "packages/web/tests/test_origin_verify_fifo.py": "f54d28ee5102fe89eaab14823f2002608365f2cbffd9f9abe41f5388de61f2b4",
     "packages/web/tests/test_poc.py": "ea6315d58681dd2916b17b68683d53df66cf907ae3c8eaee3c34dfb1a3398170",
     "packages/zkpox/tests/test_libexec_raptor_zkpox.py": "7ce9a88871918c1a56e6604e935116133fa9c230349c8625f110e0e32ea32b8a",
-    "packages/zkpox/tests/test_reproduce.py": "62a97b5b9ff29131cf090c8ce6a0055e5612f21ed7d7f6f37731cc5166ec56b9",
+    "packages/zkpox/tests/test_reproduce.py": "07e722c8a5ac93331cfcfad37a6323759e35d0fca0e4771ed4f61d376853367e",
     "test/data/python_sql_injection.py": "88fa88d9c368b06451426760c49a2e8640be25fabd5b3fb4b52f1389cb01cb9b"
   },
   "sites": [
@@ -42227,11 +42227,11 @@
     },
     {
       "path": "packages/llm_analysis/tests/test_exploit_verify_forgery.py",
-      "scope": "TestGenuineEvidenceStillConfirms.test_instrumented_sanitizer_grades_mechanical_and_confirms",
+      "scope": "TestArtifactEventsRemainUnbound.test_instrumented_sanitizer_grades_mechanical_without_target_confirmation",
       "signature": "706df5ccf621768d2e96d24c88e4066ee0273be8e74825a6d4e98adca19d27a6",
       "count": 1,
       "contract": "non-cli-probe",
-      "purpose": "packages/llm_analysis/tests/test_exploit_verify_forgery.py:TestGenuineEvidenceStillConfirms.test_instrumented_sanitizer_grades_mechanical_and_confirms: delegates through reviewed helper(s) core.testing.asan.require_asan_runtime; producer source and this exact caller are pinned."
+      "purpose": "packages/llm_analysis/tests/test_exploit_verify_forgery.py:TestArtifactEventsRemainUnbound.test_instrumented_sanitizer_grades_mechanical_without_target_confirmation: delegates through reviewed helper(s) core.testing.asan.require_asan_runtime; producer source and this exact caller are pinned."
     },
     {
       "path": "packages/llm_analysis/tests/test_exploit_verify_forgery.py",

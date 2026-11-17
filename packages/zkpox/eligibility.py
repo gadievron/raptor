@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from core.witness.types import Witness, WitnessOutcome
+from core.witness.types import Witness, WitnessOutcome, WitnessSource
 
 
 # Outcomes that represent an *observed security-relevant event* —
@@ -54,6 +54,10 @@ def is_zkpox_eligible(witness: Witness) -> ZKPoXEligibility:
 
     A witness is eligible iff ALL hold:
 
+      0. It is not an LLM_EMIT_RUN generated-artifact record. Those bytes
+         and observations do not establish execution of the declared target,
+         even for legacy authenticated records with matching target hashes.
+
       1. ``observed_outcome`` is a *provable* outcome — the bug was
          actually observed (EXIT_SIGNAL / SANITIZER_REPORT /
          FLAG_CAPTURED). NOT_RUN / NO_OBVIOUS_EFFECT / UNKNOWN have
@@ -72,6 +76,16 @@ def is_zkpox_eligible(witness: Witness) -> ZKPoXEligibility:
     reason, not an exception.
     """
     h = witness.bytes_hash
+
+    # LLM-emitted bytes are generated program source, not a recorded input
+    # observed triggering this target. This also vetoes legacy MAC-authenticated
+    # artifact crashes; a target hash or serialized claim cannot bridge that gap.
+    if witness.source is WitnessSource.LLM_EMIT_RUN:
+        return ZKPoXEligibility(
+            witness_hash=h,
+            eligible=False,
+            reason="generated artifact has no target-execution receipt",
+        )
 
     outcome = witness.observed_outcome
     if outcome not in _PROVABLE_OUTCOMES:
@@ -125,7 +139,8 @@ def summarize_eligibility(witnesses) -> dict:
 
     ``by_reason`` keys are coarse reason-classes (not the full
     per-witness strings) so the summary stays compact:
-    ``provable`` / ``outcome_not_provable`` / ``no_target``.
+    ``provable`` / ``outcome_not_provable`` / ``no_target`` /
+    ``target_execution_unverified``.
     """
     total = 0
     eligible = 0
@@ -139,6 +154,8 @@ def summarize_eligibility(witnesses) -> dict:
             eligible += 1
             eligible_hashes.append(verdict.witness_hash)
             key = "provable"
+        elif w.source is WitnessSource.LLM_EMIT_RUN:
+            key = "target_execution_unverified"
         elif "not provable" in verdict.reason:
             key = "outcome_not_provable"
         else:
@@ -176,5 +193,7 @@ def render_eligibility_summary(
     lines = [
         f"ZKPoX-eligible witnesses: {s['eligible']} / {s['total']}",
     ]
-    lines.extend(f"{indent}{key}: {s['by_reason'][key]}" for key in ("provable", "outcome_not_provable", "no_target") if key in s["by_reason"])
+    lines.extend(f"{indent}{key}: {s['by_reason'][key]}" for key in (
+        "provable", "outcome_not_provable", "no_target", "target_execution_unverified",
+    ) if key in s["by_reason"])
     return "\n".join(lines)

@@ -1,50 +1,15 @@
-"""Mechanical evidence tiering for /analyze verdicts.
+"""Evidence tiering for /analyze findings.
 
-/analyze's mechanical gates are negative-only (reachability
-suppression, binary-oracle, sanitizer vertex-cut, dedup) — a positive
-``is_true_positive`` verdict reaches the report on LLM say-so. This
-module labels each reported finding with the same ``verification_tier``
-vocabulary /audit uses (``core.audit.pipeline.VerificationTier``), so
-report readers can tell a mechanically corroborated verdict from a
-bare LLM opinion. Labeling only: nothing here suppresses or demotes a
-finding — the tier distribution is the calibration data a future hard
-gate would need.
+Static mechanical receipts can earn tool_backed; uncorroborated findings remain
+llm_only. Execution of LLM-generated code observes that artifact, not necessarily
+the declared target. No trusted target-execution issuer is available on this
+path, so serialized execute_outcome/evidence_grade/intent/hash fields cannot
+mint confirmed or a dynamic mechanical verdict-store receipt. This also applies
+to legacy records and model-supplied claims. A genuine target-bound execution
+integration would need its own independently validated issuer, not a JSON flag.
 
-Receipts that qualify (all derived from fields the finding dict
-actually carries; tier assignment is pure dict inspection, no LLM):
-
-* ``confirmed`` — the sandboxed execution oracle observed a bug
-  trigger for this finding's exploit (``execute_outcome`` in
-  ``exit_signal`` / ``sanitizer_report`` / ``flag_captured``) with
-  MECHANICAL-grade evidence (``execute_detail.evidence_grade ==
-  "mechanical"`` — the waitstatus oracle saw a real WIFSIGNALED, not a
-  target-forgeable exit code or stderr substring; see
-  ``exploit_verify``), and the intent judge did not rule the run
-  ``off_target`` (an off-target crash proves a different bug, not this
-  one). Heuristic-grade or ungraded dynamic outcomes deliberately do
-  NOT confirm: a hostile scanned repo can mint them with a printed
-  fake sanitizer report or an exit(139).
-* ``tool_backed`` — a static mechanical validator corroborated the
-  verdict beyond the original detector match: a dataflow validation
-  verdict produced by a mechanical method
-  (``method`` of ``codeql-iris`` / ``structural-treesitter``, or the
-  IRIS Tier 1 pre-flight's ``tier: iris_tier1`` record), or a
-  fail-open channel receipt whose role evidence is registry-grade
-  (``fail_open`` outcome ``confirmed``/``refuted`` without the
-  ``-naming`` detection-variant rule id). A mechanical
-  ``refuted`` also earns ``tool_backed`` — the tier grades the
-  evidence, not the verdict's sign. Deep-validation verdicts whose
-  QUERY was LLM-authored (Tier 2 template predicates, Tier 3 retry,
-  the legacy fallback) are NOT mechanical even though CodeQL executed
-  them — they carry ``method: codeql-iris-llm`` plus an
-  LLM-authored ``tier`` label and stay ``llm_only``.
-* ``llm_only`` — the LLM affirmed (or denied) and nothing mechanical
-  corroborates.
-
-Non-receipts, deliberately: the original SARIF rule hit (it produced
-the candidate — it cannot also corroborate it), ``exploit_compiled``
-(a building PoC proves the code compiles, not that the bug is real),
-``intent_match`` (an LLM judge), and unbound SMT predicate models.
+The existing dataflow/fail-open classifications below are unchanged. This module
+grades evidence, not the truth or exploitability of an unresolved finding.
 """
 
 from __future__ import annotations
@@ -53,12 +18,6 @@ from collections import Counter
 from typing import Any
 
 from core.audit.pipeline import VerificationTier
-
-# Execution-oracle outcomes that constitute an observed bug trigger
-# (mirrors core.labeled_attempts' VERIFIED set for the sandbox oracle).
-_DYNAMIC_OUTCOMES = frozenset({
-    "exit_signal", "sanitizer_report", "flag_captured",
-})
 
 # ``dataflow_validation.method`` values produced by mechanical
 # validators (packages.llm_analysis.dataflow_validation._attach_result
@@ -141,23 +100,9 @@ def derive_verification_tier(finding: dict[str, Any]) -> str:
     # level instead. Check both, analysis first.
     analysis = finding.get("analysis") or {}
 
-    outcome = finding.get("execute_outcome")
-    if outcome in _DYNAMIC_OUTCOMES:
-        # Evidence-grade gate: only mechanical-grade execution evidence
-        # (waitstatus-oracle-anchored — see exploit_verify) may confirm.
-        # Absent or heuristic grades fall through to the tool_backed /
-        # llm_only receipts below — fail-safe, because a hostile target
-        # forges the heuristic shapes (fake sanitizer stderr, exit(139))
-        # without any prompt injection.
-        exec_detail = finding.get("execute_detail")
-        grade = (
-            exec_detail.get("evidence_grade")
-            if isinstance(exec_detail, dict) else None
-        )
-        if grade == "mechanical":
-            intent = finding.get("intent_match") or {}
-            if intent.get("verdict") != "off_target":
-                return VerificationTier.CONFIRMED.value
+    # Generated-artifact execution and saved labels cannot establish target
+    # participation. Do not promote them, even with a mechanical waitstatus,
+    # an intent match or a claimed target hash/receipt in this dictionary.
 
     # Fail-open channel receipt (core.orchestration.fail_open_channel):
     # a mechanical confirmed/refuted adjudication with role + handler +
@@ -219,23 +164,8 @@ def mechanical_receipt(finding: dict[str, Any], verdict: str) -> str:
 
     analysis = finding.get("analysis") or {}
 
-    if confirming:
-        # Mechanical-grade execution oracle only (same gate as the
-        # CONFIRMED tier): heuristic shapes are target-forgeable.
-        outcome = finding.get("execute_outcome")
-        if outcome in _DYNAMIC_OUTCOMES:
-            exec_detail = finding.get("execute_detail")
-            grade = (
-                exec_detail.get("evidence_grade")
-                if isinstance(exec_detail, dict) else None
-            )
-            intent = finding.get("intent_match") or {}
-            if grade == "mechanical" and intent.get("verdict") != "off_target":
-                if outcome == "sanitizer_report":
-                    return "dynamic:sanitizer"
-                if outcome == "exit_signal":
-                    return "dynamic:crash"
-                return "dynamic"
+    # No dynamic receipt can be derived from the serialized artifact outcome.
+    # Only the independently classified static receipts below remain eligible.
 
     fo = analysis.get("fail_open") or finding.get("fail_open") or {}
     if isinstance(fo, dict):
