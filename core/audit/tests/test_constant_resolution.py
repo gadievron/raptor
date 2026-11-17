@@ -10,8 +10,12 @@ Adversarial tests from the safety contract's documented blind spots:
 
 from __future__ import annotations
 
-import pytest
+import gc
+import time
+from contextlib import contextmanager
 from pathlib import Path
+
+import pytest
 
 from core.testing.wallclock import cpu_budget
 
@@ -39,6 +43,35 @@ def _write_file(tmp_path: Path, name: str, content: str) -> Path:
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content, encoding="utf-8")
     return p
+
+
+@contextmanager
+def _scan_gc_diagnostics():
+    """Report collector cost on failure without changing the CPU budget."""
+    gc_cpu = 0.0
+    gc_started = 0.0
+
+    def collection(phase, info):
+        nonlocal gc_cpu, gc_started
+        if phase == "start":
+            gc_started = time.process_time()
+        else:
+            gc_cpu += time.process_time() - gc_started
+
+    gc.callbacks.append(collection)
+    thread_started = time.thread_time()
+    try:
+        yield
+    except AssertionError:
+        print(
+            f"constant scan timing diagnostic: "
+            f"thread_cpu={time.thread_time() - thread_started:.6f}s "
+            f"gc_cpu={gc_cpu:.6f}s gc_thresholds={gc.get_threshold()} "
+            f"gc_enabled={gc.isenabled()}"
+        )
+        raise
+    finally:
+        gc.callbacks.remove(collection)
 
 
 # ── Evaluation ───────────────────────────────────────────────────────
@@ -377,7 +410,7 @@ class TestScanComplexity:
             f"#define K_{i} {i}\n/* {'x' * 80} */\n" for i in range(n)
         )
         _write_file(tmp_path, "big.h", body)
-        with cpu_budget(2.5, what="20k-define header scan"):
+        with _scan_gc_diagnostics(), cpu_budget(2.5, what="20k-define header scan"):
             defs = _scan_definitions(tmp_path)
         assert len(defs) == n
 
@@ -616,3 +649,49 @@ def test_enum_cursor_preserves_lines_across_blocks_and_skipped_names(
     table = build_unique_constants(tmp_path)
     assert table.as_int_dict() == {"FIRST": 3, "AFTER_SKIP": 4, "INLINE": 6, "LAST": 7}
     assert table.rejected == {"CONDITIONAL": "conditional compilation"}
+
+
+class TestScanGCDiagnostics:
+    def test_success_restores_callbacks_and_stays_quiet(self, capsys):
+        callbacks = tuple(gc.callbacks)
+        thresholds = gc.get_threshold()
+        enabled = gc.isenabled()
+        with _scan_gc_diagnostics():
+            assert tuple(gc.callbacks[:-1]) == callbacks
+            gc.collect()
+        assert tuple(gc.callbacks) == callbacks
+        assert gc.get_threshold() == thresholds
+        assert gc.isenabled() == enabled
+        assert capsys.readouterr().out == ""
+
+    @pytest.mark.parametrize("error_type", [AssertionError, RuntimeError])
+    def test_failure_preserves_error_and_collector_policy(self, capsys, error_type):
+        import weakref
+
+        class Cycle:
+            pass
+
+        callbacks = tuple(gc.callbacks)
+        thresholds = gc.get_threshold()
+        enabled = gc.isenabled()
+        error = error_type("owned scan failure")
+        with pytest.raises(error_type) as caught:
+            with _scan_gc_diagnostics():
+                cycle = Cycle()
+                cycle.self = cycle
+                reference = weakref.ref(cycle)
+                del cycle
+                gc.collect()
+                assert reference() is None
+                raise error
+        assert caught.value is error
+        assert tuple(gc.callbacks) == callbacks
+        assert gc.get_threshold() == thresholds
+        assert gc.isenabled() == enabled
+        output = capsys.readouterr().out
+        if error_type is AssertionError:
+            assert "constant scan timing diagnostic:" in output
+            assert "thread_cpu=" in output and "gc_cpu=" in output
+            assert f"gc_thresholds={thresholds}" in output
+        else:
+            assert output == ""
