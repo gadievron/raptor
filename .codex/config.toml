@@ -1,0 +1,16 @@
+[shell_environment_policy]
+inherit = "core"
+
+[shell_environment_policy.set]
+CODEX = "1"
+RAPTOR_CODEX_ENVIRONMENT = "1"
+_RAPTOR_TRUSTED = "1"
+
+# RAPTOR-owned operator state only; this does not grant the rest of HOME.
+# Effective only when the operator uses Codex's workspace-write sandbox.
+[sandbox_workspace_write]
+writable_roots = ["~/.raptor", "~/.local/share/raptor"]
+
+# Lifecycle hooks are installed from .codex/plugin through the native Codex
+# plugin mechanism. No inline hooks: loading both sources would run them twice.
+# See docs/codex.md for install, hook review, and cache refresh instructions.

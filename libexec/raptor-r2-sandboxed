@@ -199,54 +199,58 @@ def _parse_and_validate_argv(argv: list[str]) -> tuple[list[str], str]:
     return flags, binary
 
 
+
+from core.run.cli_outcome import cli_outcome  # noqa: E402
+
 # === main ===
 
-argv = sys.argv[1:]
-flags, binary = _parse_and_validate_argv(argv)
+with cli_outcome():
+    argv = sys.argv[1:]
+    flags, binary = _parse_and_validate_argv(argv)
 
-output_dir = os.environ.get("OUTPUT_DIR")
-if not output_dir:
-    _die("OUTPUT_DIR env var required (writable scratch dir)",
-         code=_RC_WRAPPER_ENV_INVALID)
+    output_dir = os.environ.get("OUTPUT_DIR")
+    if not output_dir:
+        _die("OUTPUT_DIR env var required (writable scratch dir)",
+             code=_RC_WRAPPER_ENV_INVALID)
 
-# This compatibility hint must describe the actual input directory; it is
-# not authority to admit an arbitrary host tree to a compromised parser.
-target_dir = os.environ.get("R2_TARGET_DIR")
-if target_dir and os.path.realpath(target_dir) != os.path.dirname(binary):
-    _die("R2_TARGET_DIR must match the resolved binary's parent directory",
-         code=_RC_WRAPPER_ENV_INVALID)
+    # This compatibility hint must describe the actual input directory; it is
+    # not authority to admit an arbitrary host tree to a compromised parser.
+    target_dir = os.environ.get("R2_TARGET_DIR")
+    if target_dir and os.path.realpath(target_dir) != os.path.dirname(binary):
+        _die("R2_TARGET_DIR must match the resolved binary's parent directory",
+             code=_RC_WRAPPER_ENV_INVALID)
 
-from core.sandbox import run, SandboxSetupError  # noqa: E402
-from core.binary._inspection_policy import inspection_command, inspection_options  # noqa: E402
-import shutil  # noqa: E402
+    from core.sandbox import run, SandboxSetupError  # noqa: E402
+    from core.binary._inspection_policy import inspection_command, inspection_options  # noqa: E402
+    import shutil  # noqa: E402
 
-try:
-    # Resolve against the operator's PATH before safe-env removes HOME-rooted
-    # entries. Declare that runtime explicitly rather than silently selecting
-    # another radare2 inside the sandbox (or falling back to a weaker tier).
-    executable = shutil.which("r2") or shutil.which("radare2")
-    if executable is None:
-        raise FileNotFoundError("radare2 is not installed")
-    executable = os.path.abspath(executable)
-    output_dir = os.path.realpath(output_dir)
-    policy = inspection_options(Path(binary), executable, output_dir)
-    policy.update(sanitise_host_fingerprint=True,
-                  caller_label=f"r2-sandboxed-{os.getpid()}")
-    # stdout and stdin remain r2pipe's NULL-delimited protocol, with no
-    # capture or intermediate decoding. Pin HOME/TMP/cwd to admitted scratch
-    # after sanitisation; no ambient shared /tmp write grant is needed.
-    result = run(
-        inspection_command([executable, *flags, binary], output_dir),
-        **policy, capture_output=False, stdin=0, timeout=1800,
-    )
-except (SandboxSetupError, OSError, RuntimeError, ValueError,
-        subprocess.TimeoutExpired) as e:
-    # SandboxSetupError subclasses BaseException by design (it must
-    # escape broad `except Exception` layers), so it has to be NAMED
-    # here — otherwise an engage failure tracebacks and exits 1,
-    # inside r2's own 0-127 range that the ≥100 wrapper codes exist
-    # to disambiguate.
-    _die(f"sandbox invocation failed: {e.__class__.__name__}: {e}",
-         code=_RC_WRAPPER_SANDBOX_FAILED)
+    try:
+        # Resolve against the operator's PATH before safe-env removes HOME-rooted
+        # entries. Declare that runtime explicitly rather than silently selecting
+        # another radare2 inside the sandbox (or falling back to a weaker tier).
+        executable = shutil.which("r2") or shutil.which("radare2")
+        if executable is None:
+            raise FileNotFoundError("radare2 is not installed")
+        executable = os.path.abspath(executable)
+        output_dir = os.path.realpath(output_dir)
+        policy = inspection_options(Path(binary), executable, output_dir)
+        policy.update(sanitise_host_fingerprint=True,
+                      caller_label=f"r2-sandboxed-{os.getpid()}")
+        # stdout and stdin remain r2pipe's NULL-delimited protocol, with no
+        # capture or intermediate decoding. Pin HOME/TMP/cwd to admitted scratch
+        # after sanitisation; no ambient shared /tmp write grant is needed.
+        result = run(
+            inspection_command([executable, *flags, binary], output_dir),
+            **policy, capture_output=False, stdin=0, timeout=1800,
+        )
+    except (SandboxSetupError, OSError, RuntimeError, ValueError,
+            subprocess.TimeoutExpired) as e:
+        # SandboxSetupError subclasses BaseException by design (it must
+        # escape broad `except Exception` layers), so it has to be NAMED
+        # here — otherwise an engage failure tracebacks and exits 1,
+        # inside r2's own 0-127 range that the ≥100 wrapper codes exist
+        # to disambiguate.
+        _die(f"sandbox invocation failed: {e.__class__.__name__}: {e}",
+             code=_RC_WRAPPER_SANDBOX_FAILED)
 
-sys.exit(result.returncode)
+    sys.exit(result.returncode)

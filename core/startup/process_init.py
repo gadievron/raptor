@@ -64,6 +64,9 @@ def _stderr_has_fileno() -> bool:
 
 def init() -> None:
     """One-shot process bootstrap — safe to call multiple times."""
+    from core.startup.codex_environment import restore_for_process
+    restore_for_process()
+
     from core.security.launch_scratch import restore
     try:
         restore()

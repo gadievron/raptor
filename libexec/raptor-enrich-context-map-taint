@@ -133,4 +133,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    from core.run.cli_outcome import cli_outcome
+    with cli_outcome():
+        raise SystemExit(main())

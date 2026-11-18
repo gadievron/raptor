@@ -294,10 +294,9 @@ class TestHookWithoutJq:
                 pytest.skip(f"{tool} not on PATH")
             (bindir / tool).symlink_to(path)
 
-        env = dict(os.environ)
-        env["HOME"] = str(home)
-        env["RAPTOR_REGISTRY_HOME"] = str(home / ".raptor")
-        env["PATH"] = str(bindir)
+        # Exercise legacy discovery in this fake HOME, independently of any
+        # caller session credentials, Codex routing or registry relocation.
+        env = {"HOME": str(home), "PATH": str(bindir), "LC_ALL": "C"}
 
         payload = json.dumps(
             {"tool_input": {"file_path": str(target / "a.py")}},

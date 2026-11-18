@@ -1,0 +1,15 @@
+{
+  "name": "raptor-local",
+  "interface": {
+    "displayName": "RAPTOR local plugins"
+  },
+  "plugins": [
+    {
+      "name": "raptor-codex-hooks",
+      "source": {
+        "source": "local",
+        "path": "./.codex/plugin"
+      }
+    }
+  ]
+}

@@ -61,7 +61,7 @@ class SupervisorBound:
 
 
 def _under_claude_session() -> bool:
-    if os.environ.get("CLAUDECODE"):
+    if os.environ.get("CLAUDECODE") or os.environ.get("CODEX"):
         return True
     try:
         from core.run.metadata import _find_claude_ancestor
