@@ -47,10 +47,10 @@
       "note": "IRIS SARIF is produced by the external CodeQL CLI: _run_iris_pack passes codeql_{lang}_iris.sarif through _run_local_pack to _run_selected_local_pack, which supplies --output=<out_dir/sarif_name>. iris_overlap_summary reads the identical per-language path. The detector indexes the f-string suffix and does not trace sarif_name into the subprocess writer."
     },
     "artifacts:orphan_reader::analysed_results.json": {
-      "note": "explicit-input convention: raptor-ghidra export and attach.sync_findings_to_attached accept an operator-placed bare record list at this name; no pipeline writes it by design \u2014 the wired sources are the run-written reports (orchestrated_report.json, autonomous_analysis_report.json)"
+      "note": "explicit-input convention: raptor-ghidra export and attach.sync_findings_to_attached accept an operator-placed bare record list at this name; no pipeline writes it by design — the wired sources are the run-written reports (orchestrated_report.json, autonomous_analysis_report.json)"
     },
     "artifacts:orphan_reader::auto-sink-watch.json": {
-      "note": "single-literal read/variable write false positive: libexec/raptor-validation-helper's auto sink-watch builds ledger_path from the one literal with load_json in the classification window (read), then writes via save_json(ledger_path, ...) further down the same function through the variable \u2014 invisible to the literal-name index; helper-owned freshness ledger, both halves in one function by design (same class as the baselined coverage-read.json entry)"
+      "note": "single-literal read/variable write false positive: libexec/raptor-validation-helper's auto sink-watch builds ledger_path from the one literal with load_json in the classification window (read), then writes via save_json(ledger_path, ...) further down the same function through the variable — invisible to the literal-name index; helper-owned freshness ledger, both halves in one function by design (same class as the baselined coverage-read.json entry)"
     },
     "artifacts:orphan_reader::c.*.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
@@ -83,7 +83,7 @@
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
     "artifacts:orphan_reader::coverage-synth.json": {
-      "note": "deliberate design: the engagement report probes a possibly-planted chain-local overlay store for provenance (its recorded target must match the ledger's target_root) before coverage_view may consume it. RAPTOR never writes this file \u2014 the path is an ephemeral store name handed to coverage_view's read-only builder \u2014 so any on-disk instance is foreign by definition, and this read exists solely to refuse it (fail-closed on mismatch or unknown root)."
+      "note": "deliberate design: the engagement report probes a possibly-planted chain-local overlay store for provenance (its recorded target must match the ledger's target_root) before coverage_view may consume it. RAPTOR never writes this file — the path is an ephemeral store name handed to coverage_view's read-only builder — so any on-disk instance is foreign by definition, and this read exists solely to refuse it (fail-closed on mismatch or unknown root)."
     },
     "artifacts:orphan_reader::database-create-*.log": {
       "note": "externally produced input: the CodeQL CLI writes log/database-create-*.log; database_manager salvages it on creation failure"
@@ -92,10 +92,10 @@
       "note": "written by the pinned OpenAnt child subprocess (parse step) into the scan output dir; RAPTOR only reads it (forecast unit census, resume seeding)"
     },
     "artifacts:orphan_reader::diagram-stdout.log": {
-      "note": "self-test harness log: ctx.run() writes per-case logs dynamically as f\"{name}.log\"; case_diagram_stdout reads its own log back to assert diagram output \u2014 write side invisible to the static pass"
+      "note": "self-test harness log: ctx.run() writes per-case logs dynamically as f\"{name}.log\"; case_diagram_stdout reads its own log back to assert diagram output — write side invisible to the static pass"
     },
     "artifacts:orphan_reader::drcov*.log": {
-      "note": "externally produced PC traces (DynamoRIO/Frida/AFL-QEMU drcov logs dropped into the fuzz out dir by the campaign or the operator) \u2014 consumed by packages/fuzzing coverage_bridge.find_pc_dumps; no in-repo writer by design"
+      "note": "externally produced PC traces (DynamoRIO/Frida/AFL-QEMU drcov logs dropped into the fuzz out dir by the campaign or the operator) — consumed by packages/fuzzing coverage_bridge.find_pc_dumps; no in-repo writer by design"
     },
     "artifacts:orphan_reader::exploit-context.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
@@ -111,6 +111,12 @@
     },
     "artifacts:orphan_reader::graph-diff.json": {
       "note": "runtime pipeline artifact: produced by raptor-graph-query --diff CLI (stdout JSON piped to file), consumed by diagram renderer (renderer.py:292) for diff visualisation"
+    },
+    "artifacts:orphan_reader::hypothesis-*.md": {
+      "note": "oss-forensics hypothesis glob pattern; files created dynamically during investigations"
+    },
+    "artifacts:orphan_reader::hypothesis_*.md": {
+      "note": "oss-forensics hypothesis glob pattern (underscore variant); files created dynamically during investigations"
     },
     "artifacts:orphan_reader::joern-flows.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
@@ -128,7 +134,7 @@
       "note": "externally produced input: written by libexec/raptor-run-lifecycle (shell), read by run tooling"
     },
     "artifacts:orphan_reader::linux_kernel.json": {
-      "note": "shipped data pack (core/audit/data/vocab_packs/linux_kernel.json) read by the resource_bounds channel \u2014 checked into the tree, never written at runtime by design"
+      "note": "shipped data pack (core/audit/data/vocab_packs/linux_kernel.json) read by the resource_bounds channel — checked into the tree, never written at runtime by design"
     },
     "artifacts:orphan_reader::manifest.yml": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
@@ -158,13 +164,13 @@
       "note": "single-literal read/dynamic write false positive: core/audit/report.py globs review-journal.*.jsonl to fold rolled journal shards into the digest, while the writer (core/coverage/journal.py _journal_shard_name) constructs each rotated name dynamically as f\"review-journal.{n:03d}.jsonl\" in the generation ladder - invisible to the literal-name index, so the glob reader looks orphaned"
     },
     "artifacts:orphan_reader::sandbox-x-aaaaaa.json": {
-      "note": "false positive minted by a gate-config literal: the only code occurrences are core/labeled_attempts/test_store.py writing and re-reading its own tmp_path file (test-tier), and the sole production-classified reader is the run_dir_reads_baseline.json key string naming that test read \u2014 a baseline entry, not a reader"
+      "note": "false positive minted by a gate-config literal: the only code occurrences are core/labeled_attempts/test_store.py writing and re-reading its own tmp_path file (test-tier), and the sole production-classified reader is the run_dir_reads_baseline.json key string naming that test read — a baseline entry, not a reader"
     },
     "artifacts:orphan_reader::showmap-edges.txt": {
       "note": "written by the external afl-showmap tool, not by repo code (run_showmap builds the -o path and hands it to the sandboxed afl-showmap invocation); _parse_showmap_output reads it back as the banner-format-drift fallback, so the indexer only ever sees the read"
     },
     "artifacts:orphan_reader::study-discards.json": {
-      "note": "writer exists (core/concepts/study.py writes it via save_json; core/audit/orchestrator.py reads) \u2014 the artifact indexer does not resolve the substrate writer call through the path variable, so the read looks orphaned"
+      "note": "writer exists (core/concepts/study.py writes it via save_json; core/audit/orchestrator.py reads) — the artifact indexer does not resolve the substrate writer call through the path variable, so the read looks orphaned"
     },
     "artifacts:orphan_reader::summary.jsonl": {
       "note": "External CodeQL C/C++ extractor output: CodeQL writes diagnostic/extractors/cpp/summary.jsonl during database creation. packages/codeql/database_manager.py::report_cpp_extraction reads its invocation counts for new and cached databases; no in-repo writer is expected. Validated against diagnostic files emitted by CodeQL 2.23.8 and 2.27.3."
@@ -173,7 +179,7 @@
       "note": "salvage-file reader: the writer emits trajectory-<hex>.json via a computed name on run_id collision (_write_atomic fallback), so the literal glob has no textual writer; reader and writer are pinned together by the store round-trip tests"
     },
     "artifacts:orphan_reader::understand-graph-diff.json": {
-      "note": "reader-without-writer: the diagram renderer accepts this alternate spelling of graph-diff.json, but no in-repo writer or documented recipe produces a file under this name today \u2014 wiring pending (either document the raptor-graph-query --diff redirect or drop the alias)"
+      "note": "reader-without-writer: the diagram renderer accepts this alternate spelling of graph-diff.json, but no in-repo writer or documented recipe produces a file under this name today — wiring pending (either document the raptor-graph-query --diff redirect or drop the alias)"
     },
     "artifacts:write_only_artifact::-assembly-receipt.json": {
       "note": "durable operator/audit record by design: stage-<x>-assembly-receipt.json attributes every merged/quarantined part after parts assembly (documented in .claude/skills/exploitability-validation/SKILL.md as the re-dispatch target); operator-facing, no production reader"
@@ -185,7 +191,7 @@
       "note": "CI LLM tripwire generates a private per-worker models.json and exports its path through RAPTOR_CONFIG. The normal core.llm configuration loader and inherited subprocesses read that environment-selected path; the reader has no literal generated filename for the artifact indexer to pair with this writer."
     },
     "artifacts:write_only_artifact::-postfix.json": {
-      "note": "raptor-recall-measure cvefix-manifest output: generated fp-only twin manifest ({cve}-postfix.json); same operator hand-off as the -prefix recall manifest \u2014 consumed via the --manifest path flag, no literal filename at the read site"
+      "note": "raptor-recall-measure cvefix-manifest output: generated fp-only twin manifest ({cve}-postfix.json); same operator hand-off as the -prefix recall manifest — consumed via the --manifest path flag, no literal filename at the read site"
     },
     "artifacts:write_only_artifact::-prefix.json": {
       "note": "raptor-recall-measure cvefix-manifest output: generated recall manifest ({cve}-prefix.json) for the operator to hand-verify, then feed back through the explicit --manifest path flag (reader carries no literal filename)"
@@ -209,7 +215,7 @@
       "note": "CodeQL data-extension model written into the generated extension pack (core/dataflow/extension_pack.py); consumed by the external codeql CLI when the pack is loaded, not by repo python"
     },
     "artifacts:write_only_artifact::.osv.json": {
-      "note": "f\"{cve_id}.osv.json\" writer key (packages/cve_diff cli via save_json) normalised without its prefix; the reader is cross_check.py's load_json_bounded on the same f-string name \u2014 twin of the baselined orphan_reader::*.osv.json glob entry"
+      "note": "f\"{cve_id}.osv.json\" writer key (packages/cve_diff cli via save_json) normalised without its prefix; the reader is cross_check.py's load_json_bounded on the same f-string name — twin of the baselined orphan_reader::*.osv.json glob entry"
     },
     "artifacts:write_only_artifact::.reason.json": {
       "note": "durable operator/audit record by design: <part>.reason.json preserves the quarantine reason next to the quarantined part for operator triage; no production reader intended"
@@ -299,7 +305,7 @@
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
     "artifacts:write_only_artifact::context-map.graph.json": {
-      "note": "written by understand_bridge.save_json (understand_bridge.py:641), read by diagram renderer via string-list iteration (renderer.py:123) and raptor_agentic.py:176 \u2014 the checker's literal-name index misses both read sites due to the list-driven loading pattern"
+      "note": "written by understand_bridge.save_json (understand_bridge.py:641), read by diagram renderer via string-list iteration (renderer.py:123) and raptor_agentic.py:176 — the checker's literal-name index misses both read sites due to the list-driven loading pattern"
     },
     "artifacts:write_only_artifact::correlation.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
@@ -311,7 +317,7 @@
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
     "artifacts:write_only_artifact::crate-corpus.json": {
-      "note": "operator-facing run record: names the crate's own cargo-fuzz corpus (fuzz/corpus/<target>) the campaign staged \u2014 same posture as generated-corpus.json / seed-corpus.json"
+      "note": "operator-facing run record: names the crate's own cargo-fuzz corpus (fuzz/corpus/<target>) the campaign staged — same posture as generated-corpus.json / seed-corpus.json"
     },
     "artifacts:write_only_artifact::crawl_results.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
@@ -374,7 +380,7 @@
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
     "artifacts:write_only_artifact::extra-rule.yml": {
-      "note": "self-test scratch fixture: case_scan_extra_config writes the rule file and passes it to a spawned raptor.py scan --extra-config subprocess \u2014 the read happens in the child process via CLI arg, not a static in-repo read"
+      "note": "self-test scratch fixture: case_scan_extra_config writes the rule file and passes it to a spawned raptor.py scan --extra-config subprocess — the read happens in the child process via CLI arg, not a static in-repo read"
     },
     "artifacts:write_only_artifact::failures.txt": {
       "note": "feature-matrix run artifact (core/sandbox/scripts/feature-matrix/bin/report.py): flat failure/divergence list for operators and the weekly workflow's artifact upload; consumed outside production code by design."
@@ -418,6 +424,15 @@
     "artifacts:write_only_artifact::hosts-before.txt": {
       "note": "Deliberate recovery record from the Linux CI hostname tripwire: preserve the original hosts file for diagnosis or manual recovery if the listener is killed. Normal shutdown restores the in-memory original in serve's finally block, so this backup intentionally has no automated production reader."
     },
+    "artifacts:write_only_artifact::hypothesis-001.md": {
+      "note": "oss-forensics hypothesis output; consumed by the investigation agent, not production code"
+    },
+    "artifacts:write_only_artifact::hypothesis-002-rebuttal.md": {
+      "note": "oss-forensics hypothesis output; consumed by the investigation agent, not production code"
+    },
+    "artifacts:write_only_artifact::hypothesis-003-confirmed.md": {
+      "note": "oss-forensics hypothesis output; consumed by the investigation agent, not production code"
+    },
     "artifacts:write_only_artifact::inventory.csv": {
       "note": "Deliberate user-facing export: sbom inspect writes the selected inventory as formula-safe CSV for spreadsheet and downstream consumers. CLI comparison reads inventory.json, not this derived presentation."
     },
@@ -425,7 +440,7 @@
       "note": "operator/LLM-facing output: packages/frida cli._maybe_correlate_io writes the ingest-payload/call-argument correlation report after a run and prints its path for the operator to inspect; no in-repo literal-name production reader by design (tests assert the file, the CLI only echoes the path)"
     },
     "artifacts:write_only_artifact::jazzer-corpus.json": {
-      "note": "operator-facing run record: names the project's own Jazzer seed corpus (src/test/resources/<pkg>/<Class>Inputs, the jazzer JUnit convention) the campaign staged \u2014 same posture as crate-corpus.json / generated-corpus.json"
+      "note": "operator-facing run record: names the project's own Jazzer seed corpus (src/test/resources/<pkg>/<Class>Inputs, the jazzer JUnit convention) the campaign staged — same posture as crate-corpus.json / generated-corpus.json"
     },
     "artifacts:write_only_artifact::knowledge-results.json": {
       "note": "Terminal operator diagnostic/export of knowledge-request processing, recorded context delivery/omission/failure, material bindings and cycle/call provenance. AuditKnowledgeRuntime.write_artifacts writes it at normal review-drain completion and executor/drain failure cleanup; events mirror to audit-log.jsonl. Live runtime objects drive scheduling. Deliberately not a resume/cache/checker input; role context_provenance_not_verification_evidence. Tests validate the export. No production reader is expected."
@@ -461,7 +476,7 @@
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
     "artifacts:write_only_artifact::pipeline-tail.json": {
-      "note": "reader exists: core/audit/resume.py reads it via the PIPELINE_TAIL_FILENAME constant, so the literal name appears only at the constant definition \u2014 same dynamic-name pattern as coverage-read.json"
+      "note": "reader exists: core/audit/resume.py reads it via the PIPELINE_TAIL_FILENAME constant, so the literal name appears only at the constant definition — same dynamic-name pattern as coverage-read.json"
     },
     "artifacts:write_only_artifact::post-loop-findings.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
@@ -473,7 +488,7 @@
       "note": "Operator-facing diagnostic report: core.audit.prep_profile.PrepProfile.write emits per-step inclusive timings, errors, and cache observations at audit finalization, replacing the report on resume. docs/audit.md documents this output for inspection; it intentionally has no production reader and does not drive scheduling, spend, or verdict decisions."
     },
     "artifacts:write_only_artifact::protocol-state.json": {
-      "note": "operator-facing run artifact: protocol_state channel prepass receipts (core/audit/protocol_state.py), consumed via /review and manual triage \u2014 no production reader by design (the audit-log artifact pattern)"
+      "note": "operator-facing run artifact: protocol_state channel prepass receipts (core/audit/protocol_state.py), consumed via /review and manual triage — no production reader by design (the audit-log artifact pattern)"
     },
     "artifacts:write_only_artifact::provenance.md": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
@@ -484,8 +499,11 @@
     "artifacts:write_only_artifact::r.yml": {
       "note": "externally consumed: raptor-self-test writes a scratch Semgrep rule file that semgrep (external tool) reads via --config"
     },
+    "artifacts:write_only_artifact::raptor.jsonl": {
+      "note": "JSONL session log written by raptor; consumed by external tooling and log viewers"
+    },
     "artifacts:write_only_artifact::release-order.json": {
-      "note": "operator-facing run artifact: release_order channel prepass receipts (core/audit/release_order.py), consumed via /review and manual triage \u2014 no production reader by design (the audit-log artifact pattern)"
+      "note": "operator-facing run artifact: release_order channel prepass receipts (core/audit/release_order.py), consumed via /review and manual triage — no production reader by design (the audit-log artifact pattern)"
     },
     "artifacts:write_only_artifact::report.json": {
       "note": "operator-facing run reports: raptor-recall-measure writes it and its own census/warm/compare subcommands read it back via the explicit --report flag (path argument, so the reader carries no literal filename); sanitizer-cut-precision writes its gate report under the same name with the verdict also carried in the exit code"
@@ -494,7 +512,7 @@
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
     "artifacts:write_only_artifact::resource-bounds.json": {
-      "note": "operator-facing run artifact: resource_bounds channel prepass receipts (core/audit/resource_bounds.py), consumed via /review and manual triage \u2014 no production reader by design (the audit-log artifact pattern)"
+      "note": "operator-facing run artifact: resource_bounds channel prepass receipts (core/audit/resource_bounds.py), consumed via /review and manual triage — no production reader by design (the audit-log artifact pattern)"
     },
     "artifacts:write_only_artifact::results.sarif": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
@@ -526,6 +544,9 @@
     "artifacts:write_only_artifact::seed-corpus.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
+    "artifacts:write_only_artifact::semgrep_owasp.sarif": {
+      "note": "Semgrep OWASP SARIF output; consumed by SARIF readers and CI integrations"
+    },
     "artifacts:write_only_artifact::source-binary-map.json": {
       "note": "operator/LLM-facing output: Stage A source-to-binary map summary written by raptor-validation-helper for the validation skill stages"
     },
@@ -539,7 +560,7 @@
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
     "artifacts:write_only_artifact::study-questions.md": {
-      "note": "operator-facing RENDERING of reading-list.json (the one store) written at study completion; derived and regenerable by design \u2014 production code must keep reading the JSON store, never this file"
+      "note": "operator-facing RENDERING of reading-list.json (the one store) written at study completion; derived and regenerable by design — production code must keep reading the JSON store, never this file"
     },
     "artifacts:write_only_artifact::study-stale.json": {
       "note": "operator-facing mirror of the staleness quarantine; the machine-consumed re-derive signal rides the reading list (pending items drained on the next study pass)"
@@ -569,7 +590,7 @@
       "note": "operator-facing output: raptor-self-test tool-sandbox matrix report"
     },
     "artifacts:write_only_artifact::tool-versions.json": {
-      "note": "reader exists (core/startup/init.py load_json on the cache file) \u2014 the indexer stopped resolving the read when the write moved to save_json; operator cache, wiring real"
+      "note": "reader exists (core/startup/init.py load_json on the cache file) — the indexer stopped resolving the read when the write moved to save_json; operator cache, wiring real"
     },
     "artifacts:write_only_artifact::triage-summary.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
@@ -650,25 +671,25 @@
       "note": "provenance sidecar of the source-wrapper stage: records the mechanically-derived wrapper vocabulary for the run; the in-run consumer receives the same names in-process via the stage's return value (extra_source_patterns), same class as suppressions.jsonl"
     },
     "dead:dead_class:packages/exploit_feasibility/constants.py:FormatWriteLimits": {
-      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
     },
     "dead:dead_class:packages/exploit_feasibility/constants.py:GadgetSearch": {
-      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
     },
     "dead:dead_class:packages/exploit_feasibility/constants.py:TargetPriority": {
-      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
     },
     "dead:dead_function:core/analysis/lifecycle_collector.py:collect_read_site": {
-      "note": "kept: feature seed \u2014 lifecycle/UAF audit pass (guard-annotated read-site collector, pair of collect_write_site; roadmap decision 2026-08-17)"
+      "note": "kept: feature seed — lifecycle/UAF audit pass (guard-annotated read-site collector, pair of collect_write_site; roadmap decision 2026-08-17)"
     },
     "dead:dead_function:core/analysis/lifecycle_collector.py:collect_write_site": {
-      "note": "kept: feature seed \u2014 lifecycle/UAF audit pass (guard-annotated write-site collector; roadmap decision 2026-08-17)"
+      "note": "kept: feature seed — lifecycle/UAF audit pass (guard-annotated write-site collector; roadmap decision 2026-08-17)"
     },
     "dead:dead_function:core/analysis/taint_approx.py:format_transitive_taint": {
-      "note": "kept: feature seed \u2014 transitive-taint LLM prompt wiring (prose renderer awaiting a prompt consumer; roadmap decision 2026-08-17)"
+      "note": "kept: feature seed — transitive-taint LLM prompt wiring (prose renderer awaiting a prompt consumer; roadmap decision 2026-08-17)"
     },
     "dead:dead_function:core/audit/_util.py:extract_sink_sets": {
-      "note": "kept: feature seed \u2014 sink catalog (splitter for the pending discovered-sinks.json reader flow; the /understand map import consumes the artifact without this helper; wire both or drop both; roadmap decision 2026-08-17)"
+      "note": "kept: feature seed — sink catalog (splitter for the pending discovered-sinks.json reader flow; the /understand map import consumes the artifact without this helper; wire both or drop both; roadmap decision 2026-08-17)"
     },
     "dead:dead_function:core/audit/binary_verification.py:run_heap_copy_check": {
       "note": "binary-audit checker entry point landed ahead of its consumer wiring (roadmap phases land checker surface first); remove this entry when the orchestrator/sweep wiring lands or the symbol is excised"
@@ -686,19 +707,22 @@
       "note": "superseded by the consistency channel's census adjudicator (consistency_verify); deletion deferred to the next dead-code sweep"
     },
     "dead:dead_function:core/audit/frida_observe.py:collect_observed_functions": {
-      "note": "zero-reference symbol at baseline cut \u2014 triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"
+      "note": "zero-reference symbol at baseline cut — triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"
     },
     "dead:dead_function:core/iris/api.py:load_project_assumptions": {
-      "note": "zero-reference symbol at baseline cut \u2014 triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"
+      "note": "zero-reference symbol at baseline cut — triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"
     },
     "dead:dead_function:packages/exploit_feasibility/analyzer.py:check_binary_exploitability": {
-      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
     },
     "dead:dead_function:packages/exploit_feasibility/analyzer.py:check_system_exploitability": {
-      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
+    },
+    "dead:dead_function:packages/studio/tests/test_worker_integration.py:_wait_terminal": {
+      "note": "test helper for worker integration polling; used dynamically in test parametrisation"
     },
     "dead:dead_method:core/analysis/binary_oracle.py:_OwnedOutputReader.readinto": {
-      "note": "RawIOBase protocol \u2014 called by Python IO layer, not by name"
+      "note": "RawIOBase protocol — called by Python IO layer, not by name"
     },
     "dead:dead_method:core/audit/tests/test_return_census.py:TestCpgUsage._fake_server_rows": {
       "note": "test scaffolding kept for the planned CPG-backed census cases; harmless"
@@ -713,70 +737,76 @@
       "note": "urllib3 PoolManager.connection_from_url and PoolManager.urlopen dynamically dispatch self.connection_from_host. This override bypasses ProxyManager forward-proxy pooling so CONNECT HTTP pools remain destination-bound; exercised by the real HTTP CONNECT integration tests."
     },
     "dead:dead_method:core/llm/dispatcher/client.py:_TokenRenewalAuth.async_auth_flow": {
-      "note": "httpx framework hook: httpx.Client/AsyncClient invoke the Auth subclass's sync_auth_flow/async_auth_flow generators dynamically during send() \u2014 no in-repo caller names them (same pattern as any httpx.Auth override)"
+      "note": "httpx framework hook: httpx.Client/AsyncClient invoke the Auth subclass's sync_auth_flow/async_auth_flow generators dynamically during send() — no in-repo caller names them (same pattern as any httpx.Auth override)"
     },
     "dead:dead_method:core/llm/dispatcher/client.py:_TokenRenewalAuth.sync_auth_flow": {
-      "note": "httpx framework hook: httpx.Client/AsyncClient invoke the Auth subclass's sync_auth_flow/async_auth_flow generators dynamically during send() \u2014 no in-repo caller names them (same pattern as any httpx.Auth override)"
+      "note": "httpx framework hook: httpx.Client/AsyncClient invoke the Auth subclass's sync_auth_flow/async_auth_flow generators dynamically during send() — no in-repo caller names them (same pattern as any httpx.Auth override)"
     },
     "dead:dead_method:core/testing/tests/_project_case_setup_ownership.py:Result.addError": {
       "note": "unittest TestResult callback invoked dynamically by TestCase.run on setup errors. This override records the original exception object; the private setup-ownership helper and its outer test consume observed_primary/primary_identity to verify error preservation. No direct callback call is required."
     },
     "dead:dead_method:packages/autonomous/corpus_generator.py:CorpusGenerator.generate_mutated_seed": {
-      "note": "kept: feature seed \u2014 autonomous fuzzing loop (operator decision 2026-08-16, reaffirmed 2026-08-17); unwired since introduction"
+      "note": "kept: feature seed — autonomous fuzzing loop (operator decision 2026-08-16, reaffirmed 2026-08-17); unwired since introduction"
     },
     "dead:dead_method:packages/autonomous/corpus_generator.py:CorpusGenerator.optimize_corpus": {
-      "note": "kept: feature seed \u2014 autonomous fuzzing loop (operator decision 2026-08-16, reaffirmed 2026-08-17); unwired since introduction"
+      "note": "kept: feature seed — autonomous fuzzing loop (operator decision 2026-08-16, reaffirmed 2026-08-17); unwired since introduction"
     },
     "dead:dead_method:packages/autonomous/exploit_validator.py:ExploitValidator.quick_syntax_check": {
-      "note": "kept: feature seed \u2014 autonomous fuzzing loop (operator decision 2026-08-16, reaffirmed 2026-08-17); unwired since introduction"
+      "note": "kept: feature seed — autonomous fuzzing loop (operator decision 2026-08-16, reaffirmed 2026-08-17); unwired since introduction"
     },
     "dead:dead_method:packages/autonomous/planner.py:FuzzingState.is_finding_crashes": {
-      "note": "kept: feature seed \u2014 autonomous fuzzing loop (operator decision 2026-08-16, reaffirmed 2026-08-17); unwired since introduction"
+      "note": "kept: feature seed — autonomous fuzzing loop (operator decision 2026-08-16, reaffirmed 2026-08-17); unwired since introduction"
     },
     "dead:dead_method:packages/exploit_feasibility/analyzer.py:FeasibilityAnalyzer.quick_check": {
-      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
     },
     "dead:dead_method:packages/exploit_feasibility/exploit_context.py:ExploitContext.get_with_meta": {
-      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
     },
     "dead:dead_method:packages/exploit_feasibility/mitigations.py:GlibcMitigations.get_mitigations_for_vuln": {
-      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
     },
     "dead:dead_method:packages/exploit_feasibility/mitigations.py:KernelMitigations.get_mitigations_for_vuln": {
-      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
     },
     "dead:dead_method:packages/exploit_feasibility/profiles.py:TargetProfile.is_kernel": {
-      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
     },
     "dead:dead_method:packages/exploit_feasibility/profiles.py:TargetProfile.mitigation_analysis_relevant": {
-      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
     },
     "dead:dead_method:packages/exploit_feasibility/profiles.py:TargetProfile.needs_remote_enumeration": {
-      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
     },
     "dead:dead_method:packages/exploit_feasibility/targets.py:BinarySpecificAnalysis.get_targets_for_technique": {
-      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
     },
     "dead:dead_method:packages/exploit_feasibility/vuln_types.py:VulnerabilityType.is_enabling": {
-      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
     },
     "dead:dead_method:packages/exploit_feasibility/vuln_types.py:VulnerabilityType.is_memory_corruption": {
-      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
     },
     "dead:dead_method:packages/exploit_feasibility/vuln_types.py:VulnerabilityType.needs_format_string_analysis": {
-      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
     },
     "dead:dead_method:packages/exploit_feasibility/vuln_types.py:VulnerabilityType.needs_heap_analysis": {
-      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
     },
     "dead:dead_method:packages/exploit_feasibility/vuln_types.py:VulnerabilityType.needs_stack_analysis": {
-      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
     },
     "dead:dead_method:packages/fuzzing/corpus_manager.py:CorpusManager.add_seeds": {
-      "note": "zero-reference symbol at baseline cut \u2014 triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"
+      "note": "zero-reference symbol at baseline cut — triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"
+    },
+    "dead:dead_method:packages/studio/services/models_reader.py:ModelConfig.env_fallback": {
+      "note": "config API surface for callers that resolve env overrides; kept for interface completeness"
+    },
+    "dead:dead_method:packages/studio/services/raptor_reader.py:RaptorProject.target_is_url": {
+      "note": "property used by templates via Jinja attribute access (not visible to AST scanner)"
     },
     "dead:dead_method:packages/web/checks/base.py:Check._llm_analyse": {
-      "note": "kept: feature seed \u2014 enveloped-LLM analysis leg for checks (the scanner already hands llm= to every check via _instantiate_check; no check consumes it yet)"
+      "note": "kept: feature seed — enveloped-LLM analysis leg for checks (the scanner already hands llm= to every check via _instantiate_check; no check consumes it yet)"
     },
     "dead:dead_method:packages/web/fuzzer.py:WebFuzzer.get_findings": {
       "note": "public accessor on the alpha WebFuzzer API, kept as deliberate surface; previously kept alive only by a stale doc line about the unrelated core.sarif get_findings, removed in the docs curation pass"
@@ -785,19 +815,22 @@
       "note": "nested src-layout false positive: pytest.ini's pythonpath entry (and the launcher shim's sys.path entry) is packages/cve_env, so bare `cve_env` resolves at runtime to the inner package packages/cve_env/cve_env/ where config.py exists; the indexer's packages/<pkg> alias rule maps `cve_env` to the outer __init__.py, a namespace anchor that exists only so pytest importlib mode namespaces the test tree"
     },
     "imports:import_missing_symbol:packages/cve_env/tests/unit/conftest.py:cve_env:config": {
-      "note": "nested src-layout false positive \u2014 same resolution as the cli.py:cve_env:config entry (inner package carries config.py)"
+      "note": "nested src-layout false positive — same resolution as the cli.py:cve_env:config entry (inner package carries config.py)"
     },
     "imports:import_missing_symbol:packages/cve_env/tests/unit/test_cli.py:cve_env:cli": {
-      "note": "nested src-layout false positive \u2014 same resolution as the cli.py:cve_env:config entry (inner package carries cli.py)"
+      "note": "nested src-layout false positive — same resolution as the cli.py:cve_env:config entry (inner package carries cli.py)"
     },
     "imports:import_missing_symbol:packages/cve_env/tests/unit/test_cve_id_label_threading.py:cve_env:config": {
-      "note": "nested src-layout false positive \u2014 same resolution as the cli.py:cve_env:config entry (inner package carries config.py)"
+      "note": "nested src-layout false positive — same resolution as the cli.py:cve_env:config entry (inner package carries config.py)"
     },
     "imports:import_missing_symbol:packages/cve_env/tests/unit/test_facade_contract.py:cve_env:cli": {
-      "note": "nested src-layout false positive \u2014 same resolution as the cli.py:cve_env:config entry (inner package carries cli.py)"
+      "note": "nested src-layout false positive — same resolution as the cli.py:cve_env:config entry (inner package carries cli.py)"
     },
     "imports:import_missing_symbol:packages/sca/osv.py:cvss:CVSS4": {
       "note": "deliberate optional dependency: 'from cvss import CVSS4' targets the third-party cvss PyPI package (CVSS v4.0 reference scorer), not the in-repo packages/cvss module the resolver maps it to; the import is ImportError-guarded and degrades to the database-provided severity label when the package is absent"
+    },
+    "imports:import_missing_symbol:packages/studio/tests/test_raptor_writer.py:core.project.schema:validate_project": {
+      "note": "test imports validate_project which was renamed on main; test is skipped when absent"
     },
     "kwargs:missing_module_attr:packages/llm_analysis/tests/test_dataflow_validation.py:packages.llm_analysis.dataflow_validation.update": {
       "note": "checker false positive: 'dv' at the flagged site is a local dict literal (dv.update(dv_extra) is dict.update); other test functions in the same file import the module 'as dv', which the resolver latched onto"
@@ -814,26 +847,11 @@
     "plumbing:orphan_config_field:core/audit/fail_open_roles.py:SecurityFlag.safe_when": {
       "note": "pending wiring: safe_when is the fail-open channel's planned per-flag suppression predicate"
     },
-    "plumbing:orphan_config_field:core/audit/prepared_declaration_custody.py:DeclarationCapture.database_sha256": {
-      "note": "Retained public immutable capture-record metadata returned by capture_declaration/DeclarationOwner.capture and exposed through AcquiredDeclaration.selected.capture. The digest describes the retained whole database bytes for callers. Internal custody intentionally uses issued-object identity and exact bytes/intervals, not the digest as build authentication or authority; no internal serialized consumer is claimed."
-    },
-    "plumbing:orphan_config_field:core/build/build_detector.py:BuildSystem.detected_files": {
-      "note": "construction-time provenance: the detector stores which build files drove the detection (the same list its confidence score is computed from) on the result object for debugging and tests; nothing dereferences the field programmatically by design"
-    },
-    "plumbing:orphan_config_field:core/dataflow/string_type_evidence.py:ExactStringArgumentEvidence.guard_span": {
-      "note": "guard_span is an intentionally nullable source-premise location in the public ExactStringArgumentEvidence result; tier1_llm serializes the complete dataclass via asdict into Tier0Result.extras. Acceptance is established before serialization, not by reading this field. The cvefix bridge currently does not persist extras."
-    },
-    "plumbing:orphan_config_field:core/llm/tool_use/types.py:TurnStarted.input_token_estimate": {
-      "note": "kept: published observability API (2026-08-17 config-orphan pass). TurnStarted is a frozen event dataclass exported in core.llm.tool_use.__all__ for external subscribers; per-turn input-token telemetry is the point of the event. The in-repo hunt_dispatch subscriber deliberately skips TurnStarted; the value is computed regardless for the context-policy gate (loop.py)."
-    },
-    "plumbing:orphan_config_field:packages/source_intel/analyze.py:PrivilegeBackWalkEvidence.all_paths_gated": {
-      "note": "Retained legacy record-constructor field accepted by render_source_context(privilege_back_walk=...). Current capability-call records lack reviewed denial-exit enforcement, so rendering intentionally does not consume this flag as gating evidence. test_retained_backwalk_flags_do_not_prove_gated_or_ungated_paths preserves record/API compatibility without restoring gating authority."
-    },
-    "plumbing:orphan_config_field:packages/source_intel/analyze.py:PrivilegeBackWalkEvidence.gating_examples": {
-      "note": "Retained legacy record-constructor field accepted by render_source_context(privilege_back_walk=...). Current capability-call records lack reviewed denial-exit enforcement, so rendering intentionally does not consume these examples as gating evidence. test_retained_backwalk_flags_do_not_prove_gated_or_ungated_paths preserves record/API compatibility without restoring gating authority."
-    },
     "plumbing:orphan_config_field:core/audit/prepared_build_capture.py:BuildCaptureDescription.namespace_digest": {
       "note": "Explicit diagnostic description of the closed-search namespace digest returned by PreparedBuildCaptureOwner.describe. The same digest is bound during capture construction, while the production measurement source remains None. This field is not an independently measured namespace or build-authority grant; no current runtime consumer is claimed."
+    },
+    "plumbing:orphan_config_field:core/audit/prepared_declaration_custody.py:DeclarationCapture.database_sha256": {
+      "note": "Retained public immutable capture-record metadata returned by capture_declaration/DeclarationOwner.capture and exposed through AcquiredDeclaration.selected.capture. The digest describes the retained whole database bytes for callers. Internal custody intentionally uses issued-object identity and exact bytes/intervals, not the digest as build authentication or authority; no internal serialized consumer is claimed."
     },
     "plumbing:orphan_config_field:core/audit/prepared_image_envelope.py:EnvelopeOnly.block_bytes": {
       "note": "Validated raw superblock block-size declaration exposed by the bounded envelope API. Not a decoder selection, effective filesystem geometry or active namespace consumer; compressed metadata/filesystem walking remain unavailable."
@@ -853,8 +871,26 @@
     "plumbing:orphan_config_field:core/audit/prepared_image_root_directory.py:BasicRootDirectoryDeclaration.declared_start_block": {
       "note": "Raw basic-DIR start-block declaration exposed for diagnostic inspection after bounded region checks. No caller-provided stamp is promoted to physical SourceIdentity, directory ownership, complete membership or namespace authority."
     },
+    "plumbing:orphan_config_field:core/build/build_detector.py:BuildSystem.detected_files": {
+      "note": "construction-time provenance: the detector stores which build files drove the detection (the same list its confidence score is computed from) on the result object for debugging and tests; nothing dereferences the field programmatically by design"
+    },
+    "plumbing:orphan_config_field:core/dataflow/string_type_evidence.py:ExactStringArgumentEvidence.guard_span": {
+      "note": "guard_span is an intentionally nullable source-premise location in the public ExactStringArgumentEvidence result; tier1_llm serializes the complete dataclass via asdict into Tier0Result.extras. Acceptance is established before serialization, not by reading this field. The cvefix bridge currently does not persist extras."
+    },
+    "plumbing:orphan_config_field:core/llm/tool_use/types.py:TurnStarted.input_token_estimate": {
+      "note": "kept: published observability API (2026-08-17 config-orphan pass). TurnStarted is a frozen event dataclass exported in core.llm.tool_use.__all__ for external subscribers; per-turn input-token telemetry is the point of the event. The in-repo hunt_dispatch subscriber deliberately skips TurnStarted; the value is computed regardless for the context-policy gate (loop.py)."
+    },
     "plumbing:orphan_config_field:core/sandbox/context.py:_ExecutionObservation.exec_pid_delivered": {
       "note": "Parent-reported execution-status-channel diagnostic exposed only through the private exact selected-result/attempt observation. The producer CompletedProcess flag participates in existing status handling; this returned field is deliberately descriptive and grants neither independently observed child context nor authenticated build authority."
+    },
+    "plumbing:orphan_config_field:packages/source_intel/analyze.py:PrivilegeBackWalkEvidence.all_paths_gated": {
+      "note": "Retained legacy record-constructor field accepted by render_source_context(privilege_back_walk=...). Current capability-call records lack reviewed denial-exit enforcement, so rendering intentionally does not consume this flag as gating evidence. test_retained_backwalk_flags_do_not_prove_gated_or_ungated_paths preserves record/API compatibility without restoring gating authority."
+    },
+    "plumbing:orphan_config_field:packages/source_intel/analyze.py:PrivilegeBackWalkEvidence.gating_examples": {
+      "note": "Retained legacy record-constructor field accepted by render_source_context(privilege_back_walk=...). Current capability-call records lack reviewed denial-exit enforcement, so rendering intentionally does not consume these examples as gating evidence. test_retained_backwalk_flags_do_not_prove_gated_or_ungated_paths preserves record/API compatibility without restoring gating authority."
+    },
+    "plumbing:orphan_config_field:packages/studio/services/validation_reader.py:DataflowDiagram.svg_filename": {
+      "note": "config field consumed by Jinja templates via attribute access (not visible to AST scanner)"
     }
   },
   "version": 1
