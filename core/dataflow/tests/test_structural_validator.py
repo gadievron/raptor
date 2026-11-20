@@ -277,6 +277,39 @@ class TestBranchGuards:
     def test_line_one_no_negative_scan(self):
         assert _extract_branch_guards_from_content("x = 1\n", 1, "python") == []
 
+    def test_hostile_whitespace_line_no_backtracking_hang(self):
+        # A single target-repo line shaped to trigger catastrophic
+        # backtracking in the guard regex (unbounded lazy capture
+        # flanked by unbounded whitespace spans hung for minutes on
+        # this input). Must complete near-instantly and match nothing.
+        import time
+
+        hostile = "if x" + " " * 10000 + "y("
+        content = hostile + "\n" + " " * 8 + "sink(x)\n"
+        start = time.monotonic()
+        guards = _extract_branch_guards_from_content(content, 2, "python")
+        elapsed = time.monotonic() - start
+        assert elapsed < 2.0
+        assert guards == []
+
+    def test_legitimate_guards_still_extracted(self):
+        cases: list[tuple[str, str]] = [
+            ("    if x > 0:", "x > 0"),
+            ("    elif y:", "y"),
+            ("    while cond:", "cond"),
+            ("    if (x > 0) {", "x > 0"),
+            ("    if(x>0){", "x>0"),
+            ("    else if (ptr != NULL) {", "ptr != NULL"),
+            ("    while (n-- > 0) {", "n-- > 0"),
+            ("    if user and user.is_admin:", "user and user.is_admin"),
+            ("    if validated(data) and not tainted:",
+             "validated(data) and not tainted"),
+        ]
+        for guard_line, expected in cases:
+            content = guard_line + "\n" + " " * 8 + "sink(x)\n"
+            guards = _extract_branch_guards_from_content(content, 2, "python")
+            assert guards == [expected], guard_line
+
 
 # ── _extract_graph grammar selection ─────────────────────────────
 

@@ -492,8 +492,19 @@ def _identify_sanitizer_calls(
     return found
 
 
+# Every repetition is bounded and the capture is pinned to non-space
+# endpoints: an unbounded lazy ``(.+?)`` flanked by ``\s*`` tails lets a
+# single hostile source line (e.g. ``"if x" + " " * 10000 + "y("``) force
+# catastrophic backtracking, hanging validation for minutes. Target-repo
+# lines flow here verbatim, so the pattern must stay linear-ish on
+# adversarial input. Bounds: 64 chars of whitespace per span and a
+# 200-char condition — both comfortably above real guard lines (the
+# consumer below drops conditions >= 200 chars anyway).
 _BRANCH_GUARD_RE = re.compile(
-    r'^\s*(?:if|elif|else\s+if|while|for)\s*[\(]?\s*(.+?)\s*[\)]?\s*[:{]?\s*$'
+    r'^[ \t]{0,64}(?:if|elif|else[ \t]{1,8}if|while|for)\b'
+    r'[ \t]{0,64}[\(]?[ \t]{0,64}'
+    r'(\S(?:.{0,198}?\S)??)'
+    r'(?:[ \t]{0,64}[\)])?(?:[ \t]{0,64}[:{])?[ \t]{0,64}$'
 )
 
 
