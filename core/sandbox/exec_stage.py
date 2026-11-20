@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
@@ -39,6 +40,13 @@ def executable_stage(binary_path: str | os.PathLike) -> Iterator[Path]:
     basename: address-space consumers match ``/proc/<pid>/maps``
     entries by name.
 
+    Symlinks are never staged: the artifact lives in a run dir earlier
+    sandboxed children could write, so a planted link would make the
+    parent-side copy read (and re-expose, executable) a file the child
+    itself could not — the regular-file gate is ``lstat``-based and the
+    source open carries O_NOFOLLOW, so a link raced in between the two
+    is refused rather than followed.
+
     The staging dir lives under :func:`core.run.workdir.exec_workdir`
     (executable even when the system tmp is mounted noexec, swept with
     the session); the ``raptor-exec-stage-`` prefix is additionally
@@ -46,11 +54,19 @@ def executable_stage(binary_path: str | os.PathLike) -> Iterator[Path]:
     an executable copy past a SIGKILL.
     """
     p = Path(binary_path)
-    if not p.is_file() or os.access(p, os.X_OK):
+    try:
+        st = os.lstat(p)
+    except OSError:
+        yield p
+        return
+    if not stat.S_ISREG(st.st_mode) or os.access(p, os.X_OK):
         yield p
         return
     with scratch_dir("raptor-exec-stage-", dir=exec_workdir()) as td:
         staged = Path(td) / p.name
-        shutil.copy2(p, staged)
+        src_fd = os.open(
+            p, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0))
+        with os.fdopen(src_fd, "rb") as src, open(staged, "xb") as dst:
+            shutil.copyfileobj(src, dst)
         staged.chmod(0o500)
         yield staged

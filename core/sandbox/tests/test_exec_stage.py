@@ -115,3 +115,50 @@ class TestPassThrough:
         artifact.chmod(0o444)
         with executable_stage(str(artifact)) as staged:
             assert os.access(staged, os.X_OK)
+
+
+class TestSymlinksNeverStaged:
+    def test_symlink_to_non_executable_not_staged(self, tmp_path):
+        """A planted link must not get its destination copied into an
+        executable staging dir — the copy would read (and re-expose,
+        runnable) a file the sandboxed child itself could not."""
+        secret = tmp_path / "secret"
+        secret.write_bytes(b"not for the child")
+        secret.chmod(0o444)
+        link = tmp_path / "app"
+        link.symlink_to(secret)
+        with executable_stage(link) as staged:
+            assert staged == link, "symlinked artifact was staged"
+
+    def test_dangling_symlink_yielded_unchanged(self, tmp_path):
+        link = tmp_path / "app"
+        link.symlink_to(tmp_path / "nowhere")
+        with executable_stage(link) as staged:
+            assert staged == link
+
+    def test_source_swapped_to_symlink_refused_by_open(self, tmp_path,
+                                                       monkeypatch):
+        """A link raced in AFTER the lstat gate is refused by the
+        O_NOFOLLOW source open instead of being followed."""
+        from core.sandbox import exec_stage
+
+        artifact = tmp_path / "app"
+        artifact.write_bytes(b"bytes")
+        artifact.chmod(0o444)
+        secret = tmp_path / "secret"
+        secret.write_bytes(b"not for the child")
+
+        real_lstat = os.lstat
+
+        def _lstat_then_swap(path, *args, **kwargs):
+            st = real_lstat(path, *args, **kwargs)
+            if Path(path) == artifact:
+                artifact.unlink()
+                artifact.symlink_to(secret)
+                monkeypatch.setattr(exec_stage.os, "lstat", real_lstat)
+            return st
+
+        monkeypatch.setattr(exec_stage.os, "lstat", _lstat_then_swap)
+        with pytest.raises(OSError):
+            with executable_stage(artifact):
+                pytest.fail("swapped symlink source was staged")
