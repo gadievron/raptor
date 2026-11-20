@@ -1937,6 +1937,35 @@ def _finalize_sandbox_summary(output_dir: Path) -> None:
             set_active_run_dir(None)
 
 
+def _persist_run_posture(output_dir: Path, owner: int | None) -> None:
+    """Persist this run's final telemetry-key posture (parent memory,
+    weakest-wins — see ``core.sandbox.summary.record_run_posture``)
+    into the owning session's run ledger, keyed by the FULL resolved
+    run-dir path, so a FRESH-process triage (``--require-evidence`` CI
+    gates, post-hoc re-triage) can grade this run's evidence after the
+    parent memory dies with this process. Runs at every terminal-state
+    transition, beside the ledger finish record. No posture in parent
+    memory (no sandboxed call happened in this process — the heuristic
+    hook finaliser, sweeps) → nothing written: triage then reads the
+    posture as unknown and the require-evidence gate fails closed
+    rather than vouching for records a key-reading target could have
+    minted. Best-effort, never raises — lifecycle hooks must not fail
+    on a ledger write.
+    """
+    import logging
+    try:
+        from core.sandbox.summary import get_run_posture
+        posture = get_run_posture(Path(output_dir))
+        if posture is None:
+            return
+        from core.project.sessions import ledger_record_posture
+        ledger_record_posture(output_dir, posture, pid=owner)
+    except Exception:  # noqa: BLE001 — posture persistence is an aid, never lifecycle-critical
+        logging.getLogger(__name__).debug(
+            "_persist_run_posture failed for %s", output_dir,
+            exc_info=True)
+
+
 def _finalize_sandbox_triage(output_dir: Path) -> str | None:
     """Best-effort: classify this run's sandbox telemetry
     (sandbox-summary.json / proxy-events.jsonl) into a clean / notable /
@@ -3287,6 +3316,9 @@ def _update_status(output_dir: Path, status: str,
             if isinstance(owner, int) and not isinstance(owner, bool):
                 from core.project.sessions import ledger_record_finish
                 ledger_record_finish(output_dir, status, pid=owner)
+                _persist_run_posture(output_dir, owner)
+            else:
+                _persist_run_posture(output_dir, None)
 
 
 def _apply_standard_provenance(metadata: dict[str, Any], output_dir: Path) -> None:
