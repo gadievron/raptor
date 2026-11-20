@@ -33,9 +33,13 @@ Policy
   re-applies the run's declared TCP policy itself: when the run
   declared ``allowed_tcp_ports``, AF_INET/AF_INET6 stream connects to
   any other port get EACCES (the same errno the child's own Landlock
-  domain would have returned). Without this re-check the supervisor —
-  an unconfined parent task — would silently void the child's
-  Landlock CONNECT_TCP rules on every mount-ns run.
+  domain would have returned), and non-stream inet connects (datagram
+  included) get EPERM wholesale — the declared policy is
+  TCP-ports-only, and a datagram connect executed here would evaluate
+  neither the port policy nor the child's task-scoped UDP denies.
+  Without this re-check the supervisor — an unconfined parent task —
+  would silently void the child's Landlock CONNECT_TCP rules on every
+  mount-ns run.
 - AF_UNIX abstract: executed only when this run gave the child its
   OWN network namespace (abstract names are netns-scoped). On
   shared-netns runs (``block_network=False`` without a coordinator
@@ -730,7 +734,13 @@ class UnixScopeSupervisor:
         a connect executed by this (unconfined) supervisor never
         evaluates them. When the run declared ``allowed_tcp_ports``,
         enforce the same policy here: stream connects to any other
-        port get EACCES — the errno Landlock itself uses.
+        port get EACCES — the errno Landlock itself uses — and
+        NON-stream inet connects get EPERM wholesale. The declared
+        policy is TCP-ports-only (there is no datagram allowlist
+        concept), and a datagram connect executed by this unconfined
+        task would evaluate neither this port policy nor the child's
+        own task-scoped UDP denies (Landlock deny / seccomp block_udp
+        never see a connect WE execute).
         """
         if (self._allowed_tcp_ports is not None
                 and family in (socket.AF_INET, socket.AF_INET6)):
@@ -739,15 +749,21 @@ class UnixScopeSupervisor:
             # SO_TYPE lookup failure counts as stream (fail closed).
             sotype = _getsockopt_int(dupfd, socket.SOL_SOCKET,
                                      socket.SO_TYPE)
-            if sotype is None or sotype == socket.SOCK_STREAM:
-                port = struct.unpack_from("!H", addr, 2)[0]
-                if port not in self._allowed_tcp_ports:
-                    logger.warning(
-                        "unix-scope[%s]: denied TCP connect to port %d "
-                        "from pid %d — outside the run's "
-                        "allowed_tcp_ports %s", self._label, port, pid,
-                        sorted(self._allowed_tcp_ports))
-                    return -errno.EACCES, 0
+            if sotype is not None and sotype != socket.SOCK_STREAM:
+                logger.warning(
+                    "unix-scope[%s]: denied non-stream inet connect "
+                    "(SO_TYPE %d) from pid %d — the run's declared "
+                    "network policy (allowed_tcp_ports) is "
+                    "TCP-ports-only", self._label, sotype, pid)
+                return -errno.EPERM, 0
+            port = struct.unpack_from("!H", addr, 2)[0]
+            if port not in self._allowed_tcp_ports:
+                logger.warning(
+                    "unix-scope[%s]: denied TCP connect to port %d "
+                    "from pid %d — outside the run's "
+                    "allowed_tcp_ports %s", self._label, port, pid,
+                    sorted(self._allowed_tcp_ports))
+                return -errno.EACCES, 0
         return self._connect_raw(dupfd, addr, nid=nid)
 
     def _connect_raw(self, dupfd: int, addr: bytes,

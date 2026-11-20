@@ -550,6 +550,29 @@ class TestSupervisorAppliesChildNetworkPolicy(_Base):
                       f"declared-port connect must keep working: "
                       f"{r.stdout!r} {r.stderr!r}")
 
+    def test_dgram_connect_refused_under_port_policy(self):
+        """A SOCK_DGRAM inet connect must not ride the supervisor past
+        the TCP port policy — even to a declared port. Executed raw it
+        would evaluate neither the port policy nor the child's own
+        task-scoped UDP denies (both are task-scoped and never see a
+        supervisor-executed connect)."""
+        import errno as _errno
+        prog = textwrap.dedent("""
+            import socket
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                s.connect(("127.0.0.1", 443))
+                print("CONNECTED")
+            except OSError as e:
+                print("DENIED", e.errno)
+        """)
+        r = self._spawn(prog, block_network=False,
+                        allowed_tcp_ports=[443])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"DENIED {_errno.EPERM}", r.stdout,
+                      f"datagram connect rode the supervisor past the "
+                      f"TCP-ports-only policy: {r.stdout!r}")
+
     def test_abstract_connect_denied_on_shared_netns_run(self):
         """Abstract names resolve in the HOST's
         abstract namespace when the child shares the host netns."""
@@ -785,3 +808,101 @@ class TestOfdFlagRaceBounded(_Base):
             f"deadline: {r.stdout!r}"
         ))
         self.assertNotIn("UNBOUNDED", r.stdout)
+
+
+# ---------------------------------------------------------------------------
+# Hermetic unit coverage of the supervisor's inet policy re-check
+# (_connect_inet_policied) — no spawn backend, no namespaces: the policy
+# method is exercised directly against real local sockets so SO_TYPE is
+# the kernel's answer, with _connect_raw stubbed out.
+# ---------------------------------------------------------------------------
+
+
+def _policy_owner(ports):
+    """A minimal stand-in for UnixScopeSupervisor's policy state."""
+    from types import SimpleNamespace
+    calls: list[tuple[int, bytes]] = []
+
+    def raw(dupfd: int, addr: bytes,
+            nid: "int | None" = None) -> tuple[int, int]:
+        calls.append((dupfd, addr))
+        return 0, 0
+
+    owner = SimpleNamespace(
+        _allowed_tcp_ports=(frozenset(ports) if ports is not None
+                            else None),
+        _label="unit",
+        _connect_raw=raw,
+    )
+    return owner, calls
+
+
+def _sockaddr_in(port: int) -> bytes:
+    import struct
+    return (struct.pack("=H", socket.AF_INET)
+            + struct.pack("!H", port)
+            + bytes([127, 0, 0, 1]) + bytes(8))
+
+
+class TestInetPolicyUnit:
+    def _call(self, owner, sock, family=socket.AF_INET, port=443):
+        from core.sandbox._unix_scope import UnixScopeSupervisor
+        return UnixScopeSupervisor._connect_inet_policied(
+            owner, sock.fileno(), _sockaddr_in(port), family, pid=1234)
+
+    def test_dgram_refused_even_on_allowed_port(self):
+        """A datagram inet connect never executes under a declared TCP
+        port policy — EPERM, even when the port itself is allowlisted.
+        The declared policy is TCP-ports-only; executing the connect
+        raw would bypass both the port policy and the child's own
+        task-scoped UDP denies."""
+        import errno as e
+        owner, calls = _policy_owner([443])
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            assert self._call(owner, s, port=443) == (-e.EPERM, 0)
+        assert calls == []
+
+    def test_dgram_refused_inet6(self):
+        import errno as e
+        owner, calls = _policy_owner([443])
+        with socket.socket(socket.AF_INET6, socket.SOCK_DGRAM) as s:
+            result = self._call(owner, s, family=socket.AF_INET6,
+                                port=443)
+        assert result == (-e.EPERM, 0)
+        assert calls == []
+
+    def test_stream_allowed_port_executes(self):
+        owner, calls = _policy_owner([443])
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            assert self._call(owner, s, port=443) == (0, 0)
+        assert len(calls) == 1
+
+    def test_stream_disallowed_port_eacces(self):
+        import errno as e
+        owner, calls = _policy_owner([443])
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            assert self._call(owner, s, port=80) == (-e.EACCES, 0)
+        assert calls == []
+
+    def test_unreadable_sotype_counts_as_stream_and_is_port_gated(
+            self, monkeypatch):
+        """SO_TYPE lookup failure keeps the documented fail-closed
+        stream treatment: the port gate still applies."""
+        import errno as e
+        from core.sandbox import _unix_scope as scope
+        monkeypatch.setattr(scope, "_getsockopt_int",
+                            lambda fd, level, opt: None)
+        owner, calls = _policy_owner([443])
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            assert self._call(owner, s, port=80) == (-e.EACCES, 0)
+            assert calls == []
+            assert self._call(owner, s, port=443) == (0, 0)
+        assert len(calls) == 1
+
+    def test_no_declared_policy_leaves_connect_unpolicied(self):
+        """Without allowed_tcp_ports the supervisor adds no inet
+        policy of its own — the run's netns posture governs."""
+        owner, calls = _policy_owner(None)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            assert self._call(owner, s, port=53) == (0, 0)
+        assert len(calls) == 1
