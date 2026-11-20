@@ -226,6 +226,12 @@ def pytest_sessionfinish(session, exitstatus):
 
 
 def pytest_terminal_summary(terminalreporter):
+    # Journal rows carry externally influenced text (request method and
+    # path from whatever connected; the hostname is raw client-chosen
+    # SNI bytes) — escape non-printables and bound length before the
+    # operator terminal sees them.
+    from core.security.log_sanitisation import sanitise_for_terminal as _clean
+
     listener, directory, _ = terminalreporter.config.stash[_KEY]
     rows = []
     for path in sorted(directory.glob("*.jsonl")):
@@ -234,15 +240,16 @@ def pytest_terminal_summary(terminalreporter):
         terminalreporter.section("LLM tripwire FAILED", red=True, bold=True)
         for row in rows[:20]:
             terminalreporter.write_line(
-                f"[{row['worker']}] {row['active_test']}: "
-                f"{row['method']} {row['path']}", red=True,
+                _clean(f"[{row['worker']}] {row['active_test']}: "
+                       f"{row['method']} {row['path']}"), red=True,
             )
         terminalreporter.write_line(
             f"{max(len(rows), listener.count + listener.worker_requests)} unexpected "
             f"request(s); bounded prompt excerpts: {directory}",
         )
         for error in listener.journal_errors[:5]:
-            terminalreporter.write_line(f"Request journal error: {error}", red=True)
+            terminalreporter.write_line(
+                _clean(f"Request journal error: {error}"), red=True)
     if listener.host_dir:
         path = listener.host_dir / "connections.jsonl"
         if path.exists() and path.stat().st_size:
@@ -250,9 +257,9 @@ def pytest_terminal_summary(terminalreporter):
             for line in path.read_text().splitlines()[:20]:
                 row = json.loads(line)
                 terminalreporter.write_line(
-                    f"pid={row['owner_pid']} worker={row['worker']} "
-                    f"origin={row['origin_test']} active={row['active_test']} "
-                    f"host={row.get('hostname', '<unknown>')}", red=True,
+                    _clean(f"pid={row['owner_pid']} worker={row['worker']} "
+                           f"origin={row['origin_test']} active={row['active_test']} "
+                           f"host={row.get('hostname', '<unknown>')}"), red=True,
                 )
             terminalreporter.write_line(f"Connection evidence: {path}")
 

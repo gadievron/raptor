@@ -93,6 +93,46 @@ def endpoint_hosts(repo, model_files=()):
     return {"hosts": sorted(hosts), "ports": sorted(ports)}
 
 
+def _proc_starttime(pid: int) -> int:
+    """Kernel start time (clock ticks) from ``/proc/<pid>/stat``.
+
+    ``(pid, starttime)`` is the stable process identity pin: a reused
+    pid gets a new starttime, so a kill gated on both can never signal
+    an unrelated process that inherited the number. Parsed after the
+    last ``)`` so a comm containing spaces or parentheses cannot shift
+    the fields (starttime is field 22, i.e. index 19 past the comm).
+    """
+    text = Path(f"/proc/{pid}/stat").read_text()
+    return int(text.rsplit(")", 1)[1].split()[19])
+
+
+def _write_file_atomically(path: Path, content: str) -> None:
+    """Replace *path* via write-temp + rename in the same directory.
+
+    The hosts file is rewritten twice per serve (tripwire entries in,
+    original back); a plain truncate-then-write would leave a corrupt
+    ``/etc/hosts`` if the process died mid-write. Mode and ownership
+    are copied from the current file onto the temp before the rename
+    publishes it, so the replacement never changes who may edit it.
+    """
+    st = path.stat()
+    tmp = path.with_name(path.name + ".raptor-tripwire-tmp")
+    tmp.unlink(missing_ok=True)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                 | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(content)
+            fh.flush()
+            os.fchmod(fh.fileno(), st.st_mode & 0o7777)
+            os.fchown(fh.fileno(), st.st_uid, st.st_gid)
+            os.fsync(fh.fileno())
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    os.replace(tmp, path)
+
+
 def serve(directory, hosts_file, stop, ports=None):
     """Accept first, attribute, then offer an untrusted TLS certificate.
 
@@ -142,10 +182,12 @@ def serve(directory, hosts_file, stop, ports=None):
                                         (" #" + comment.rstrip("\n") if marker else "") + "\n")
                 else:
                     retained.append(line)
-            hosts_file.write_text(entries + "".join(retained))
+            _write_file_atomically(hosts_file, entries + "".join(retained))
         pending = directory / "ready.json.pending"
         pending.write_text(json.dumps({
-            "pid": os.getpid(), "addresses": [s.getsockname() for s in sockets],
+            "pid": os.getpid(),
+            "starttime": _proc_starttime(os.getpid()),
+            "addresses": [s.getsockname() for s in sockets],
         }))
         pending.replace(directory / "ready.json")
         while not stop():
@@ -176,7 +218,7 @@ def serve(directory, hosts_file, stop, ports=None):
                     record()  # Includes non-TLS and incomplete-handshake attempts.
     finally:
         if original is not None:
-            hosts_file.write_text(original)
+            _write_file_atomically(hosts_file, original)
         for sock in sockets:
             sock.close()
         selector.close()
@@ -201,9 +243,25 @@ def main():
     elif args.command == "stop":
         ready = args.directory / "ready.json"
         if ready.exists():
-            pid = int(json.loads(ready.read_text())["pid"])
-            command = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
-            if (pid <= 1 or str(Path(__file__).resolve()).encode() not in command
+            info = json.loads(ready.read_text())
+            pid = int(info["pid"])
+            # Identity pin: the recorded (pid, starttime) pair must
+            # still describe a live process — a cmdline match alone
+            # can name an unrelated process after pid reuse (cmdline
+            # is also self-chosen). Missing/garbled stat or a payload
+            # without a starttime refuses, never kills.
+            try:
+                starttime = _proc_starttime(pid)
+            except (OSError, ValueError, IndexError):
+                starttime = None
+            try:
+                command = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+            except OSError:
+                command = []
+            if (pid <= 1
+                    or info.get("starttime") is None
+                    or starttime != int(info["starttime"])
+                    or str(Path(__file__).resolve()).encode() not in command
                     or str(args.directory.resolve()).encode() not in command):
                 raise SystemExit("Refusing to stop an unrelated process")
             os.kill(pid, signal.SIGTERM)

@@ -3,6 +3,8 @@
 import json
 import os
 import shutil
+import signal
+import stat
 import subprocess
 import sys
 import threading
@@ -11,7 +13,14 @@ from pathlib import Path
 
 import pytest
 
-from core.testing.llm_hosts_tripwire import endpoint_hosts, serve
+import core.testing.llm_hosts_tripwire as tripwire
+from core.testing.llm_hosts_tripwire import (
+    _proc_starttime,
+    _write_file_atomically,
+    endpoint_hosts,
+    main,
+    serve,
+)
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Linux /proc ownership")
 
@@ -194,3 +203,114 @@ def test_second(): attempt()
     assert {r["active_test"].split("::")[-1] for r in rows} == {"test_first", "test_second"}
     assert {r["worker"] for r in rows} == {"gw0", "gw1"}
     assert all(r["owner_pid"] is not None for r in rows)
+
+
+def test_atomic_write_preserves_content_mode_and_cleans_tmp(tmp_path):
+    target = tmp_path / "hosts"
+    target.write_text("before\n")
+    target.chmod(0o604)
+    _write_file_atomically(target, "after\n")
+    assert target.read_text() == "after\n"
+    assert stat.S_IMODE(target.stat().st_mode) == 0o604
+    assert not list(tmp_path.glob("*.raptor-tripwire-tmp"))
+
+
+def test_atomic_write_failure_keeps_original(tmp_path, monkeypatch):
+    # A crash mid-write must never leave a truncated hosts file: the
+    # temp absorbs the failure and the published file stays intact.
+    target = tmp_path / "hosts"
+    target.write_text("before\n")
+
+    def boom(fd):
+        raise OSError("simulated device failure")
+
+    monkeypatch.setattr(os, "fsync", boom)
+    with pytest.raises(OSError, match="simulated device failure"):
+        _write_file_atomically(target, "after\n")
+    assert target.read_text() == "before\n"
+    assert not list(tmp_path.glob("*.raptor-tripwire-tmp"))
+
+
+def test_proc_starttime_matches_own_stat():
+    text = Path(f"/proc/{os.getpid()}/stat").read_text()
+    expected = int(text.rsplit(")", 1)[1].split()[19])
+    assert _proc_starttime(os.getpid()) == expected
+
+
+def _arm_stop(tmp_path, monkeypatch, payload, kill):
+    (tmp_path / "ready.json").write_text(json.dumps(payload))
+    monkeypatch.setattr(os, "kill", kill)
+    monkeypatch.setattr(sys, "argv", [
+        "llm_hosts_tripwire.py", "stop", "--directory", str(tmp_path)])
+
+
+def test_stop_refuses_stale_starttime(tmp_path, monkeypatch):
+    # pid-reuse shape: the recorded pid is alive but its starttime no
+    # longer matches the recorded identity — never signalled.
+    kills = []
+    _arm_stop(tmp_path, monkeypatch, {
+        "pid": os.getpid(),
+        "starttime": _proc_starttime(os.getpid()) + 1,
+    }, lambda pid, sig: kills.append((pid, sig)))
+    with pytest.raises(SystemExit, match="unrelated process"):
+        main()
+    assert kills == []
+
+
+def test_stop_refuses_payload_without_starttime(tmp_path, monkeypatch):
+    kills = []
+    _arm_stop(tmp_path, monkeypatch, {"pid": os.getpid()},
+              lambda pid, sig: kills.append((pid, sig)))
+    with pytest.raises(SystemExit, match="unrelated process"):
+        main()
+    assert kills == []
+
+
+def test_stop_refuses_cmdline_match_alone(tmp_path, monkeypatch):
+    # Even a byte-perfect cmdline never suffices without the starttime
+    # pin (cmdline is self-chosen and survives pid reuse by respawn).
+    module_file = str(Path(tripwire.__file__).resolve())
+    real_read_bytes = Path.read_bytes
+
+    def fake_read_bytes(self):
+        if str(self) == f"/proc/{os.getpid()}/cmdline":
+            return b"\0".join([
+                b"python3", module_file.encode(), b"serve",
+                b"--directory", str(Path(tmp_path).resolve()).encode(), b""])
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", fake_read_bytes)
+    kills = []
+    _arm_stop(tmp_path, monkeypatch, {
+        "pid": os.getpid(),
+        "starttime": _proc_starttime(os.getpid()) + 1,
+    }, lambda pid, sig: kills.append((pid, sig)))
+    with pytest.raises(SystemExit, match="unrelated process"):
+        main()
+    assert kills == []
+
+
+def test_stop_kills_only_verified_identity(tmp_path, monkeypatch):
+    module_file = str(Path(tripwire.__file__).resolve())
+    real_read_bytes = Path.read_bytes
+
+    def fake_read_bytes(self):
+        if str(self) == f"/proc/{os.getpid()}/cmdline":
+            return b"\0".join([
+                b"python3", module_file.encode(), b"serve",
+                b"--directory", str(Path(tmp_path).resolve()).encode(), b""])
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", fake_read_bytes)
+    kills = []
+
+    def fake_kill(pid, sig):
+        kills.append((pid, sig))
+        (tmp_path / "ready.json").unlink()
+
+    _arm_stop(tmp_path, monkeypatch, {
+        "pid": os.getpid(),
+        "starttime": _proc_starttime(os.getpid()),
+    }, fake_kill)
+    main()
+    assert kills == [(os.getpid(), signal.SIGTERM)]
