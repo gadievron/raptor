@@ -2,6 +2,7 @@
 import errno
 import io
 import os
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -18,7 +19,7 @@ def includes(tmp_path, monkeypatch):
     state = SimpleNamespace(path=path, root=tmp_path, payload=payload, primary=None,
                             cleanup=None, reads=[], streams=[], closes=0, fd=None)
 
-    class Reader(io.TextIOWrapper):
+    class Reader(io.BufferedReader):
         def read(self, size=-1):
             data = super().read(size)
             state.reads.append((size, data))
@@ -34,17 +35,17 @@ def includes(tmp_path, monkeypatch):
             if state.cleanup is not None:
                 raise state.cleanup
 
-    def owned_open(candidate, *, errors):
-        assert candidate == path and errors == 'replace'
+    def owned_open(candidate):
+        assert candidate == path
         raw = io.FileIO(candidate, 'r')
         state.fd = raw.fileno()
         info, expected = os.fstat(state.fd), path.stat()
         assert (info.st_dev, info.st_ino) == (expected.st_dev, expected.st_ino)
-        reader = Reader(raw, errors=errors)
+        reader = Reader(raw)
         state.streams.extend([raw, reader])
         return reader
 
-    monkeypatch.setattr(library, 'open', owned_open, raising=False)
+    monkeypatch.setattr(library, 'open_regular_gated', owned_open)
 
     def forbidden(*args, **kwargs):
         pytest.fail('header harvest must not dispatch package, archive or program work')
@@ -58,13 +59,13 @@ def includes(tmp_path, monkeypatch):
     finally:
         for stream in reversed(state.streams):
             if not stream.closed:
-                io.TextIOWrapper.close(stream)
+                io.BufferedReader.close(stream)
         if path.exists():
             assert path.read_bytes() == payload
 
 
 def retired(includes):
-    assert includes.reads == [(library._MAX_SOURCE_READ_BYTES, includes.payload.decode())]
+    assert includes.reads == [(library._MAX_SOURCE_READ_BYTES, includes.payload)]
     assert includes.closes == 1 and all(stream.closed for stream in includes.streams)
     with pytest.raises(OSError) as caught:
         os.fstat(includes.fd)
@@ -110,3 +111,25 @@ def test_harvest_missing_source_remains_empty(includes):
     includes.path.unlink()
     assert includes.run() == set()
     assert not includes.reads and not includes.streams and includes.closes == 0
+
+
+@pytest.mark.skipif(not hasattr(os, 'mkfifo'), reason='requires POSIX FIFOs')
+def test_harvest_refuses_fifo_without_hanging(tmp_path):
+    """A planted FIFO named like a source file is skipped, never read.
+
+    The real (un-monkeypatched) gated open must return instead of
+    blocking on the reader-less FIFO; the harvest runs in a worker
+    thread so a regression fails the join timeout instead of hanging
+    the suite.
+    """
+    (tmp_path / 'good.c').write_text('#include <stdio.h>\n')
+    os.mkfifo(tmp_path / 'trap.c')
+    results: list[set[str]] = []
+    worker = threading.Thread(
+        target=lambda: results.append(library.harvest_system_includes(tmp_path)),
+        daemon=True,
+    )
+    worker.start()
+    worker.join(timeout=5)
+    assert not worker.is_alive(), 'FIFO source file hung the harvest'
+    assert results == [{'stdio.h'}]

@@ -125,9 +125,11 @@ def harvest_system_includes(target_path: Path) -> set[str]:
                     continue
                 fpath = Path(root) / fname
                 try:
-                    with preserving_stream_error(open(fpath, errors="replace")) as fh:
-                        text = fh.read(_MAX_SOURCE_READ_BYTES)
-                except OSError:
+                    with preserving_stream_error(open_regular_gated(fpath)) as fh:
+                        text = fh.read(_MAX_SOURCE_READ_BYTES).decode(
+                            errors="replace",
+                        )
+                except (OSError, ValueError):
                     continue
                 headers.update(_INCLUDE_RE.findall(text))
     except OSError:
