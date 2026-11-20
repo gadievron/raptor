@@ -2182,6 +2182,11 @@
     "count": 12,
     "kind": "literal"
   },
+  "core/sandbox/seccomp.py::_SECCOMP_BLOCK_SYSV_IPC": {
+    "count": 13,
+    "kind": "literal",
+    "note": "Linux SysV IPC syscall family denied for restricted-reads filters — kernel ABI vocabulary, same class as _SECCOMP_BLOCK_ALWAYS"
+  },
   "core/sandbox/summary.py::_ESCAPE_PRIMITIVE_KEYWORDS": {
     "count": 12,
     "kind": "literal",
