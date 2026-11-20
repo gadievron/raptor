@@ -9,6 +9,7 @@ is not installed.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -21,6 +22,7 @@ if __name__ == "__main__":
         sys.path.insert(0, str(_REPO_ROOT))
 
 import core.analysis.gadget_oracle as go  # noqa: E402
+import core.analysis.gadget_oracle_precision as precision  # noqa: E402
 from core.analysis.gadget_oracle import (  # noqa: E402
     POP_SURFACE_METHODS,
     TIER_NO_CHAINS_FOUND,
@@ -42,6 +44,7 @@ from core.analysis.gadget_oracle_precision import (  # noqa: E402
     run_corpus,
     write_report,
 )
+from core.testing.module_bindings import patch_module_attribute  # noqa: E402
 
 if TYPE_CHECKING:
     pass
@@ -701,3 +704,90 @@ class TestSyntheticCorpus:
             # the arm flags would read as a false absence and poison
             # the denominator.
             assert m.regex_surface_total == 0, name
+
+
+# ---------------------------------------------------------------------------
+# Library-clone cache trust gates (no network: _git is stubbed out)
+# ---------------------------------------------------------------------------
+
+
+class TestLibraryCacheTrust:
+    """The clone cache is per-user and must be exclusively owned:
+    a shared or foreign-controlled dir lets another account plant a
+    tree whose HEAD reports the pinned commit while the working tree
+    diverges, poisoning the measurement."""
+
+    @staticmethod
+    def _driver(cache: Path) -> "precision.LibraryCorpusDriver":
+        return precision.LibraryCorpusDriver(
+            cache=cache, roster=(precision.LIBRARY_ROSTER[0],))
+
+    @staticmethod
+    def _spec() -> "precision.LibrarySpec":
+        return precision.LIBRARY_ROSTER[0]
+
+    def test_default_cache_is_per_user(
+            self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+        root = precision.library_cache_dir()
+        assert root == tmp_path / "xdg" / "raptor" / "gadget-corpus"
+        assert precision.LibraryCorpusDriver().cache == root
+
+    def test_group_writable_entry_refused(
+            self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        spec = self._spec()
+        cache = tmp_path / "cache"
+        dest = cache / spec.row
+        dest.mkdir(mode=0o700, parents=True)
+        cache.chmod(0o700)
+        dest.chmod(0o770)
+
+        def _no_git(args: list[str], cwd: Path | None = None) -> str:
+            raise AssertionError("must refuse before any git invocation")
+
+        monkeypatch.setattr(precision, "_git", _no_git)
+        with pytest.raises(RuntimeError, match="group/world write"):
+            self._driver(cache)._ensure_clone(spec)
+
+    def test_foreign_owned_entry_refused(
+            self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        spec = self._spec()
+        cache = tmp_path / "cache"
+        (cache / spec.row).mkdir(mode=0o700, parents=True)
+        cache.chmod(0o700)
+        # Simulate a foreign owner by shifting the module's view of the
+        # current uid (files cannot be chowned away in an unprivileged
+        # test).
+        foreign_uid = os.getuid() + 12345
+        patch_module_attribute(
+            monkeypatch, precision, "os", "getuid", lambda: foreign_uid)
+        monkeypatch.setattr(
+            precision, "_git",
+            lambda args, cwd=None: pytest.fail("refusal must precede git"))
+        with pytest.raises(RuntimeError, match="owned by uid"):
+            self._driver(cache)._ensure_clone(spec)
+
+    def test_symlinked_entry_refused(
+            self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        spec = self._spec()
+        cache = tmp_path / "cache"
+        cache.mkdir(mode=0o700)
+        real = tmp_path / "elsewhere"
+        real.mkdir(mode=0o700)
+        (cache / spec.row).symlink_to(real)
+        monkeypatch.setattr(
+            precision, "_git",
+            lambda args, cwd=None: pytest.fail("refusal must precede git"))
+        with pytest.raises(RuntimeError, match="not a real directory"):
+            self._driver(cache)._ensure_clone(spec)
+
+    def test_owned_private_entry_reaches_commit_check(
+            self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        spec = self._spec()
+        cache = tmp_path / "cache"
+        dest = cache / spec.row
+        dest.mkdir(mode=0o700, parents=True)
+        cache.chmod(0o700)
+        monkeypatch.setattr(
+            precision, "_git", lambda args, cwd=None: spec.commit)
+        assert self._driver(cache)._ensure_clone(spec) == dest

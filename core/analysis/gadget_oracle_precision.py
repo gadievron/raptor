@@ -17,7 +17,7 @@ Two corpus modes (binary-oracle precision precedent):
                  for the exact-match arm plus chain/surface labels.
 
   ``library``    Pinned public clones (tag + commit sha recorded in the
-                 driver; cache under ``/var/tmp/gadget-corpus-cache``,
+                 driver; cached per-user under :func:`library_cache_dir`,
                  never the repo). Ground-truth labels are
                  phpggc-documented gadget chains (public provenance:
                  github.com/ambionics/phpggc, ``gadgetchains/``), plus
@@ -77,9 +77,47 @@ logger = logging.getLogger(__name__)
 
 Mode = Literal["synthetic", "library"]
 
-#: Library-clone cache (driver-owned; NEVER inside the repo — the
-#: no-vendored-third-party-code rule).
-LIBRARY_CACHE = Path("/var/tmp/gadget-corpus-cache")
+def library_cache_dir() -> Path:
+    """Library-clone cache root, resolved at call time:
+    ``$XDG_CACHE_HOME/raptor/gadget-corpus`` (default
+    ``~/.cache/raptor/gadget-corpus``).
+
+    Driver-owned; NEVER inside the repo — the no-vendored-third-party-
+    code rule. Per-user on purpose: the previous fixed location under
+    the world-writable system temp dir let any local account pre-plant
+    clone dirs whose working trees diverge from the pinned commit their
+    HEAD reports, poisoning the measurement.
+    """
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".cache"
+    return base / "raptor" / "gadget-corpus"
+
+
+def _vet_cache_dir(path: Path) -> None:
+    """Refuse a cache entry the current user does not exclusively own.
+
+    ``lstat`` so a planted symlink is seen as itself, never its target.
+    Wrong owner, a symlink, a non-directory, or group/world write bits
+    all raise: unlike a data-file cache we cannot silently treat a
+    foreign directory as a miss and re-clone over it, so the refusal is
+    loud with the same remediation as a wrong-commit clone.
+    """
+    import stat as _stat
+    st = path.lstat()
+    if _stat.S_ISLNK(st.st_mode) or not _stat.S_ISDIR(st.st_mode):
+        raise RuntimeError(
+            f"gadget corpus cache entry {path} is not a real directory "
+            f"— refusing to measure (delete it to re-clone)")
+    if st.st_uid != os.getuid():
+        raise RuntimeError(
+            f"gadget corpus cache entry {path} is owned by uid={st.st_uid}, "
+            f"current uid={os.getuid()} — refusing to measure a tree "
+            f"another account controls (delete it to re-clone)")
+    if st.st_mode & 0o022:
+        raise RuntimeError(
+            f"gadget corpus cache entry {path} has group/world write "
+            f"perms (mode={st.st_mode & 0o777:o}) — refusing to measure "
+            f"a tree other accounts can rewrite (delete it to re-clone)")
 
 
 # ---------------------------------------------------------------------------
@@ -1892,25 +1930,29 @@ def _git(args: list[str], cwd: Path | None = None) -> str:
 
 
 class LibraryCorpusDriver:
-    """Pinned public clones under :data:`LIBRARY_CACHE`. Every clone
-    is verified against its pinned commit sha — a cache dir at the
-    wrong commit is a hard error, never a silent measurement of the
-    wrong tree. Operator-run only (network); never a CI test."""
+    """Pinned public clones under :func:`library_cache_dir`. Every
+    clone is verified against its pinned commit sha — a cache dir at
+    the wrong commit is a hard error, never a silent measurement of
+    the wrong tree. Operator-run only (network); never a CI test."""
 
     name = "library"
     description = ("pinned public clones labeled with phpggc-"
                    "documented chains + zero-surface packages")
     mode: Mode = "library"
 
-    def __init__(self, cache: Path = LIBRARY_CACHE,
+    def __init__(self, cache: Path | None = None,
                  roster: tuple[LibrarySpec, ...] = LIBRARY_ROSTER):
-        self.cache = cache
+        self.cache = cache if cache is not None else library_cache_dir()
         self.roster = roster
 
     def _ensure_clone(self, spec: LibrarySpec) -> Path:
+        if self.cache.exists() or self.cache.is_symlink():
+            _vet_cache_dir(self.cache)
         dest = self.cache / spec.row
-        if not dest.is_dir():
-            self.cache.mkdir(parents=True, exist_ok=True)
+        if dest.exists() or dest.is_symlink():
+            _vet_cache_dir(dest)
+        else:
+            self.cache.mkdir(mode=0o700, parents=True, exist_ok=True)
             logger.info("cloning %s @ %s ...", spec.repo, spec.tag)
             _git(["clone", "--quiet", "--depth", "1", "--branch",
                   spec.tag, spec.repo, str(dest)])
@@ -2025,7 +2067,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 __all__ = [
-    "LIBRARY_CACHE",
     "LIBRARY_ROSTER",
     "REGEX_POP_METHODS",
     "ChainLabel",
@@ -2039,6 +2080,7 @@ __all__ = [
     "SyntheticCorpusDriver",
     "aggregate",
     "cross_tab_rows",
+    "library_cache_dir",
     "main",
     "measure_row",
     "regex_surface_census",
