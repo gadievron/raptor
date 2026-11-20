@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import time
@@ -59,6 +60,14 @@ import core.startup.process_init  # noqa: E402,F401
 
 LEDGER = "results.jsonl"
 SIDECAR = "env-verification.json"
+
+#: GitHub owner / repo path segments (mirrors the package's
+#: github_fetch gate) — the slug is spec-file text interpolated into
+#: an API URL path, so each segment must be a plain identifier.
+_GITHUB_IDENT_RE = re.compile(r"[A-Za-z0-9._-]+")
+#: Full lowercase 40-hex commit sha — the only shape resolve_parent
+#: may return (it flows into fix-pointer artifacts and git argv).
+_HEX_SHA_RE = re.compile(r"[0-9a-f]{40}")
 
 #: Give-up reasons that mean "this entry cannot be dynamically
 #: exercised on this host" — information, never a label downgrade.
@@ -136,25 +145,34 @@ def resolve_parent(spec) -> str:
             capture_output=True, text=True, timeout=30, check=False,
             env=get_safe_git_env(),
         )
+        # Untrusted-clone output: only a full hex sha may come back.
         sha = (proc.stdout or "").strip()
-        if proc.returncode == 0 and len(sha) == 40:
+        if proc.returncode == 0 and _HEX_SHA_RE.fullmatch(sha):
             return sha
     if spec.repo_url.startswith("https://github.com/"):
         from core.http import HttpError
         from core.http.urllib_backend import UrllibClient
 
         slug = spec.repo_url.removesuffix(".git").split("github.com/")[1]
-        url = (f"https://api.github.com/repos/{slug}/commits/"
-               f"{spec.fix_commit}")
-        try:
-            data = UrllibClient(
-                user_agent="raptor-cvefix-envs/0.1"
-            ).get_json(url, timeout=20, max_bytes=2 * 1024 * 1024, retries=0)
-        except HttpError:
-            data = None
-        parents = (data or {}).get("parents") if isinstance(data, dict) else None
-        if parents and isinstance(parents[0], dict) and parents[0].get("sha"):
-            return parents[0]["sha"]
+        owner, sep, name = slug.partition("/")
+        # Spec-file text joins an API URL path: both segments must be
+        # plain identifiers (no further '/', '..', '?', escapes).
+        if (sep and _GITHUB_IDENT_RE.fullmatch(owner)
+                and _GITHUB_IDENT_RE.fullmatch(name)):
+            url = (f"https://api.github.com/repos/{owner}/{name}/commits/"
+                   f"{spec.fix_commit}")
+            try:
+                data = UrllibClient(
+                    user_agent="raptor-cvefix-envs/0.1"
+                ).get_json(url, timeout=20, max_bytes=2 * 1024 * 1024,
+                           retries=0)
+            except HttpError:
+                data = None
+            parents = (data or {}).get("parents") if isinstance(data, dict) else None
+            parent = parents[0].get("sha") if parents and isinstance(parents[0], dict) else None
+            # API JSON is external: gate the returned sha's shape too.
+            if isinstance(parent, str) and _HEX_SHA_RE.fullmatch(parent):
+                return parent
     raise ValueError(
         f"{spec.cve_id}: cannot resolve {spec.fix_commit}^ from the "
         f"local clone or the GitHub API")

@@ -344,3 +344,83 @@ class TestResolveParentChokepoints:
         assert captured["url"].startswith(
             "https://api.github.com/repos/drupal/drupal/commits/")
         assert captured["kwargs"].get("max_bytes"), "response-size cap required"
+
+    @pytest.mark.parametrize("repo_url", [
+        "https://github.com/o/r/../../../orgs/x",
+        "https://github.com/o/r/extra",
+        "https://github.com/onlyowner",
+        "https://github.com/o o/r",
+        "https://github.com/o/r?ref=x",
+        "https://github.com/o%2Fr/r",
+    ])
+    def test_api_fallback_refuses_non_slug_repo_url(
+            self, mod, tmp_path, monkeypatch, repo_url):
+        """repo_url is spec-file text joined into the API URL path:
+        anything that is not exactly identifier/identifier must never
+        reach the network."""
+        from core.http import urllib_backend
+        from core.recall.cvefix_manifest import CvefixSpec
+
+        spec = CvefixSpec.from_dict(
+            dict(_spec_dict(tmp_path), repo_url=repo_url))
+        calls: list = []
+
+        class FakeClient:
+            def __init__(self, *a, **kw):
+                pass
+
+            def get_json(self, url, **kw):
+                calls.append(url)
+                return {"parents": [{"sha": "c" * 40}]}
+
+        monkeypatch.setattr(urllib_backend, "UrllibClient", FakeClient)
+        with pytest.raises(ValueError):
+            mod.resolve_parent(spec)
+        assert calls == []
+
+    @pytest.mark.parametrize("parent", [
+        "not-a-sha", "C" * 40, "c" * 39, "c" * 41,
+        "c" * 40 + "\n", "../refs/heads/main", "", None, 7,
+    ])
+    def test_api_parent_sha_shape_gated(self, mod, tmp_path, monkeypatch,
+                                        parent):
+        """The API response is external JSON — a parent field that is
+        not a full lowercase hex sha is a refusal, not a return."""
+        from core.http import urllib_backend
+        from core.recall.cvefix_manifest import CvefixSpec
+
+        spec = CvefixSpec.from_dict(_spec_dict(tmp_path))
+
+        class FakeClient:
+            def __init__(self, *a, **kw):
+                pass
+
+            def get_json(self, url, **kw):
+                return {"parents": [{"sha": parent}]}
+
+        monkeypatch.setattr(urllib_backend, "UrllibClient", FakeClient)
+        with pytest.raises(ValueError):
+            mod.resolve_parent(spec)
+
+    def test_local_clone_sha_must_be_hex(self, mod, tmp_path, monkeypatch):
+        """rev-parse output from an untrusted clone is gated on shape,
+        not just length."""
+        from core.recall.cvefix_manifest import CvefixSpec
+
+        clone = tmp_path / "clone"
+        (clone / ".git").mkdir(parents=True)
+        spec = CvefixSpec.from_dict(
+            dict(_spec_dict(tmp_path),
+                 repo_url="https://example.org/nogithub",
+                 local_clone=str(clone)))
+
+        def fake_run(argv, **kw):
+            class R:
+                returncode = 0
+                stdout = "Z" * 40
+                stderr = ""
+            return R()
+
+        patch_module_attribute(monkeypatch, mod, "subprocess", "run", fake_run)
+        with pytest.raises(ValueError):
+            mod.resolve_parent(spec)
