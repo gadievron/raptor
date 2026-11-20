@@ -286,9 +286,10 @@ class TrustBindingTest(_LedgerPostureCase):
 
 class HostileLineTest(_LedgerPostureCase):
     """A same-UID line-appender must not be able to block posture
-    recording: the bounded epoch keeps ``int()`` away from Python's
-    int-str conversion limit (ValueError past ~4300 digits) inside the
-    writer's dedup scan."""
+    recording or crash the reader: the bounded epoch keeps ``int()``
+    away from Python's int-str conversion limit (ValueError past
+    ~4300 digits) inside the writer's dedup scan, and a deep-nested
+    facts token's RecursionError stays inside the line parser."""
 
     def test_oversized_epoch_line_cannot_block_recording(self):
         d = self._mk_run("scan_17")
@@ -297,6 +298,20 @@ class HostileLineTest(_LedgerPostureCase):
             f"posture {'9' * 5000} {HIDDEN_FACTS} {d.resolve()}\n"
             f"posture {'9' * 5000} {HIDDEN_FACTS} {'0' * 64} "
             f"{d.resolve()}\n")
+        self.assertTrue(sessions.ledger_record_posture(
+            d, EXPOSED, pid=os.getpid()))
+        self.assertEqual(sessions.ledger_run_posture(d),
+                         (EXPOSED, False))
+
+    def test_deep_nested_facts_line_cannot_block_recording(self):
+        """A facts token of deep-nested JSON drives ``json.loads``
+        into RecursionError, which is NOT a ValueError — it must read
+        as just another malformed line, on the writer's dedup scan and
+        the reader's cross-ledger sweep alike."""
+        d = self._mk_run("scan_18")
+        sessions.ledger_record_posture(d, HIDDEN, pid=os.getpid())
+        self._append_own_ledger(
+            f"posture 100 {'[' * 60000} {'0' * 64} {d.resolve()}\n")
         self.assertTrue(sessions.ledger_record_posture(
             d, EXPOSED, pid=os.getpid()))
         self.assertEqual(sessions.ledger_run_posture(d),

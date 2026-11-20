@@ -2015,7 +2015,15 @@ def _posture_parse(line: str) -> dict | None:
     import json
     try:
         facts = json.loads(m.group(2))
-    except ValueError:
+    except (ValueError, RecursionError):
+        # RecursionError: a hostile facts token of deep-nested JSON
+        # (``[`` repeated tens of thousands of times fits well inside
+        # the ledger size cap) blows the interpreter's recursion limit
+        # inside json.loads. That is just another unparseable token —
+        # it must read as "not a posture line" here, never propagate
+        # into the writer's dedup scan or the reader's best-effort
+        # cross-ledger sweep (``ledger_run_posture`` promises
+        # unreadable ledgers are skipped, never raised).
         return None
     if not isinstance(facts, dict):
         return None
