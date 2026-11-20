@@ -8,6 +8,8 @@ token-bucket deterministically and run in milliseconds.
 
 from __future__ import annotations
 
+import pytest
+
 from core.sandbox import audit_budget
 
 
@@ -641,3 +643,25 @@ def test_summary_record_after_drops():
     s = budget.summary_record()
     assert s["total_records"] == 2
     assert s["dropped_by_category"] == {"network": 3}
+
+
+def test_summary_record_stamps_live_escalation_opt_out(monkeypatch):
+    """A run that suppressed the live escalation banner must say so,
+    so a summary with no banner reads as "opted out", never as "no
+    HIGH-severity denial pattern was seen"."""
+    monkeypatch.setenv("RAPTOR_SANDBOX_LIVE_ESCALATION_DISABLED", "1")
+    budget = audit_budget.AuditBudget(clock=_FakeClock())
+    assert budget.summary_record()["live_escalation_disabled"] is True
+
+
+@pytest.mark.parametrize("value", [None, "", "0", "false "])
+def test_summary_record_omits_stamp_when_escalation_live(monkeypatch, value):
+    """Unset and non-truthy values leave the summary unstamped — the
+    stamp is only ever a positive assertion of suppression."""
+    if value is None:
+        monkeypatch.delenv(
+            "RAPTOR_SANDBOX_LIVE_ESCALATION_DISABLED", raising=False)
+    else:
+        monkeypatch.setenv("RAPTOR_SANDBOX_LIVE_ESCALATION_DISABLED", value)
+    budget = audit_budget.AuditBudget(clock=_FakeClock())
+    assert "live_escalation_disabled" not in budget.summary_record()

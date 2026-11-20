@@ -710,6 +710,15 @@ class AuditBudget:
         }
         if self._pid_marker_tracking_truncated:
             summary["pid_budget_markers_truncated"] = True
+        if live_escalation_disabled():
+            # Honesty stamp (same doctrine as the read-enforcement
+            # markers): the live stderr escalation banner was opted
+            # out via the env flag, so a run with no banner reads as
+            # "suppressed by request", never "no HIGH-severity denial
+            # pattern was seen". Stamped only when set, at the same
+            # point the backends consult the opt-out, so the summary
+            # cannot drift from the behaviour it describes.
+            summary["live_escalation_disabled"] = True
         return summary
 
 
