@@ -161,13 +161,17 @@ def test_cleanup_does_not_signal_when_ownership_cannot_be_verified(monkeypatch, 
 
 
 @pytest.mark.parametrize("name", ["_staged_pidns_selftest", "_mount_ns_functional_selftest"])
-def test_fork_failure_returns_unavailable(monkeypatch, name):
+def test_fork_failure_returns_unknown_not_a_verdict(monkeypatch, name):
+    # A refused fork is transient host pressure, not a kernel capability
+    # verdict: the probe must answer None (unknown) so the caller leaves
+    # the cache empty and the next call re-probes, instead of latching
+    # the whole session into the degraded lanes.
     def exhausted():
         raise OSError(errno.EAGAIN, "fork unavailable")
 
     patch_module_attribute(monkeypatch, probes, 'os', "fork", exhausted)
     monkeypatch.setattr(ctypes, "CDLL", lambda *args, **kwargs: SimpleNamespace(mount=lambda *a: -1))
-    assert getattr(probes, name)() is False
+    assert getattr(probes, name)() is None
 
 
 @pytest.mark.parametrize("name", ["_staged_pidns_selftest", "_mount_ns_functional_selftest"])
@@ -195,7 +199,10 @@ def test_real_stalled_namespace_probe_is_killed_and_reaped(monkeypatch, name):
     monkeypatch.setattr(probes, "_PROBE_CHILD_TIMEOUT_S", 0.1)
     try:
         with wall_deadline(20, code_bound_s=60, what="stalled namespace capability probe"):
-            assert getattr(probes, name)() is False
+            # A timed-out probe is an infrastructure outcome (unknown),
+            # not a kernel refusal — but the child must still be killed
+            # and reaped either way.
+            assert getattr(probes, name)() is None
         assert len(children) == 1
         with pytest.raises(ChildProcessError):
             os.waitpid(children[0], os.WNOHANG)
@@ -208,6 +215,54 @@ def test_real_stalled_namespace_probe_is_killed_and_reaped(monkeypatch, name):
                     os.waitpid(pid, 0)
             except ChildProcessError:
                 pass
+
+
+def test_unknown_net_probe_attempts_lane_without_latching(monkeypatch):
+    # Probe infrastructure failure (None) must not be published as a
+    # capability verdict: the call reports available (the live spawn is
+    # the authoritative test), the cache stays empty, and the NEXT call
+    # re-probes and publishes the definitive verdict.
+    from core.sandbox import state
+
+    monkeypatch.setattr(state, "_net_available_cache", None)
+    verdicts = iter([None, True])
+    calls = []
+
+    def probe():
+        calls.append(True)
+        return next(verdicts)
+
+    monkeypatch.setattr(probes, "_probe_net_available", probe)
+    assert probes.check_net_available() is True
+    assert state._net_available_cache is None
+    assert probes.check_net_available() is True
+    assert state._net_available_cache is True
+    assert len(calls) == 2
+
+
+def test_unknown_mount_probe_attempts_lane_without_latching(monkeypatch):
+    # Same contract for the mount lane: an unknown self-test outcome
+    # neither latches the session mountless nor masks a later
+    # definitive refusal (which caches False exactly as before).
+    from pathlib import Path
+
+    from core.sandbox import state
+
+    def _no_sysctl(self, *a, **kw):
+        raise FileNotFoundError("sysctl absent")
+
+    monkeypatch.setattr(state, "_net_available_cache", True)
+    monkeypatch.setattr(state, "_mount_available_cache", None)
+    monkeypatch.setattr(Path, "read_text", _no_sysctl)
+    monkeypatch.setattr(probes, "_find_sandbox_binary",
+                        lambda b: f"/usr/bin/{b}")
+    verdicts = iter([None, False])
+    monkeypatch.setattr(probes, "_mount_ns_functional_selftest",
+                        lambda: next(verdicts))
+    assert probes.check_mount_available() is True
+    assert state._mount_available_cache is None
+    assert probes.check_mount_available() is False
+    assert state._mount_available_cache is False
 
 
 def test_cleanup_wait_errors_remain_visible(monkeypatch, caplog):

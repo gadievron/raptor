@@ -299,10 +299,16 @@ def _wait_for_probe_child(pid: int, label: str, *,
                     pass
 
 
-def _staged_pidns_selftest() -> bool:
+def _staged_pidns_selftest() -> bool | None:
     """Fork a child that runs the spawn backend's exact two-step
     namespace pattern: ``os.unshare(CLONE_NEWUSER)`` then a SECOND
     ``os.unshare(CLONE_NEWPID)`` with no exec in between.
+
+    Tri-state, like ``_probe_pidns_supervision``: True/False are the
+    child's verdict; None means the probe itself could not run (fork
+    refused under transient process pressure, probe wait failure,
+    signal death) — NOT a capability verdict, and the caller must not
+    cache it as one.
 
     Restricted-userns hosts (Ubuntu's AppArmor transition; GitHub
     runners) allow single-call multi-namespace creation but deny the
@@ -327,8 +333,10 @@ def _staged_pidns_selftest() -> bool:
         try:
             pid = os.fork()
         except OSError as exc:
-            logger.debug("staged PID namespace probe fork failed: %s", exc)
-            return False
+            logger.debug(
+                "staged PID namespace probe fork failed: %s — "
+                "verdict unknown", exc)
+            return None
     if pid == 0:
         try:
             os.unshare(_CLONE_NEWUSER)
@@ -343,9 +351,9 @@ def _staged_pidns_selftest() -> bool:
         os._exit(0)
     status = _wait_for_probe_child(pid, "staged PID namespace")
     if status is None:
-        return False
+        return None
     if not os.WIFEXITED(status):
-        return False
+        return None
     code = os.WEXITSTATUS(status)
     # 190 = the user namespace itself refused; that is the flat CLI
     # probe's case to diagnose (its stderr names the real reason), not
@@ -742,15 +750,33 @@ def check_net_available() -> bool:
 
     available = _probe_net_available()
 
+    if available is None:
+        # The probe infrastructure itself failed (fork refused under
+        # transient process pressure, probe wait failure) — unknown,
+        # NOT a kernel refusal. Don't latch the whole session into the
+        # degraded lanes on a transient: leave the cache empty so the
+        # next call re-probes, and report available so the live spawn
+        # — the authoritative test, with its own retry and degrade
+        # nets — gets attempted.
+        logger.debug(
+            "Sandbox: namespace probe could not run (transient "
+            "infrastructure failure) — verdict unknown, not cached; "
+            "attempting the namespace lane")
+        return True
+
     with state._cache_lock:
         if state._net_available_cache is None:
             state._net_available_cache = available  # type: ignore[assignment]
         return state._net_available_cache  # type: ignore[return-value]
 
 
-def _probe_net_available() -> bool:
+def _probe_net_available() -> bool | None:
     """Run the actual (slow) network-isolation probe. Never touches the
-    cache — ``check_net_available`` owns caching and locking."""
+    cache — ``check_net_available`` owns caching and locking.
+
+    Tri-state: None means the staged self-test's probe infrastructure
+    failed (fork refused under transient pressure) — unknown, not a
+    verdict."""
     try:
         unshare_path = _resolve_sandbox_binary("unshare")
     except FileNotFoundError as e:
@@ -824,7 +850,13 @@ def _probe_net_available() -> bool:
     # the staged refusal as "no namespace backend": backend selection
     # then routes to the same degraded lanes an outright userns denial
     # gets — deny-all TCP via Landlock, floor consent, honest skips.
-    if not _staged_pidns_selftest():
+    staged = _staged_pidns_selftest()
+    if staged is None:
+        # The self-test could not run — an infrastructure failure, not
+        # a kernel verdict. Propagate the unknown so the caller leaves
+        # the cache empty instead of latching the session degraded.
+        return None
+    if not staged:
         logger.debug(
             "Sandbox: staged pid-namespace creation refused "
             "(restricted unprivileged user namespaces) — namespace "
@@ -834,7 +866,7 @@ def _probe_net_available() -> bool:
     return True
 
 
-def _mount_ns_functional_selftest() -> bool:
+def _mount_ns_functional_selftest() -> bool | None:
     """Fork a child, ``unshare(CLONE_NEWUSER|CLONE_NEWNS)`` AND perform a
     real mount inside the new namespace, to verify the kernel permits the
     operations the spawn path actually runs.
@@ -865,6 +897,14 @@ def _mount_ns_functional_selftest() -> bool:
 
     Child is ``os.unshare`` + two pre-resolved ``libc.mount`` calls +
     ``os._exit`` only (libc handle resolved before the fork).
+
+    Tri-state, like ``_staged_pidns_selftest``: True/False are the
+    child's verdict; None means the probe itself could not run (fork
+    refused under transient process pressure, probe wait failure,
+    signal death) — NOT a capability verdict, and the caller must not
+    cache it as one. (A failed libc handle stays False: the spawn path
+    performs its mounts through the same ctypes route, so a host where
+    libc cannot be loaded genuinely cannot run the mount-ns lane.)
     """
     _CLONE_NEWUSER = getattr(os, "CLONE_NEWUSER", 0x10000000)
     _CLONE_NEWNS = getattr(os, "CLONE_NEWNS", 0x00020000)
@@ -884,8 +924,10 @@ def _mount_ns_functional_selftest() -> bool:
         try:
             pid = os.fork()
         except OSError as exc:
-            logger.debug("mount namespace probe fork failed: %s", exc)
-            return False
+            logger.debug(
+                "mount namespace probe fork failed: %s — verdict "
+                "unknown", exc)
+            return None
     if pid == 0:
         try:
             os.unshare(_CLONE_NEWUSER | _CLONE_NEWNS)
@@ -902,8 +944,10 @@ def _mount_ns_functional_selftest() -> bool:
         os._exit(0)
     status = _wait_for_probe_child(pid, "mount namespace")
     if status is None:
-        return False
-    return os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0
+        return None
+    if not os.WIFEXITED(status):
+        return None
+    return os.WEXITSTATUS(status) == 0
 
 
 def check_mount_available() -> bool:
@@ -996,7 +1040,21 @@ def check_mount_available() -> bool:
         # mounts inside the owned namespace (outer seccomp / SELinux /
         # nested userns). If it does, report unavailable so we degrade to
         # Landlock-only rather than dying mid-spawn with empty output.
-        if not _mount_ns_functional_selftest():
+        mount_ns_verdict = _mount_ns_functional_selftest()
+        if mount_ns_verdict is None:
+            # The self-test's probe infrastructure failed (fork refused
+            # under transient process pressure, probe wait failure) —
+            # unknown, NOT a kernel refusal. Don't latch the session's
+            # mount lane degraded on a transient: leave the cache empty
+            # so the next call re-probes, and report available so the
+            # live spawn — the authoritative test, with its mountless
+            # retry net — gets attempted.
+            logger.debug(
+                "Sandbox: mount-namespace probe could not run "
+                "(transient infrastructure failure) — verdict unknown, "
+                "not cached; attempting the mount-namespace lane")
+            return True
+        if not mount_ns_verdict:
             if state.warn_once("_mount_unavailable_warned"):
                 logger.info(
                     "Sandbox: mount-namespace isolation UNAVAILABLE — "

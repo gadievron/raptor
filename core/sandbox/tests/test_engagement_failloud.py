@@ -282,7 +282,7 @@ class TestLayerFunctionalSelfTests:
             _staged_pidns_selftest,
             check_net_available,
         )
-        if not _staged_pidns_selftest():
+        if _staged_pidns_selftest() is False:
             assert check_net_available() is False
         # (On staged-capable hosts the CLI creation probe owns the
         # verdict — True or a host-specific False both legal.)
