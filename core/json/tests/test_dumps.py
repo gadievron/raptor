@@ -344,3 +344,54 @@ class TestIterencodeCanonical:
     def test_lazy_public_export_is_callable(self):
         import core.json as substrate
         assert b''.join(substrate.iterencode_canonical({'a': 1})) == b'{"a":1}'
+
+
+class TestNonFinitePrescanCycles:
+    """The non-finite pre-scan must terminate on self-referential input.
+
+    ``_reject_non_finite_floats`` walks every container before the
+    orjson encode. A cycle in that walk must raise the stdlib's
+    ``Circular reference detected`` — never loop — while shared
+    (non-cyclic) references stay legal, exactly as ``json.dumps``
+    treats them.
+    """
+
+    def test_circular_dict_raises(self) -> None:
+        payload: dict = {}
+        payload['self'] = payload
+        with pytest.raises(ValueError, match='Circular reference'):
+            utils._reject_non_finite_floats(payload)
+
+    def test_circular_list_via_dumps_artifact(self) -> None:
+        payload: list = []
+        payload.append(payload)
+        with pytest.raises(ValueError, match='Circular reference'):
+            dumps_artifact(payload)
+
+    def test_indirect_cycle_through_dict_raises(self) -> None:
+        inner: dict = {}
+        outer = {'inner': inner}
+        inner['outer'] = outer
+        with pytest.raises(ValueError, match='Circular reference'):
+            utils._reject_non_finite_floats([1.0, outer])
+
+    def test_shared_noncyclic_reference_is_legal(self) -> None:
+        shared = {'k': [1.0, 2.0]}
+        utils._reject_non_finite_floats(
+            {'a': shared, 'b': shared, 'c': [shared, shared]})
+
+    def test_nan_behind_shared_reference_still_rejected(self) -> None:
+        shared = [float('nan')]
+        with pytest.raises(ValueError, match='JSON compliant'):
+            utils._reject_non_finite_floats({'a': shared, 'b': shared})
+
+    def test_cycle_after_clean_sibling_still_detected(self) -> None:
+        inner: list = []
+        inner.append(inner)
+        with pytest.raises(ValueError, match='Circular reference'):
+            utils._reject_non_finite_floats({'clean': [1.0], 'dirty': inner})
+
+    def test_shared_reference_roundtrips_via_dumps_artifact(self) -> None:
+        shared = [1, 2]
+        assert json.loads(dumps_artifact({'a': shared, 'b': shared})) == {
+            'a': [1, 2], 'b': [1, 2]}

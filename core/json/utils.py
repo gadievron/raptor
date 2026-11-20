@@ -544,10 +544,24 @@ def _reject_non_finite_floats(data: Any) -> None:
     Values inside containers the encoder stringifies wholesale
     (arbitrary objects via ``default=``) are out of scope on both
     paths — the stdlib encoder never sees them as floats either.
+
+    Self-referential containers raise the stdlib's circular-reference
+    ``ValueError`` here rather than looping: a container re-entered
+    while still on the active descent path would otherwise be re-pushed
+    forever, hanging the save. Tracking is enter/exit (ids leave the
+    active set once a container's children are drained), so shared
+    non-cyclic references — the shapes the stdlib encoder serialises
+    happily — never trip it; only true cycles do, matching the stdlib
+    branch in both directions.
     """
-    stack = [data]
+    active: set[int] = set()
+    _EXIT = object()
+    stack: list[Any] = [data]
     while stack:
         obj = stack.pop()
+        if obj is _EXIT:
+            active.discard(stack.pop())
+            continue
         # bool is an int, never a float — no special-casing needed.
         if isinstance(obj, float):
             if not math.isfinite(obj):
@@ -556,10 +570,17 @@ def _reject_non_finite_floats(data: Any) -> None:
                     f"{obj!r}"
                 )
                 raise ValueError(msg)
-        elif isinstance(obj, dict):
-            stack.extend(obj.keys())
-            stack.extend(obj.values())
-        elif isinstance(obj, (list, tuple, set, frozenset)):
+        elif isinstance(obj, (dict, list, tuple, set, frozenset)):
+            if id(obj) in active:
+                raise ValueError("Circular reference detected")
+            active.add(id(obj))
+            stack.append(id(obj))
+            stack.append(_EXIT)
+            if isinstance(obj, dict):
+                stack.extend(obj.keys())
+                stack.extend(obj.values())
+            else:
+                stack.extend(obj)
             stack.extend(obj)
 
 
