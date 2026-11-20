@@ -54,24 +54,42 @@ _USER_AGENT = "cve-env/0.1 (agentic CVE env builder)"
 _MAX_REDIRECTS = 5
 
 # Credential-bearing request headers that must not follow a redirect to
-# a different host — the Location header is server-chosen, so carrying
-# these across hosts hands the caller's token to whatever host the
-# first server names.
+# a different origin — the Location header is server-chosen, so carrying
+# these across origins hands the caller's token to whatever server the
+# first one names.
 _CREDENTIAL_HEADERS = frozenset({"authorization", "proxy-authorization", "cookie"})
 
+_DEFAULT_PORTS = {"http": 80, "https": 443}
 
-def _crosses_hosts(from_url: str, to_url: str) -> bool:
-    """True when a redirect hop changes hosts.
 
-    Unparseable or hostless URLs count as crossing — when the
-    comparison cannot be made, fail toward dropping credentials.
+def _origin(url: str) -> tuple[str, str, int] | None:
+    """(scheme, hostname, effective port) for ``url``, or None when the
+    hostname is missing or the scheme has no known default port."""
+    parsed = urlparse(url)
+    scheme = parsed.scheme.lower()
+    host = parsed.hostname
+    port = parsed.port
+    if host is None or scheme not in _DEFAULT_PORTS:
+        return None
+    return (scheme, host, port if port is not None else _DEFAULT_PORTS[scheme])
+
+
+def _crosses_origins(from_url: str, to_url: str) -> bool:
+    """True when a redirect hop leaves the credentialed origin.
+
+    Origin is (scheme, hostname, effective port), not hostname alone: a
+    port change is a different trust boundary on the same name, and a
+    same-host https→http hop would replay the token in cleartext.
+    Unparseable, hostless, or unknown-scheme URLs count as crossing —
+    when the comparison cannot be made, fail toward dropping
+    credentials.
     """
     try:
-        from_host = urlparse(from_url).hostname
-        to_host = urlparse(to_url).hostname
+        from_origin = _origin(from_url)
+        to_origin = _origin(to_url)
     except ValueError:
         return True
-    return from_host is None or to_host is None or from_host != to_host
+    return from_origin is None or to_origin is None or from_origin != to_origin
 
 ReasonClass = Literal["ok", "rate_limited", "transport", "auth", "not_found"]
 """Coarse categorization of why a fetch failed (or 'ok' if it succeeded).
@@ -572,8 +590,10 @@ def web_fetch(
     advisory hosts 301 http→https).
 
     Credential-bearing headers (Authorization, Proxy-Authorization,
-    Cookie) are dropped once a hop crosses hosts — the redirect target
-    is server-chosen and must not receive the caller's token.
+    Cookie) are dropped once a hop leaves the origin — scheme, host,
+    or effective-port change, including a same-host https→http
+    downgrade — the redirect target is server-chosen and must not
+    receive the caller's token.
     """
     from urllib.parse import urljoin
 
@@ -600,7 +620,7 @@ def web_fetch(
                 headers=r.headers,
             )
         next_url = urljoin(current_url, location)
-        if headers and _crosses_hosts(current_url, next_url):
+        if headers and _crosses_origins(current_url, next_url):
             headers = {
                 k: v for k, v in headers.items()
                 if k.lower() not in _CREDENTIAL_HEADERS

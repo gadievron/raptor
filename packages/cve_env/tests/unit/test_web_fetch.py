@@ -464,6 +464,48 @@ def test_fetch_same_host_redirect_preserves_credentials() -> None:
     assert fake.calls[1]["headers"] == sent
 
 
+def test_fetch_same_host_port_change_strips_credentials() -> None:
+    """A port change is a different trust boundary even on the same
+    name — whatever listens on :8443 is not the server the token was
+    meant for."""
+    fake = _FakeClient([
+        _resp(status=302,
+              headers={"location": "https://example.com:8443/t"}, body=b""),
+        _resp(status=200, body=b"ok", url="https://example.com:8443/t"),
+    ])
+    r = _fetch(fake, headers={"Authorization": "Bearer tok"})
+    assert r.ok is True
+    assert fake.calls[1]["headers"] is None
+
+
+def test_fetch_https_to_http_downgrade_strips_credentials() -> None:
+    """A same-host https→http hop would replay the token in cleartext;
+    the scheme is part of the origin."""
+    fake = _FakeClient([
+        _resp(status=302,
+              headers={"location": "http://example.com/t"}, body=b""),
+        _resp(status=200, body=b"ok", url="http://example.com/t"),
+    ])
+    r = _fetch(fake, headers={"Authorization": "Bearer tok"})
+    assert r.ok is True
+    assert fake.calls[1]["headers"] is None
+
+
+def test_fetch_explicit_default_port_is_same_origin() -> None:
+    """https://host:443 names the same origin as https://host — an
+    explicit default port must not be treated as a crossing."""
+    fake = _FakeClient([
+        _resp(status=302,
+              headers={"location": "https://example.com:443/moved"},
+              body=b""),
+        _resp(status=200, body=b"ok", url="https://example.com:443/moved"),
+    ])
+    sent = {"Authorization": "Bearer tok"}
+    r = _fetch(fake, headers=sent)
+    assert r.ok is True
+    assert fake.calls[1]["headers"] == sent
+
+
 def test_fetch_credentials_stay_dropped_after_return_hop() -> None:
     """Once a hop crosses hosts the credentials are gone for ALL later
     hops — a bounce back to the original host does not restore them."""
