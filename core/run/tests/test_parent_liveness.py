@@ -206,6 +206,50 @@ class TestTrigger:
                     assert not thread.is_alive()
 
 
+class _Exited(Exception):
+    """Sentinel standing in for ``os._exit`` in guard tests."""
+
+
+class TestGroupLeaderGuard:
+    """``killpg(0, SIGKILL)`` is safe only when the process leads its
+    own group (the start_new_session contract). The action re-verifies
+    that instead of trusting the spawn-path convention."""
+
+    def _run_terminate(
+        self, monkeypatch: pytest.MonkeyPatch, *, pgrp: int,
+    ) -> list[tuple[int, int]]:
+        kills: list[tuple[int, int]] = []
+        patch_module_attribute(
+            monkeypatch, parent_liveness, "os", "getpgrp", lambda: pgrp)
+        patch_module_attribute(
+            monkeypatch, parent_liveness, "os", "killpg",
+            lambda pg, sig: kills.append((pg, sig)))
+
+        def fake_exit(code: int) -> None:
+            raise _Exited(code)
+
+        patch_module_attribute(
+            monkeypatch, parent_liveness, "os", "_exit", fake_exit)
+        with pytest.raises(_Exited):
+            parent_liveness._terminate_group("guard")
+        return kills
+
+    def test_non_leader_refuses_group_kill(self, monkeypatch, capfd):
+        # A watchdog armed without start_new_session shares its group
+        # with the spawner's siblings: the group kill must be refused
+        # and only this process exits.
+        kills = self._run_terminate(monkeypatch, pgrp=os.getpid() + 1)
+        assert kills == []
+        assert "refusing group kill" in capfd.readouterr().err
+
+    def test_group_leader_still_kills_the_group(self, monkeypatch, capfd):
+        # Direction two: the contract-respecting case keeps the full
+        # group kill — grandchildren must not start leaking.
+        kills = self._run_terminate(monkeypatch, pgrp=os.getpid())
+        assert kills == [(0, signal.SIGKILL)]
+        assert "terminating own process group" in capfd.readouterr().err
+
+
 @pytest.mark.linux_native
 @pytest.mark.darwin_native
 class TestParentHardKillE2E:

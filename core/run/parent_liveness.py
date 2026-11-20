@@ -71,21 +71,37 @@ def _terminate_group(label: str) -> None:
     async event, logging handlers may be locked or gone. ``os._exit``
     is the backstop for the (never-observed) case where ``killpg`` on
     our own group does not deliver.
+
+    The ``start_new_session=True`` contract (module docstring) is
+    convention-only, so it is re-verified here instead of trusted:
+    ``killpg(0, ...)`` is safe only when this process LEADS its own
+    group. If a future spawn path arms the watchdog without a new
+    session, the group is shared with the spawner's siblings — then
+    the group kill is refused and only this process exits.
     """
+    group_leader = os.getpgrp() == os.getpid()
     try:
+        suffix = (
+            "terminating own process group"
+            if group_leader
+            else (
+                "not the process-group leader (start_new_session "
+                "contract broken); refusing group kill, exiting alone"
+            )
+        )
         os.write(
             2,
-            (
-                f"raptor: {label}: parent process died; terminating "
-                "own process group\n"
-            ).encode("utf-8", errors="replace"),
+            f"raptor: {label}: parent process died; {suffix}\n".encode(
+                "utf-8", errors="replace",
+            ),
         )
     except OSError:
         pass
-    try:
-        os.killpg(0, signal.SIGKILL)
-    except OSError:
-        pass
+    if group_leader:
+        try:
+            os.killpg(0, signal.SIGKILL)
+        except OSError:
+            pass
     os._exit(1)
 
 
