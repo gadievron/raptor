@@ -9,7 +9,6 @@ snapshot them before every test and restore afterwards as a safety net
 import os
 import shutil
 import tempfile
-import time
 from pathlib import Path
 
 import pytest
@@ -216,9 +215,7 @@ def no_sandbox_consent(monkeypatch, tmp_path):
     path = d / dc._nonce_filename(nonce)
     fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
-        payload = (f"{dc._nonce_digest(nonce)}\n"
-                   f"{dc.MINTED_AT_PREFIX}{time.time():.6f}\n")
-        os.write(fd, payload.encode("ascii"))
+        os.write(fd, dc._consent_payload(nonce).encode("ascii"))
     finally:
         os.close(fd)
     monkeypatch.setenv(dc.NONCE_ENV_VAR, nonce)
@@ -245,9 +242,7 @@ def no_sandbox_consent_subprocess(tmp_path):
     path = d / dc._nonce_filename(nonce)
     fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
-        payload = (f"{dc._nonce_digest(nonce)}\n"
-                   f"{dc.MINTED_AT_PREFIX}{time.time():.6f}\n")
-        os.write(fd, payload.encode("ascii"))
+        os.write(fd, dc._consent_payload(nonce).encode("ascii"))
     finally:
         os.close(fd)
     try:

@@ -3,7 +3,6 @@
 import errno
 import json
 import os
-import time
 from types import ModuleType
 
 import pytest
@@ -37,8 +36,7 @@ def owned(tmp_path, monkeypatch, request):
     consents = tmp_path / 'consents'
     consents.mkdir()
     consent = consents / dc._nonce_filename(nonce)
-    consent.write_text(f'{dc._nonce_digest(nonce)}\n'
-                       f'{dc.MINTED_AT_PREFIX}{time.time():.6f}\n')
+    consent.write_text(dc._consent_payload(nonce))
     consent.chmod(0o600)
     monkeypatch.setattr(dc, '_consents_dir', lambda: consents)
     mint_dir = tmp_path / 'mint'

@@ -23,7 +23,8 @@ def test_partial_writes_produce_valid_complete_digest(tmp_path, monkeypatch, chu
     path = tmp_path / dc._nonce_filename(nonce)
     payload = path.read_bytes()
     digest_line, minted_line, trailer = payload.split(b'\n')
-    assert digest_line == dc._nonce_digest(nonce).encode()
+    assert digest_line == dc._consent_digest(
+        nonce, minted_line.decode('ascii')).encode()
     assert minted_line.startswith(dc.MINTED_AT_PREFIX.encode())
     assert trailer == b''
     assert calls[0] == payload

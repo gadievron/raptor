@@ -417,8 +417,7 @@ class TestNonceFileValidation:
         their meaning."""
         path = d / dc._nonce_filename(nonce)
         body = content if content is not None else (
-            f"{dc._nonce_digest(nonce)}\n"
-            f"{dc.MINTED_AT_PREFIX}{time.time():.6f}")
+            dc._consent_payload(nonce).rstrip("\n"))
         fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
         try:
             os.write(fd, (body + "\n").encode("ascii"))
@@ -520,10 +519,14 @@ class TestNonceFileValidation:
         assert dc.resolve_disable_consent() is None
 
     def _mint_with_minted_at(self, d: Path, minted_at: object) -> Path:
+        # Bind the digest to the custom stamp like a real mint would,
+        # so these tests exercise the TTL checks rather than failing
+        # early at the digest compare.
+        minted_line = f"{dc.MINTED_AT_PREFIX}{minted_at}"
         return self._mint(
             d, self.NONCE,
-            content=(f"{dc._nonce_digest(self.NONCE)}\n"
-                     f"{dc.MINTED_AT_PREFIX}{minted_at}"))
+            content=(f"{dc._consent_digest(self.NONCE, minted_line)}\n"
+                     f"{minted_line}"))
 
     def test_missing_minted_at_refuses(self, consents, monkeypatch):
         """A digest-only file (the pre-minted_at format) grants
@@ -577,6 +580,21 @@ class TestNonceFileValidation:
     def test_malformed_minted_at_refuses(self, consents, monkeypatch,
                                          bad_stamp: str) -> None:
         self._mint_with_minted_at(consents, bad_stamp)
+        monkeypatch.setenv(dc.NONCE_ENV_VAR, self.NONCE)
+        assert dc.resolve_disable_consent() is None
+
+    def test_minted_at_rewrite_without_nonce_refuses(
+            self, consents, monkeypatch) -> None:
+        """THE stamp-refresh extension: the digest binds the nonce to
+        the exact minted_at line, so a same-uid process holding the
+        FILE (not the nonce) cannot rewrite the stamp the TTL trusts.
+        Keep the real digest line, refresh only minted_at — refuse."""
+        path = self._mint_with_minted_at(
+            consents, f"{time.time() - 601.0:.6f}")
+        digest_line = path.read_text().splitlines()[0]
+        path.write_text(f"{digest_line}\n"
+                        f"{dc.MINTED_AT_PREFIX}{time.time():.6f}\n")
+        os.chmod(path, 0o600)
         monkeypatch.setenv(dc.NONCE_ENV_VAR, self.NONCE)
         assert dc.resolve_disable_consent() is None
 

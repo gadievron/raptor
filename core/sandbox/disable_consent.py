@@ -177,8 +177,31 @@ def _consents_dir() -> Path:
 
 
 def _nonce_digest(nonce: str) -> str:
-    """Full SHA-256 hex digest of the nonce string."""
+    """Full SHA-256 hex digest of the nonce string (filename
+    derivation only — the content digest is :func:`_consent_digest`)."""
     return hashlib.sha256(nonce.encode("ascii")).hexdigest()
+
+
+def _consent_digest(nonce: str, minted_line: str) -> str:
+    """Content digest binding the nonce to the exact minted_at line.
+
+    Rewriting ``minted_at`` in place (the one field the TTL authority
+    reads) invalidates the digest unless the writer holds the nonce —
+    a same-uid process with the FILE but not the nonce cannot refresh
+    the stamp to extend the consent's life. The file alone still
+    replays nothing: the digest is one-way, so neither line recovers
+    the presentable env value.
+    """
+    material = f"{nonce}\n{minted_line}".encode("utf-8")
+    return hashlib.sha256(material).hexdigest()
+
+
+def _consent_payload(nonce: str, minted_at: float | None = None) -> str:
+    """Canonical consent-file content for a nonce: the bound digest
+    line, then the minted_at line, newline-terminated."""
+    stamp = time.time() if minted_at is None else minted_at
+    minted_line = f"{MINTED_AT_PREFIX}{stamp:.6f}"
+    return f"{_consent_digest(nonce, minted_line)}\n{minted_line}\n"
 
 
 def _nonce_filename(nonce: str) -> str:
@@ -204,8 +227,10 @@ def _nonce_file_consents(path: Path, nonce: str) -> bool:
     consent), regular file, owned by the current euid, no group/other
     permission bits, bounded size, fresh mtime (an additional cap —
     see below), a fresh in-content ``minted_at`` stamp, and a digest
-    line equal to the full SHA-256 digest of the presented nonce
-    (constant-time compare). The TTL authority is the ``minted_at``
+    line equal to the SHA-256 digest binding the presented nonce to
+    that exact ``minted_at`` line (constant-time compare; see
+    :func:`_consent_digest` — an in-place stamp rewrite without the
+    nonce breaks the digest). The TTL authority is the ``minted_at``
     value INSIDE the file content: mtime can be refreshed with
     utimensat(2) by any same-uid process without holding the nonce,
     so it only ever tightens (a stale or future mtime still refuses),
@@ -255,9 +280,11 @@ def _nonce_file_consents(path: Path, nonce: str) -> bool:
                  for line in data.decode("ascii", errors="replace")
                  .splitlines()]
         digest_line = lines[0] if lines else ""
+        minted_line: str | None = None
         minted_at: float | None = None
         for line in lines[1:]:
             if line.startswith(MINTED_AT_PREFIX):
+                minted_line = line
                 try:
                     minted_at = float(line[len(MINTED_AT_PREFIX):])
                 except ValueError:
@@ -265,7 +292,8 @@ def _nonce_file_consents(path: Path, nonce: str) -> bool:
                 break
         # No parseable mint time → no consent (fail closed): the TTL
         # cannot be enforced from metadata alone (see docstring).
-        if minted_at is None or not math.isfinite(minted_at):
+        if (minted_line is None or minted_at is None
+                or not math.isfinite(minted_at)):
             return False
         content_age = now - minted_at
         if content_age > NONCE_FILE_TTL_S:
@@ -274,7 +302,11 @@ def _nonce_file_consents(path: Path, nonce: str) -> bool:
             # Future-dated mint beyond the skew allowance is tamper
             # evidence (a pre-dated file trying to outlive the TTL).
             return False
-        return hmac.compare_digest(digest_line, _nonce_digest(nonce))
+        # The digest binds the nonce to the exact (stripped) minted_at
+        # line, so the stamp the TTL just trusted is the stamp the
+        # nonce holder wrote.
+        return hmac.compare_digest(
+            digest_line, _consent_digest(nonce, minted_line))
     except OSError:
         return False
     except BaseException:
@@ -358,9 +390,7 @@ def _mint_nonce(consents_dir: Path | None = None) -> str:
     )
     write_failed = False
     try:
-        payload = (f"{_nonce_digest(nonce)}\n"
-                   f"{MINTED_AT_PREFIX}{time.time():.6f}\n")
-        remaining = memoryview(payload.encode("ascii"))
+        remaining = memoryview(_consent_payload(nonce).encode("ascii"))
         while remaining:
             written = os.write(fd, remaining)
             if written <= 0:
