@@ -3848,6 +3848,20 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         if _nproc_budget > 0:
             _host_nproc_cap = _derive_host_nproc_cap(_nproc_budget)
 
+    # SysV IPC deny rides the FILESYSTEM-wall engagement, not just the
+    # restrict_reads posture: a composed write set (truthy
+    # writable_paths — the empty-list shape is exclude_tmp_baseline
+    # with no output, where Landlock leaves fs semantics untouched) or
+    # a read allowlist means the run promises filesystem confinement,
+    # and same-UID SysV shm carries no path for Landlock to evaluate —
+    # shmat is a cross-process write primitive straight through the
+    # write wall on the shared host IPC namespace. Wall-less lanes
+    # (no-policy contexts, profile "none") keep their filter
+    # unchanged. The ns lanes don't need the key: they unshare
+    # CLONE_NEWIPC unconditionally (_spawn.py).
+    _seccomp_deny_sysv = bool(
+        writable_paths or _preexec_readable is not None)
+
     _preexec_build_kwargs: dict[str, Any] = dict(
         writable_paths=writable_paths,
         allowed_tcp_ports=allowed_tcp_ports,
@@ -3866,6 +3880,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         # (The frida profile keeps memfd_create — consented
         # instrumentation; see _make_seccomp_preexec's carve-out.)
         seccomp_deny_fd_exec=bool(restrict_reads),
+        seccomp_deny_sysv_ipc=_seccomp_deny_sysv,
     )
     # Plain-subprocess preexec with the namespace-creation deny rules
     # (unshare/clone CLONE_NEW*, setns; clone3→ENOSYS). The fork
@@ -8028,6 +8043,13 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                         # preexec carried for this restrict_reads
                         # posture (same restrict_reads key).
                         seccomp_deny_fd_exec=bool(restrict_reads),
+                        # Same no-shed rule for the SysV IPC deny:
+                        # construction-time key, extended if the
+                        # per-call demoted write set engages a wall
+                        # the construction-time one didn't.
+                        seccomp_deny_sysv_ipc=(
+                            _seccomp_deny_sysv
+                            or bool(_demoted_call_writable)),
                     )
                     if existing_preexec:
                         def _dem_combined(_ep=existing_preexec,
@@ -8214,6 +8236,14 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                 # child the memfd-exec primitive the
                                 # enforcement run refuses.
                                 deny_fd_exec=bool(restrict_reads),
+                                # Same no-shed rule as the demoted
+                                # rebuild: the construction-time SysV
+                                # key survives the audit branch, and
+                                # the branch's own effective write set
+                                # (_wp — demoted or construction-time
+                                # plus /tmp baseline) extends it.
+                                deny_sysv_ipc=(_seccomp_deny_sysv
+                                               or bool(_wp)),
                             ) if seccomp_profile else None
                             _audit_run_dir_la = (
                                 audit_run_dir or output

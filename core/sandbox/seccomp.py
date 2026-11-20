@@ -286,18 +286,22 @@ _SECCOMP_BLOCK_UNLESS_DEBUG = (
     "process_vm_writev",
 )
 
-# SysV IPC family — denied for restricted-reads (untrusted / strict)
-# children, keyed on the same posture flag as deny_fd_exec (every
-# builder call site threads that flag from the restrict_reads
-# contract). On the namespace lanes the IPC namespace already
-# isolates shm/sem/msg objects; the Landlock-only lanes (the
-# degraded-waiver untrusted floor) share the HOST IPC namespace,
-# where same-UID SysV objects carry no path for Landlock to evaluate
-# — a sandboxed child can shmget/shmat another host process's
-# shared-memory segments (read AND write) and reach its message
-# queues/semaphores. Nothing in the sandboxed tool population uses
-# SysV IPC (POSIX shm is open()-based and Landlock-governed), so the
-# deny installs unconditionally for the posture: an IPC-namespaced
+# SysV IPC family — denied whenever the filter confines the child's
+# filesystem (deny_sysv_ipc, threaded by context.py from the
+# Landlock fs-wall engagement) or the child is restricted-reads
+# (deny_fd_exec, the untrusted/strict posture). On the namespace
+# lanes the IPC namespace already isolates shm/sem/msg objects; the
+# Landlock-only lanes share the HOST IPC namespace, where same-UID
+# SysV objects carry no path for Landlock to evaluate — a sandboxed
+# child can shmget/shmat another host process's shared-memory
+# segments (read AND write) and reach its message queues/semaphores,
+# a write primitive that walks straight through the Landlock write
+# wall. So the deny keys on the write wall itself, not just the read
+# posture: any lane promising "writes confined to these paths" gets
+# it, trusted read-everywhere lanes included (macOS parity — seatbelt
+# denies ipc-sysv* on every hardened-profile build). Nothing in the
+# sandboxed tool population uses SysV IPC (POSIX shm is open()-based
+# and Landlock-governed), so an IPC-namespaced or wall-confined
 # child loses nothing it should have. The legacy `ipc` multiplexer
 # rides along — on arches that kept it (s390x) it wraps the whole
 # family in one syscall whose real arguments live in user memory;
@@ -736,7 +740,8 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                           allow_unix_sockets: bool = False,
                           unix_scope_export_sock=None,
                           block_ns_creation: bool = False,
-                          deny_fd_exec: bool = False):
+                          deny_fd_exec: bool = False,
+                          deny_sysv_ipc: bool = False):
     """Create a preexec_fn that installs the seccomp filter for `profile`.
 
     Runs POST-fork in the child. Same fork-safety rules as Landlock: capture
@@ -830,14 +835,23 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
     exec scoping (O_TMPFILE, unlinked files, non-allowlisted trees)
     is Landlock's job — see landlock.py's EXECUTE handling.
 
-    ``deny_fd_exec=True`` ALSO keys the SysV IPC family deny
+    ``deny_sysv_ipc=True`` keys the SysV IPC family deny
     (_SECCOMP_BLOCK_SYSV_IPC): shm*/msg*/sem* plus the legacy ``ipc``
-    multiplexer get EPERM for the same restricted-reads (untrusted /
-    strict) population whose Landlock-only spawns share the host IPC
-    namespace. hard_deny under audit mode too — cross-process
-    shared-memory access against same-UID host processes is an escape
-    primitive, not an observable. Trusted read-everywhere lanes keep
-    a byte-identical filter, exactly like the fileless-exec arms.
+    multiplexer get EPERM. ``deny_fd_exec=True`` implies it (the
+    restricted-reads population is a strict subset of the confined
+    one), but the flag is independent because the keying differs:
+    context.py threads ``deny_sysv_ipc`` from the Landlock
+    FILESYSTEM-WALL engagement, so a TRUSTED read-everywhere lane
+    whose writes are confined (target/output write wall) also loses
+    SysV IPC — same-UID shm segments carry no path for Landlock to
+    evaluate, so shmat is a write primitive that walks straight
+    through the write wall. Only wall-less lanes (network-only
+    postures, profile "none", bare rlimit runs) keep a byte-identical
+    filter; the fileless-exec arms above keep their own byte-identical
+    promise for every ``deny_fd_exec=False`` build. hard_deny under
+    audit mode too — cross-process shared-memory access against
+    same-UID host processes is an escape primitive, not an
+    observable.
 
     FRIDA-PROFILE CARVE-OUT (threat model, stated): under
     ``profile == "frida"`` the memfd_create arm is NOT installed; the
@@ -1064,14 +1078,14 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
     deny_memfd_create = deny_fd_exec and profile not in ("frida", "chromium")
     memfd_create_num = _resolve("memfd_create") if deny_memfd_create else -1
     execveat_num = _resolve("execveat") if deny_fd_exec else -1
-    # SysV IPC deny rides the same restricted-reads posture key as the
-    # fileless-exec deny (see _SECCOMP_BLOCK_SYSV_IPC): deny_fd_exec
-    # is threaded from the untrusted/strict restrict_reads contract at
-    # every call site, and that contract is exactly the population
-    # whose Landlock-only spawns share the host IPC namespace.
+    # SysV IPC deny keys on filesystem confinement (deny_sysv_ipc,
+    # threaded from the Landlock fs-wall engagement by context.py) OR
+    # the restricted-reads posture (deny_fd_exec — kept as a key so a
+    # degraded untrusted lane whose wall collapsed still carries the
+    # deny). See _SECCOMP_BLOCK_SYSV_IPC for the full rationale.
     sysv_ipc_syscalls: list[tuple[str, int]] = (
         [(name, _resolve(name)) for name in _SECCOMP_BLOCK_SYSV_IPC]
-        if deny_fd_exec else []
+        if (deny_fd_exec or deny_sysv_ipc) else []
     )
 
     # socketpair(AF_UNIX, SOCK_DGRAM) is denied exactly when the
@@ -1403,9 +1417,10 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                                      b"refusing to exec without filter\n")
                         os._exit(126)
 
-                # SysV IPC family — restricted-reads postures only
-                # (same deny_fd_exec posture key; see
-                # _SECCOMP_BLOCK_SYSV_IPC). hard_deny: cross-process
+                # SysV IPC family — filesystem-confined and
+                # restricted-reads postures (deny_sysv_ipc /
+                # deny_fd_exec; see _SECCOMP_BLOCK_SYSV_IPC).
+                # hard_deny: cross-process
                 # shared-memory / message-queue / semaphore access
                 # against the host IPC namespace is an escape
                 # primitive, never observable-then-harmless under

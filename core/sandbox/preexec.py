@@ -221,7 +221,8 @@ def _make_preexec_fn(limits: dict, writable_paths: list | None = None,
                      host_nproc_cap: int | None = None,
                      reaper_cell: dict | None = None,
                      seccomp_block_ns_creation: bool = False,
-                     seccomp_deny_fd_exec: bool = False):
+                     seccomp_deny_fd_exec: bool = False,
+                     seccomp_deny_sysv_ipc: bool = False):
     """Create a preexec_fn that sets resource limits, Landlock, and seccomp.
 
     Resource limits (rlimit) apply for memory / CPU / file-size.
@@ -299,6 +300,16 @@ def _make_preexec_fn(limits: dict, writable_paths: list | None = None,
     on-filesystem exec to the read allowlist + writable grants, and
     seccomp refuses the anonymous-inode spellings that Landlock's
     SB_NOUSER exemption can never see.
+
+    `seccomp_deny_sysv_ipc=True` adds the SysV IPC family deny
+    (shm*/msg*/sem* + the legacy `ipc` multiplexer — see seccomp.py's
+    deny_sysv_ipc docstring). Threaded by context.py from the Landlock
+    FILESYSTEM-wall engagement, not just restrict_reads: same-UID SysV
+    shm carries no path for Landlock to evaluate, so on the shared
+    host IPC namespace it is a cross-process write primitive the write
+    wall cannot see. `seccomp_deny_fd_exec=True` implies the same deny
+    inside the seccomp builder (degraded untrusted lanes keep it even
+    if the wall collapsed).
     """
     landlock_fn = None
     # `readable_paths is not None` (not truthiness): an empty list means
@@ -336,7 +347,8 @@ def _make_preexec_fn(limits: dict, writable_paths: list | None = None,
     seccomp_fn = (
         _make_seccomp_preexec(seccomp_profile, block_udp=seccomp_block_udp,
                               block_ns_creation=seccomp_block_ns_creation,
-                              deny_fd_exec=seccomp_deny_fd_exec)
+                              deny_fd_exec=seccomp_deny_fd_exec,
+                              deny_sysv_ipc=seccomp_deny_sysv_ipc)
         if seccomp_profile else None
     )
 

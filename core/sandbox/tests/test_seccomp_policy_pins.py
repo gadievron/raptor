@@ -533,6 +533,44 @@ def test_sysv_ipc_family_denied_for_restricted_reads(
 
 
 @requires_libseccomp
+def test_sysv_ipc_denied_independently_of_fd_exec(
+        exit_sentinel: None) -> None:
+    """deny_sysv_ipc keys the family deny on its own: context.py
+    threads it from the Landlock filesystem-wall engagement, so a
+    TRUSTED read-everywhere lane under a write wall gets the SysV deny
+    WITHOUT the fileless-exec arms — whose byte-identical promise for
+    deny_fd_exec=False builds must survive the new key. The deny stays
+    hard EPERM under audit mode exactly like the posture-keyed
+    spelling."""
+    eperm = sc._SCMP_ACT_ERRNO(1)
+    h = _harness("full", deny_sysv_ipc=True)
+    h.fn()
+    resolved = dict(_cell(h.fn, "sysv_ipc_syscalls"))
+    assert set(resolved) == set(sc._SECCOMP_BLOCK_SYSV_IPC)
+    covered = [name for name, num in resolved.items() if num >= 0]
+    assert covered, "no SysV IPC syscall resolves on this arch"
+    for name in covered:
+        rules = [r for r in h.lib.rules
+                 if r.num == resolved[name] and not r.args]
+        assert rules, f"no wholesale deny rule for {name}"
+        assert all(r.action == eperm for r in rules), name
+    # The fileless-exec arms stay un-built on this trusted shape:
+    # neither memfd_create nor execveat is even resolved.
+    assert _cell(h.fn, "memfd_create_num") == -1
+    assert _cell(h.fn, "execveat_num") == -1
+
+    # Audit mode: hard-denied, same escape-primitive treatment.
+    h = _harness("full", deny_sysv_ipc=True, audit_mode=True)
+    h.fn()
+    resolved = dict(_cell(h.fn, "sysv_ipc_syscalls"))
+    for name, num in resolved.items():
+        if num < 0:
+            continue
+        assert any(r.num == num and not r.args and r.action == eperm
+                   for r in h.lib.rules), name
+
+
+@requires_libseccomp
 def test_clone_untraced_stays_hard_denied_under_audit(
         exit_sentinel: None) -> None:
     """CLONE_UNTRACED exists to hide a clone from the attached ptrace
