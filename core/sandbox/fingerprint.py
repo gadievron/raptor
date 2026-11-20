@@ -816,7 +816,7 @@ def apply_overlay(persona: Persona, root_prefix: str = "") -> None:
     """
     # Use the same _mount wrapper as mount_ns.py to keep OSError
     # semantics identical across the module boundary.
-    from .mount_ns import _mount, MS_BIND
+    from .mount_ns import _mount, _ro_remount_flags, MS_BIND
 
     # /sys/devices/system/cpu directory LISTING: masking online/
     # possible alone left readdir showing the host's real cpuN
@@ -904,6 +904,13 @@ def apply_overlay(persona: Persona, root_prefix: str = "") -> None:
             continue
         try:
             _mount(source, inside, None, MS_BIND)
+            # A plain bind stays WRITABLE straight through to the
+            # host-side persona source file: a sandboxed child could
+            # edit the overlay (and any staging the source shares)
+            # via /proc/cpuinfo etc. Remount read-only, preserving
+            # locked flags, same two-step as every ro bind in
+            # mount_ns.
+            _mount(source, inside, None, _ro_remount_flags(inside))
         except OSError as e:
             if persona.strict:
                 raise OSError(

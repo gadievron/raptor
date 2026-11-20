@@ -205,6 +205,55 @@ def test_apply_overlay_strict_bind_failure_raises(tmp_path, monkeypatch):
         fp.apply_overlay(persona, root_prefix=str(tmp_path / "root"))
 
 
+def test_apply_overlay_binds_are_remounted_read_only(tmp_path, monkeypatch):
+    """Every persona file bind gets the two-step bind + remount-ro: a
+    plain bind stays writable straight through to the host-side persona
+    source file, so a sandboxed child could edit the overlay via
+    /proc/cpuinfo etc."""
+    from core.sandbox import fingerprint as fp
+    from core.sandbox import mount_ns as mns
+    src = tmp_path / "cpuinfo"
+    src.write_text("persona-cpuinfo")
+    proc = tmp_path / "root" / "proc"
+    proc.mkdir(parents=True)
+    (proc / "cpuinfo").write_text("host")
+    calls = []
+    monkeypatch.setattr(mns, "_mount", lambda *a: calls.append(a))
+    persona = fp.Persona(files={"/proc/cpuinfo": str(src)}, cpu_count=2)
+    fp.apply_overlay(persona, root_prefix=str(tmp_path / "root"))
+    inside = str(proc / "cpuinfo")
+    assert calls[0] == (str(src), inside, None, mns.MS_BIND)
+    assert len(calls) == 2, "bind was not followed by a remount"
+    _src, _tgt, _fstype, _flags = calls[1]
+    assert (_src, _tgt, _fstype) == (str(src), inside, None)
+    assert _flags & mns.MS_RDONLY, "remount pass is not read-only"
+    assert _flags & mns.MS_REMOUNT
+    assert _flags & mns.MS_BIND
+
+
+def test_apply_overlay_strict_remount_failure_raises(tmp_path, monkeypatch):
+    """A strict persona whose bind succeeded but whose read-only
+    remount failed is NOT sanitised-as-requested (the overlay is
+    writable) — fail closed like any other strict overlay failure."""
+    from core.sandbox import fingerprint as fp
+    from core.sandbox import mount_ns as mns
+    src = tmp_path / "cpuinfo"
+    src.write_text("persona-cpuinfo")
+    proc = tmp_path / "root" / "proc"
+    proc.mkdir(parents=True)
+    (proc / "cpuinfo").write_text("host")
+
+    def _remount_fails(source, target, fstype, flags, *a):
+        if flags & mns.MS_REMOUNT:
+            raise OSError(1, "Operation not permitted")
+
+    monkeypatch.setattr(mns, "_mount", _remount_fails)
+    persona = fp.Persona(files={"/proc/cpuinfo": str(src)},
+                         cpu_count=2, strict=True)
+    with pytest.raises(OSError, match="require_sanitisation"):
+        fp.apply_overlay(persona, root_prefix=str(tmp_path / "root"))
+
+
 def test_apply_overlay_nonstrict_keeps_partial_coverage(tmp_path):
     """The default posture is unchanged: missing targets skip with a
     debug log (partial coverage beats none)."""
