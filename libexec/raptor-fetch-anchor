@@ -23,6 +23,7 @@ agree on the path. The URL/hostname arrive as argv DATA.
 crash-analysis agent's instruction: may-ask-gated, non-interactive
 fallback records the denial without extending).
 """
+import re
 import sys
 from pathlib import Path
 
@@ -45,8 +46,19 @@ import core.startup.process_init  # noqa: E402,F401
 from core.domains import domain_boundary  # noqa: E402
 
 
+# Same token gate as the enforcing hook (webfetch-domain-allowlist.py,
+# _SAFE_SESSION_RE): the launcher exports a bare pid, "default" covers
+# runs outside the launcher. Anything else — path separators, dots-only
+# traversal tokens, control bytes — must never reach the filename.
+_SAFE_SESSION_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
 def _anchor_path() -> Path:
     session = os.environ.get("RAPTOR_SESSION_PID", "").strip() or "default"
+    if not _SAFE_SESSION_RE.match(session) or session in (".", ".."):
+        print("raptor-fetch-anchor: invalid RAPTOR_SESSION_PID; refusing "
+              "to resolve the anchor path", file=sys.stderr)
+        raise SystemExit(1)
     root = Path(__file__).resolve().parents[1]
     return root / ".claude" / "run" / f"crash-report-fetcher-{session}.anchor"
 

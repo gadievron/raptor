@@ -57,3 +57,34 @@ def test_psl_failure_does_not_modify_anchor(append_host, error):
     with patch("core.domains.public_suffix.load_suffix_rules", side_effect=error):
         assert append("cdn.example.com") == 1
     assert anchor.read_bytes() == before
+
+
+@pytest.fixture
+def anchor_path(monkeypatch):
+    monkeypatch.setenv("_RAPTOR_TRUSTED", "1")
+    return runpy.run_path(str(_SCRIPT))["_anchor_path"]
+
+
+@pytest.mark.parametrize("session", [
+    "../../../etc", "a/b", "sess\nion", "sess\x1bion", ".", "..",
+    "{session}", "a b",
+])
+def test_malformed_session_token_refused(anchor_path, monkeypatch, session):
+    # The token is interpolated into the anchor FILENAME the enforcing
+    # hook resolves from the same env: anything outside the hook's
+    # charset gate must refuse, never produce a path.
+    monkeypatch.setenv("RAPTOR_SESSION_PID", session)
+    with pytest.raises(SystemExit) as exc:
+        anchor_path()
+    assert exc.value.code == 1
+
+
+@pytest.mark.parametrize(("session", "token"), [
+    ("12345", "12345"),
+    ("", "default"),
+    ("default", "default"),
+])
+def test_valid_session_token_resolves(anchor_path, monkeypatch, session, token):
+    monkeypatch.setenv("RAPTOR_SESSION_PID", session)
+    path = anchor_path()
+    assert path.name == f"crash-report-fetcher-{token}.anchor"
