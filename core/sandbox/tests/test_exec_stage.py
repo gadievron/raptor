@@ -136,10 +136,57 @@ class TestSymlinksNeverStaged:
         with executable_stage(link) as staged:
             assert staged == link
 
+    def test_intermediate_symlink_dir_not_staged(self, tmp_path):
+        """The lens shape: callers pass target-repo build paths, so a
+        planted DIRECTORY link (``build -> <elsewhere>``) is as
+        attacker-reachable as a linked leaf — the parent-side copy
+        would re-expose, executable, a file the child could not
+        read. Any symlink component means no staging."""
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        secret = outside / "harness"
+        secret.write_bytes(b"not for the child")
+        secret.chmod(0o444)
+        build = tmp_path / "build"
+        build.symlink_to(outside)
+        linked = build / "harness"
+        with executable_stage(linked) as staged:
+            assert staged == linked, "intermediate-link artifact staged"
+
     def test_source_swapped_to_symlink_refused_by_open(self, tmp_path,
                                                        monkeypatch):
-        """A link raced in AFTER the lstat gate is refused by the
-        O_NOFOLLOW source open instead of being followed."""
+        """A link raced in AFTER the gates is refused loudly by the
+        symlink-refusing re-walk instead of being followed."""
+        from core.sandbox import exec_stage
+
+        artifact = tmp_path / "app"
+        artifact.write_bytes(b"bytes")
+        artifact.chmod(0o444)
+        secret = tmp_path / "secret"
+        secret.write_bytes(b"not for the child")
+
+        real_realpath = os.path.realpath
+
+        def _realpath_then_swap(path, **kwargs):
+            resolved = real_realpath(path, **kwargs)
+            if Path(path) == artifact:
+                # The check saw a clean path; the swap lands after it.
+                artifact.unlink()
+                artifact.symlink_to(secret)
+                monkeypatch.setattr(
+                    exec_stage.os.path, "realpath", real_realpath)
+            return resolved
+
+        monkeypatch.setattr(
+            exec_stage.os.path, "realpath", _realpath_then_swap)
+        with pytest.raises(OSError):
+            with executable_stage(artifact):
+                pytest.fail("swapped symlink source was staged")
+
+    def test_source_swapped_during_gate_not_staged(self, tmp_path,
+                                                   monkeypatch):
+        """A link raced in during the lstat gate itself lands in the
+        stable-shape check and passes through unstaged."""
         from core.sandbox import exec_stage
 
         artifact = tmp_path / "app"
@@ -159,6 +206,34 @@ class TestSymlinksNeverStaged:
             return st
 
         monkeypatch.setattr(exec_stage.os, "lstat", _lstat_then_swap)
-        with pytest.raises(OSError):
+        with executable_stage(artifact) as staged:
+            assert staged == artifact, "swapped symlink source was staged"
+
+    def test_inode_swap_after_gate_refused(self, tmp_path, monkeypatch):
+        """The copy must read exactly the inode the gate cleared: a
+        same-path different-inode swap after the gate raises ESTALE."""
+        import errno
+
+        from core.sandbox import exec_stage
+
+        artifact = tmp_path / "app"
+        artifact.write_bytes(b"bytes")
+        artifact.chmod(0o444)
+        other = tmp_path / "other"
+        other.write_bytes(b"not for the child")
+        other.chmod(0o444)
+
+        real_lstat = os.lstat
+
+        def _lstat_other(path, *args, **kwargs):
+            if Path(path) == artifact:
+                # The gate sees a different inode than the path opens —
+                # the deterministic stand-in for a post-gate swap.
+                return real_lstat(other, *args, **kwargs)
+            return real_lstat(path, *args, **kwargs)
+
+        monkeypatch.setattr(exec_stage.os, "lstat", _lstat_other)
+        with pytest.raises(OSError) as ei:
             with executable_stage(artifact):
-                pytest.fail("swapped symlink source was staged")
+                pytest.fail("inode-swapped source was staged")
+        assert ei.value.errno == errno.ESTALE
