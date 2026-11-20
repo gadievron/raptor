@@ -2377,6 +2377,14 @@ def run_compiler_analyzer_sweep(
                         text=True,
                         timeout=_COMPILE_TIMEOUT_S,
                         caller_label="audit-compiler-sweep",
+                        # Bound the capture itself, not just the slice
+                        # below — -E output over a hostile repo is
+                        # otherwise held unbounded in memory before
+                        # truncation. 4x+4 bytes: UTF-8 spends at most
+                        # 4 bytes per char, so a hit ceiling still
+                        # decodes to > _MAX_PP_TEXT_BYTES chars and the
+                        # witness's oversize check stays fail-closed.
+                        max_capture_bytes=4 * _MAX_PP_TEXT_BYTES + 4,
                     )
                     if proc.returncode < 0:
                         raise _AnalyzerSignalKilled(-proc.returncode)

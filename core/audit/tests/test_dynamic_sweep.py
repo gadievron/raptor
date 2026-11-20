@@ -367,6 +367,32 @@ class TestHarnessContainment:
         assert "PYTHONPATH" not in (seen["kwargs"].get("env") or {})
         assert seen["kwargs"]["target"] == str(tmp_path)
 
+    def test_harness_capture_is_bounded(self, tmp_path):
+        """Every run_untrusted call carries the per-stream capture
+        ceiling, so a spewing harness cannot pin unbounded output in
+        memory before the short result slices apply."""
+        import time
+        from unittest import mock
+
+        from core.audit.dynamic_sweep import (
+            _MAX_CAPTURE_BYTES,
+            _run_c_harness,
+            _run_python_harness,
+        )
+
+        config = FakeConfig(target_path=str(tmp_path))
+        with mock.patch("core.sandbox.run_untrusted",
+                        return_value=self._ok()) as m:
+            _run_c_harness(
+                FakeOutcome(file="a.c", hypothesis="buffer overflow"),
+                {}, config, time.monotonic())
+            _run_python_harness(
+                FakeOutcome(file="mod.py", hypothesis="null deref"),
+                {}, config, time.monotonic())
+        assert m.call_count == 3  # compile, C execute, Python execute
+        for call in m.call_args_list:
+            assert call.kwargs["max_capture_bytes"] == _MAX_CAPTURE_BYTES
+
 
 class TestGetSafeEnvDegradedFallback:
     """The broken-install fallback hands the child a full-environ copy

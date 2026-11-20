@@ -211,8 +211,8 @@ class TestFridaObserveResult:
         assert r.evidence_strength == "confirmed"
 
 
-def _raise_timeout(*args, **kwargs):
-    raise subprocess.TimeoutExpired(cmd=["frida"], timeout=kwargs.get("timeout", 0))
+def _raise_timeout(cmd, env, timeout):
+    raise subprocess.TimeoutExpired(cmd=["frida"], timeout=timeout)
 
 
 @contextlib.contextmanager
@@ -230,7 +230,7 @@ class TestRunFridaSession:
     """Timeout handling in _run_frida_session logs the applied timeout value."""
 
     def test_config_override_timeout_logged(self, tmp_path, monkeypatch, caplog):
-        patch_module_attribute(monkeypatch, fo, "subprocess", "run", _raise_timeout)
+        monkeypatch.setattr(fo, "_spawn_frida_cli", _raise_timeout)
         log_file = tmp_path / "obs.jsonl"
         config = SimpleNamespace(frida_timeout_s=7)
 
@@ -249,7 +249,7 @@ class TestRunFridaSession:
     def test_default_timeout_logged_without_override(
         self, tmp_path, monkeypatch, caplog,
     ):
-        patch_module_attribute(monkeypatch, fo, "subprocess", "run", _raise_timeout)
+        monkeypatch.setattr(fo, "_spawn_frida_cli", _raise_timeout)
         log_file = tmp_path / "obs.jsonl"
         config = SimpleNamespace()  # no frida_timeout_s
 
@@ -264,7 +264,7 @@ class TestRunFridaSession:
         assert f"after {fo._OBSERVE_TIMEOUT_S}s" in timeout_msgs[0]
 
     def test_timeout_with_partial_log_reports_success(self, tmp_path, monkeypatch):
-        patch_module_attribute(monkeypatch, fo, "subprocess", "run", _raise_timeout)
+        monkeypatch.setattr(fo, "_spawn_frida_cli", _raise_timeout)
         log_file = tmp_path / "obs.jsonl"
         log_file.write_text('{"type": "ready", "hooked": 1}\n')
         config = SimpleNamespace(frida_timeout_s=1)
@@ -283,7 +283,7 @@ class TestRunFridaSession:
             return fd, path
 
         patch_module_attribute(monkeypatch, fo, 'tempfile', "mkstemp", _tracking_mkstemp)
-        patch_module_attribute(monkeypatch, fo, "subprocess", "run", _raise_timeout)
+        monkeypatch.setattr(fo, "_spawn_frida_cli", _raise_timeout)
         with _session_log_fd(tmp_path / "obs.jsonl") as log_fd:
             fo._run_frida_session(1234, "// script", log_fd,
                                   SimpleNamespace(frida_timeout_s=1))
@@ -309,11 +309,11 @@ class TestSessionCommandLine:
     def _capture_cmd(self, monkeypatch, tmp_path):
         captured: dict = {}
 
-        def _fake_run(cmd, **kwargs):
+        def _fake_spawn(cmd, env, timeout):
             captured["cmd"] = cmd
-            return SimpleNamespace(returncode=0, stdout="", stderr="")
+            return 0, ""
 
-        patch_module_attribute(monkeypatch, fo, "subprocess", "run", _fake_run)
+        monkeypatch.setattr(fo, "_spawn_frida_cli", _fake_spawn)
         with _session_log_fd(tmp_path / "obs.jsonl") as log_fd:
             fo._run_frida_session(
                 1234, "// script", log_fd,
@@ -337,10 +337,10 @@ class TestSessionCommandLine:
     def test_stdout_persisted_to_log_file(self, tmp_path, monkeypatch):
         stdout = 'message: {\'type\': \'send\', \'payload\': \'{"type":"ready","hooked":2}\'} data: None\n'
 
-        def _fake_run(cmd, **kwargs):
-            return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+        def _fake_spawn(cmd, env, timeout):
+            return 0, stdout
 
-        patch_module_attribute(monkeypatch, fo, "subprocess", "run", _fake_run)
+        monkeypatch.setattr(fo, "_spawn_frida_cli", _fake_spawn)
         log_file = tmp_path / "obs.jsonl"
         with _session_log_fd(log_file) as log_fd:
             ok = fo._run_frida_session(
@@ -351,13 +351,14 @@ class TestSessionCommandLine:
         assert log_file.read_text() == stdout
 
     def test_timeout_partial_stdout_persisted(self, tmp_path, monkeypatch):
-        def _raise_with_partial(*args, **kwargs):
+        def _raise_with_partial(cmd, env, timeout):
+            # BoundedCommunicator's timeout carries bytes partials.
             raise subprocess.TimeoutExpired(
                 cmd=["frida"], timeout=1,
-                output='message: {\'type\': \'send\', \'payload\': \'{"type":"call","function":"f","args":[]}\'} data: None\n',
+                output=b'message: {\'type\': \'send\', \'payload\': \'{"type":"call","function":"f","args":[]}\'} data: None\n',
             )
 
-        patch_module_attribute(monkeypatch, fo, "subprocess", "run", _raise_with_partial)
+        monkeypatch.setattr(fo, "_spawn_frida_cli", _raise_with_partial)
         log_file = tmp_path / "obs.jsonl"
         with _session_log_fd(log_file) as log_fd:
             ok = fo._run_frida_session(
@@ -366,6 +367,32 @@ class TestSessionCommandLine:
             )
         assert ok is True
         assert "call" in log_file.read_text()
+
+
+class TestSpawnBoundedCapture:
+    """_spawn_frida_cli must retain only a bounded stdout prefix: the
+    pre-fix subprocess.run held the whole CLI stream in memory before
+    the session-log parse budget ever applied."""
+
+    def test_stdout_retained_is_capped(self, monkeypatch):
+        import sys
+
+        monkeypatch.setattr(fo, "_MAX_LOG_BYTES", 1024)
+        cmd = [sys.executable, "-c", "print('x' * 100000)"]
+        returncode, stdout = fo._spawn_frida_cli(cmd, dict(os.environ), 30)
+        assert returncode == 0
+        # Retained prefix is the cap plus the explicit truncation marker.
+        assert len(stdout) < 100000
+        assert stdout.startswith("x" * 1024)
+        assert "truncated" in stdout
+
+    def test_short_stdout_passes_through_unmarked(self):
+        import sys
+
+        cmd = [sys.executable, "-c", "print('hello')"]
+        returncode, stdout = fo._spawn_frida_cli(cmd, dict(os.environ), 30)
+        assert returncode == 0
+        assert stdout == "hello\n"
 
 
 class TestParseCliFraming:

@@ -23,6 +23,13 @@ class CompilerDiagnosticError(ValueError):
     """Compiler output is unavailable or cannot establish a diagnostic census."""
 
 
+# Per-stream capture ceiling for the sandboxed compiler run. Diagnostics
+# over a single TU stay far below this; a hostile repo that makes the
+# compiler emit more (e.g. macro-expanded messages) is otherwise held
+# unbounded in memory before the raw_limit slice applies.
+_MAX_CAPTURE_BYTES = 64_000_000
+
+
 class CompilerExecutionError(CompilerDiagnosticError):
     """Well-formed diagnostics report an unsuccessful compiler execution."""
 
@@ -84,6 +91,7 @@ def _invoke(state: CompilerAnalysis) -> StageResult:
             text=True,
             timeout=request.timeout,
             caller_label=request.caller_label,
+            max_capture_bytes=_MAX_CAPTURE_BYTES,
         )
     except (subprocess.SubprocessError, OSError, ValueError, TypeError) as exc:
         raise CompilerInvocationError(exc) from exc

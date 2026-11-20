@@ -30,6 +30,15 @@ _HARNESS_TIMEOUT_S = 10
 _COMPILE_TIMEOUT_S = 15
 _SANITIZER_FLAGS = "-fsanitize=address,undefined -fno-omit-frame-pointer -g"
 
+# Per-stream capture ceiling for the sandboxed compile and harness
+# runs. Harness stdout is fully attacker-controlled prose and stderr
+# scanning only needs the sanitizer report; without the ceiling a
+# spewing harness is held unbounded in memory before the short result
+# slices below apply. Truncation keeps the head of each stream, so a
+# padded stderr can at worst hide a late sanitizer report —
+# downgrading the evidence strength, never forging it.
+_MAX_CAPTURE_BYTES = 4 * 1024 * 1024
+
 # glibc >= 2.39 replaced abort()'s ABORT_INSTRUCTION escalation with
 # while(1) raise(SIGABRT) — an infinite loop the kernel silently
 # ignores for namespace init (PID 1).  A SIGABRT handler that calls
@@ -319,6 +328,7 @@ def _run_c_harness(
                 caller_label="dynamic_sweep_compile",
                 capture_output=True, text=True,
                 timeout=_COMPILE_TIMEOUT_S,
+                max_capture_bytes=_MAX_CAPTURE_BYTES,
             )
         except SandboxSetupError as e:
             return _sandbox_unavailable_result(e, compiled=False, start=start)
@@ -350,6 +360,7 @@ def _run_c_harness(
                     caller_label="dynamic_sweep_harness",
                     capture_output=True, text=True,
                     timeout=_HARNESS_TIMEOUT_S,
+                    max_capture_bytes=_MAX_CAPTURE_BYTES,
                 )
             except SandboxSetupError as e:
                 return _sandbox_unavailable_result(
@@ -449,6 +460,7 @@ def _run_python_harness(
                     caller_label="dynamic_sweep_python_harness",
                     capture_output=True, text=True,
                     timeout=_HARNESS_TIMEOUT_S,
+                    max_capture_bytes=_MAX_CAPTURE_BYTES,
                 )
             except SandboxSetupError as e:
                 return _sandbox_unavailable_result(

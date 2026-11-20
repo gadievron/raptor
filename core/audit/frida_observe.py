@@ -20,6 +20,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from core.sandbox._capture import BoundedCommunicator
 from core.security.env_sanitisation import safe_subprocess_env
 
 logger = logging.getLogger(__name__)
@@ -455,17 +456,10 @@ def _run_frida_session(
         # credentials.
         env = safe_subprocess_env(strip_target_markers=True)
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=env,
-            check=False,
-        )
+        returncode, stdout = _spawn_frida_cli(cmd, env, timeout)
 
-        _write_session_log(log_fd, result.stdout)
-        return result.returncode == 0 or _fd_size(log_fd) > 0
+        _write_session_log(log_fd, stdout)
+        return returncode == 0 or _fd_size(log_fd) > 0
 
     except subprocess.TimeoutExpired as exc:
         logger.debug("Frida session timed out after %ds", timeout)
@@ -490,6 +484,39 @@ def _run_frida_session(
                 script_file.unlink()
             except OSError:
                 pass
+
+
+def _spawn_frida_cli(cmd: list[str], env: dict[str, str], timeout: int) -> tuple[int, str]:
+    """Run the frida CLI, retaining at most ``_MAX_LOG_BYTES`` per stream.
+
+    This is a raw spawn (no core.sandbox chokepoint), so the sandbox
+    runner's capture cap is unavailable: drain both pipes through
+    ``BoundedCommunicator`` instead. Everything past the session-log
+    parse budget is unparseable anyway, so a log-spamming target can
+    no longer pin unbounded CLI output in memory before the write-out.
+    Raises ``subprocess.TimeoutExpired`` (with the retained stdout
+    prefix as the partial output) and ``FileNotFoundError`` exactly
+    like ``subprocess.run`` did; the caller's handlers rely on both.
+    """
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    try:
+        capture = BoundedCommunicator(_MAX_LOG_BYTES)
+        capture.attach(proc)
+        stdout, _stderr = capture.communicate(timeout=timeout)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait()
+        for stream in (proc.stdout, proc.stderr):
+            if stream is not None:
+                stream.close()
+    return proc.returncode, stdout
 
 
 def _fd_size(log_fd: int) -> int:
