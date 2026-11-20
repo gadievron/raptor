@@ -4810,7 +4810,26 @@ _Part = tuple[str, Any, str, list[str]]
 
 
 def _part_sha(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    """sha256 over the bytes a gated read admits — never a plain
+    ``read_bytes()``.
+
+    Part files are producer-written; the loader reads them through
+    ``core.source.gated``'s discipline (regular file checked on the
+    opened fd, byte budget, no hang on a planted FIFO). Hashing a raw
+    read here would let the receipt describe bytes the loader would
+    refuse — a symlink-redirected or unbounded file could earn a sha
+    while never being the consumed content. ``follow_symlinks=False``
+    is strictly tighter than the loader: a symlinked part is refused
+    before it earns a hash. Raises ``ValueError``/``OSError`` on
+    refusal (callers on untrusted inputs quarantine; the self-written
+    receipt site lets the impossible state crash loudly).
+    """
+    from core.json.utils import DEFAULT_JSON_MAX_BYTES
+    from core.source.gated import read_bytes_gated
+    return hashlib.sha256(
+        read_bytes_gated(path, DEFAULT_JSON_MAX_BYTES,
+                         follow_symlinks=False)
+    ).hexdigest()
 
 
 # Bounds on the quarantine reason record. Reason strings quote
@@ -4945,7 +4964,15 @@ def _ingest_parts(stage: str, parts_dir: Path,
     [(name, data, sha, sanitised_paths)] in sorted-name order."""
     good = []
     for path in sorted(parts_dir.glob("*.json")):
-        sha = _part_sha(path)
+        try:
+            sha = _part_sha(path)
+        except (ValueError, OSError) as e:
+            # Non-regular / symlinked / over-budget part: quarantine
+            # with the refusal named instead of crashing the assembly
+            # (the part file stays put; no hash exists for it).
+            _quarantine_part(parts_dir, path.name, "",
+                             [f"gated read refused: {e}"], quarantined)
+            continue
         data = load_json(path)
         if data is None:
             _quarantine_part(parts_dir, path.name, sha,
