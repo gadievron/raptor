@@ -11863,7 +11863,10 @@ def _run_audit_body(
                     if _composed:
                         _leads_path = config.out_dir / "composition-leads.json"
                         _leads_data = [h.to_dict() for h in _comp_leads]
-                        _leads_path.write_text(json.dumps(
+                        # Atomic write: predictable artifact name in the
+                        # reused, sandbox-writable run dir — a bare
+                        # write_text follows a planted symlink.
+                        write_text_atomically(_leads_path, json.dumps(
                             {
                                 "total_weaknesses": len(_comp_inv),
                                 "total_composed": len(_composed),
