@@ -99,8 +99,15 @@ _GUARD_TYPE_ALIASES: dict[str, str] = {
 }
 
 
-def _normalise_guard_type(raw: str) -> str:
-    """Return canonical guard type, or empty string if unrecognised."""
+def _normalise_guard_type(raw: object) -> str:
+    """Return canonical guard type, or empty string if unrecognised.
+
+    LLM JSON may carry any type here (a dict, a list, a number) — a
+    non-``str`` is unrecognised, never an exception, so one malformed
+    finding cannot abort the whole discovery phase.
+    """
+    if not isinstance(raw, str):
+        return ""
     gt = raw.strip().lower()
     gt = _GUARD_TYPE_ALIASES.get(gt, gt)
     return gt if gt in _GUARD_TYPES else ""
@@ -109,8 +116,10 @@ def _normalise_guard_type(raw: str) -> str:
 _CONFIDENCE_VALUES = frozenset({"high", "medium", "low"})
 
 
-def _normalise_confidence(raw: str) -> str:
+def _normalise_confidence(raw: object) -> str:
     """Return canonical confidence, defaulting to ``"medium"``."""
+    if not isinstance(raw, str):
+        return "medium"
     c = raw.strip().lower()
     return c if c in _CONFIDENCE_VALUES else "medium"
 
@@ -737,7 +746,10 @@ def _parse_findings(
             "property": f.get("assumed_property", ""),
             "guard_type": gt,
             "mechanism": f.get("mechanism", ""),
-            "cwe_class": f.get("cwe_class"),
+            "cwe_class": (
+                f["cwe_class"]
+                if isinstance(f.get("cwe_class"), str) else None
+            ),
             "confidence": conf,
             "source": "contract_perspective",
             "guarded_by": (
@@ -1138,7 +1150,9 @@ def _parse_sm_findings(
         if not gt:
             continue
 
-        cwe = f.get("cwe_class") or ""
+        cwe = f.get("cwe_class")
+        if not isinstance(cwe, str):
+            cwe = ""
         if single_threaded and any(cwe.startswith(c) for c in _RACE_CWES):
             continue
 
@@ -1515,7 +1529,10 @@ def _parse_discovery_findings(
             "property": f.get("assumed_property", ""),
             "guard_type": gt,
             "mechanism": f.get("mechanism", ""),
-            "cwe_class": f.get("cwe_class"),
+            "cwe_class": (
+                f["cwe_class"]
+                if isinstance(f.get("cwe_class"), str) else None
+            ),
             "confidence": conf,
             "source": source_tag,
             "guarded_by": [],

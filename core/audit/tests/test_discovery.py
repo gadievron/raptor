@@ -380,6 +380,34 @@ class TestParseFindings:
         assert result.weaknesses == []
         assert result.hypotheses == []
 
+    def test_non_str_fields_skip_finding_not_phase(self):
+        # LLM output may carry any JSON type in any field; a malformed
+        # finding is skipped/coerced, and the well-formed sibling in the
+        # same response still lands — never an exception.
+        raw = json.dumps({
+            "findings": [
+                {
+                    "guard_type": {"nested": "dict"},
+                    "assumed_property": "x",
+                    "mechanism": "y",
+                },
+                {
+                    "guard_type": "bounds",
+                    "assumed_property": "ok",
+                    "mechanism": "z",
+                    "confidence": ["high"],
+                    "cwe_class": {"id": "CWE-120"},
+                    "standalone": True,
+                },
+            ]
+        })
+        result = _parse_findings(raw, self._bundle())
+        assert len(result.weaknesses) == 1
+        w = result.weaknesses[0]
+        assert w["guard_type"] == "bounds"
+        assert w["confidence"] == "medium"
+        assert w["cwe_class"] is None
+
     def test_invalid_json(self):
         result = _parse_findings("not json", self._bundle())
         assert result.weaknesses == []
@@ -1346,6 +1374,30 @@ class TestParseSmFindings:
         result = _parse_sm_findings('{"findings": []}', bundle)
         assert result.weaknesses == []
         assert result.hypotheses == []
+
+    def test_non_str_cwe_class_single_threaded(self):
+        # A non-str cwe_class must not raise at the race-CWE
+        # startswith filter; it coerces to no-CWE and the finding
+        # survives the single-threaded post-filter.
+        bundle = StateMachineBundle(
+            field_name="state",
+            handler_sites=[],
+            annotation="test",
+            priority_score=1.0,
+            priority_reason="test",
+        )
+        raw = json.dumps({"findings": [
+            {
+                "guard_type": "ordering",
+                "assumed_property": "init before use",
+                "mechanism": "write without lock",
+                "cwe_class": {"id": "CWE-362"},
+                "standalone": True,
+            },
+        ]})
+        result = _parse_sm_findings(raw, bundle, single_threaded=True)
+        assert len(result.weaknesses) == 1
+        assert result.weaknesses[0]["cwe_class"] is None
 
 
 class TestRunStateMachineDiscovery:
