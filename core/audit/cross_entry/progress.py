@@ -4,11 +4,24 @@ from __future__ import annotations
 import sqlite3
 from contextlib import closing, contextmanager
 from pathlib import Path
+from typing import Any
 
-from core.json import dumps_canonical
+from core.json import DEFAULT_JSON_MAX_BYTES, dumps_canonical, loads_bounded
 from core.source.streams import preserving_stream_error
 
 from .model import digest
+
+
+def _loads_column(text: str) -> Any:
+    """Parse a work-DB JSON column through the size gate.
+
+    The columns are written here via ``dumps_canonical``, but the
+    database FILE lives in ``out_dir`` — a pre-planted or inflated
+    ``cross-entry-work.sqlite`` would otherwise feed ``json.loads``
+    an unbounded payload. Over-budget raises the same
+    ``ValueError``-family error malformed JSON already does.
+    """
+    return loads_bounded(text, max_bytes=DEFAULT_JSON_MAX_BYTES)
 
 
 @contextmanager
@@ -96,8 +109,7 @@ class WorkQueue:
         self.db.commit()
 
     def requests(self):
-        import json
-        return [json.loads(r[0]) for r in self.db.execute("SELECT request FROM report_requests WHERE namespace=? ORDER BY key",(self.namespace,))]
+        return [_loads_column(r[0]) for r in self.db.execute("SELECT request FROM report_requests WHERE namespace=? ORDER BY key",(self.namespace,))]
 
     def add_views(self, files):
         files = list(files)
@@ -110,10 +122,9 @@ class WorkQueue:
         self.db.commit()
 
     def invalidate_files(self, changed):
-        import json
         changed_paths: set[str] | None = None
         for row in self.db.execute("SELECT id,dependencies FROM views WHERE namespace=?",(self.namespace,)).fetchall():
-            dependencies = set(json.loads(row["dependencies"]))
+            dependencies = set(_loads_column(row["dependencies"]))
             if changed_paths is None:
                 changed_paths = set(changed)
             if not dependencies.isdisjoint(changed_paths):
@@ -184,12 +195,11 @@ class WorkQueue:
             self.db.commit()
 
     def summary(self):
-        import json
         counts = {r[0]:r[1] for r in self.db.execute("SELECT status,count(*) FROM jobs WHERE namespace=? GROUP BY status",(self.namespace,))}
         views = {r[0]:r[1] for r in self.db.execute("SELECT status,count(*) FROM views WHERE namespace=? GROUP BY status",(self.namespace,))}
         pending = sum(v for k,v in counts.items() if k not in {"complete","prepared","not_applicable","obsolete"})
         return {"jobs":counts,"views":views,"remaining_jobs":pending,
-                "blocked_work":[{"view":r["view_id"],"consumer":r["consumer"],"focus":r["focus"],"detail":json.loads(r["result"])}
+                "blocked_work":[{"view":r["view_id"],"consumer":r["consumer"],"focus":r["focus"],"detail":_loads_column(r["result"])}
                                 for r in self.db.execute("SELECT * FROM jobs WHERE namespace=? AND status='blocked'",(self.namespace,))],
                 "remaining_views":sum(v for k,v in views.items() if k not in {"complete","obsolete"}),
                 "undelivered_results":self._undelivered_count(),
@@ -197,7 +207,6 @@ class WorkQueue:
 
     def _undelivered_rows(self, view=None):
         """Validate every eligible result in delivery order without retaining it."""
-        import json
         sql = "SELECT * FROM jobs WHERE namespace=? AND status IN ('complete','prepared')"
         params = [self.namespace]
         if view is not None:
@@ -207,7 +216,7 @@ class WorkQueue:
         failed = False
         try:
             for row in rows:
-                value = json.loads(row["result"])
+                value = _loads_column(row["result"])
                 evidence = value.get("key","")
                 if evidence and not self.db.execute("SELECT 1 FROM acknowledgements WHERE namespace=? AND view_id=? AND job_id=? AND evidence=?",
                                                    (self.namespace,row["view_id"],row["id"],evidence)).fetchone():
