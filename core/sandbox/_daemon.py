@@ -112,6 +112,32 @@ def _set_non_dumpable() -> bool:
         return False
 
 
+# Verbs that spawn or drive a target while the RPC pipe ends sit in
+# this process's fd table. They are served only when the /proc
+# fd-reopen hardening (PR_SET_DUMPABLE=0) actually engaged: without
+# it a same-UID target can reopen /proc/<daemon>/fd/<n> and forge
+# daemon→parent frames or steal parent→daemon requests — exactly the
+# channel the hardening exists to close. Fail-closed, mirroring the
+# parser-jail worker's Landlock-install refusal: available-but-failing
+# hardening refuses service rather than degrading silently. "ping"
+# (and the persistent loop's "close") stay serveable — they spawn
+# nothing, so liveness checks and graceful shutdown keep working.
+_DUMPABLE_GATED_VERBS = frozenset({"spawn", "probe", "conversation"})
+
+
+def _dumpable_hardening_refusal(cmd: object,
+                                hardened: bool) -> dict | None:
+    """Typed refusal for target-spawning verbs when PR_SET_DUMPABLE=0
+    failed; None when the verb may be served."""
+    if hardened or cmd not in _DUMPABLE_GATED_VERBS:
+        return None
+    return {"ok": False,
+            "error": (f"refusing {cmd!r}: prctl(PR_SET_DUMPABLE, 0) "
+                      f"failed, so the RPC pipe ends remain reopenable "
+                      f"by a same-UID target via /proc fd entries "
+                      f"(fail-closed; ping still answers)")}
+
+
 def _get_dumpable() -> int | None:
     """Return this process's PR_GET_DUMPABLE value (None if unknown)."""
     try:
@@ -1841,9 +1867,12 @@ def _run_one_shot() -> int:
             # Same /proc-reopen hardening as the persistent loop: the one-shot
             # channel is the daemon's own stdio, equally reopenable via
             # /proc/<daemon>/fd/{0,1} by a spawned target while it runs.
-            if not _set_non_dumpable():
+            # Failure gates the target-spawning verbs below (fail-closed).
+            proc_hardened = _set_non_dumpable()
+            if not proc_hardened:
                 _log("prctl(PR_SET_DUMPABLE, 0) failed — /proc fd reopen "
-                     "hardening not engaged")
+                     "hardening not engaged; target-spawning verbs will "
+                     "be refused")
             try:
                 frame = _read_frame(in_fd)
             except Exception as e:  # noqa: BLE001
@@ -1859,6 +1888,10 @@ def _run_one_shot() -> int:
             if handler is None:
                 _write_frame(out_fd, _echo_rid(frame, {
                     "ok": False, "error": f"unknown cmd {cmd!r}"}))
+                return 1
+            refusal = _dumpable_hardening_refusal(cmd, proc_hardened)
+            if refusal is not None:
+                _write_frame(out_fd, _echo_rid(frame, refusal))
                 return 1
             try:
                 response = handler(frame)
@@ -1920,9 +1953,13 @@ def main() -> int:
     # non-dumpable so same-UID non-root processes (targets in
     # particular) cannot reopen the RPC pipe ends via
     # /proc/<daemon>/fd/<n>. See _set_non_dumpable's docstring.
-    if not _set_non_dumpable():
+    # Failure gates the target-spawning verbs in the loop below
+    # (fail-closed); ping and close keep answering.
+    proc_hardened = _set_non_dumpable()
+    if not proc_hardened:
         _log("prctl(PR_SET_DUMPABLE, 0) failed — /proc fd reopen "
-             "hardening not engaged")
+             "hardening not engaged; target-spawning verbs will be "
+             "refused")
     _log(f"rpc fds inherited pid={os.getpid()} "
          f"in_fd={in_fd} out_fd={out_fd}")
 
@@ -1948,6 +1985,10 @@ def main() -> int:
                 if handler is None:
                     _write_frame(out_fd, _echo_rid(frame, {
                         "ok": False, "error": f"unknown cmd {cmd!r}"}))
+                    continue
+                refusal = _dumpable_hardening_refusal(cmd, proc_hardened)
+                if refusal is not None:
+                    _write_frame(out_fd, _echo_rid(frame, refusal))
                     continue
                 try:
                     response = handler(frame)

@@ -334,3 +334,99 @@ class TestParentRejectsUnboundReplies:
         )
         response = fake.host._rpc({"cmd": "ping"}, timeout=10.0)
         assert response == {"ok": True, "pong": True}
+
+
+def _gated_handler_boom(frame: dict) -> dict:
+    raise AssertionError(
+        "gated handler reached while /proc hardening was not engaged")
+
+
+class TestDumpableFailClosed:
+    """prctl(PR_SET_DUMPABLE, 0) failure must refuse the
+    target-spawning verbs (spawn/probe/conversation) instead of
+    serving them with the RPC pipe ends reopenable via /proc —
+    mirroring the parser-jail worker's confinement-install refusal.
+    ping (and close) keep answering."""
+
+    _GATED = ("spawn", "probe", "conversation")
+
+    def _gate_handlers(self, monkeypatch) -> None:
+        monkeypatch.setattr(_daemon, "_set_non_dumpable", lambda: False)
+        for verb in self._GATED:
+            monkeypatch.setitem(_daemon.DISPATCH, verb,
+                                _gated_handler_boom)
+
+    def test_persistent_loop_refuses_gated_verbs(self, monkeypatch):
+        self._gate_handlers(monkeypatch)
+        in_r, in_w = os.pipe()
+        out_r, out_w = os.pipe()
+        monkeypatch.setattr(sys, "argv", [
+            "raptor-sandbox-host-daemon",
+            "--rpc-in-fd", str(in_r), "--rpc-out-fd", str(out_w)])
+        rc: list[int] = []
+        t = threading.Thread(target=lambda: rc.append(_daemon.main()))
+        t.start()
+        try:
+            for verb in self._GATED:
+                os.write(in_w, _frame({"cmd": verb, "rid": f"r-{verb}"}))
+                resp = _read_frame(out_r)
+                assert resp["ok"] is False, resp
+                assert "PR_SET_DUMPABLE" in resp["error"]
+                assert resp["rid"] == f"r-{verb}"
+            # The daemon stays alive and non-spawning verbs still serve.
+            os.write(in_w, _frame({"cmd": "ping", "rid": "r-ping"}))
+            pong = _read_frame(out_r)
+            assert pong["ok"] is True
+            assert pong["rid"] == "r-ping"
+            os.write(in_w, _frame({"cmd": "close"}))
+            assert _read_frame(out_r) == {"ok": True, "closed": True}
+        finally:
+            t.join(timeout=30)
+            for fd in (in_w, out_r):
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        assert not t.is_alive()
+        assert rc == [0]
+
+    @pytest.mark.parametrize("verb", ["spawn", "probe", "conversation"])
+    def test_one_shot_refuses_gated_verb(self, tmp_path, monkeypatch,
+                                         verb):
+        from core.testing.module_bindings import patch_module_attribute
+        self._gate_handlers(monkeypatch)
+        with (tmp_path / "in").open("w+b") as source, \
+                (tmp_path / "out").open("w+b") as target:
+            source.write(_frame({"cmd": verb, "rid": "os-gated"}))
+            source.seek(0)
+            patch_module_attribute(monkeypatch, _daemon, "sys",
+                                   "stdin", source)
+            patch_module_attribute(monkeypatch, _daemon, "sys",
+                                   "stdout", target)
+            assert _daemon._run_one_shot() == 1
+            target.seek(0)
+            data = target.read()
+        (length,) = struct.unpack("!I", data[:4])
+        resp = json.loads(data[4:4 + length].decode())
+        assert resp["ok"] is False, resp
+        assert "PR_SET_DUMPABLE" in resp["error"]
+        assert resp["rid"] == "os-gated"
+
+    def test_one_shot_ping_still_answers(self, tmp_path, monkeypatch):
+        from core.testing.module_bindings import patch_module_attribute
+        self._gate_handlers(monkeypatch)
+        with (tmp_path / "in").open("w+b") as source, \
+                (tmp_path / "out").open("w+b") as target:
+            source.write(_frame({"cmd": "ping", "rid": "os-ping"}))
+            source.seek(0)
+            patch_module_attribute(monkeypatch, _daemon, "sys",
+                                   "stdin", source)
+            patch_module_attribute(monkeypatch, _daemon, "sys",
+                                   "stdout", target)
+            assert _daemon._run_one_shot() == 0
+            target.seek(0)
+            data = target.read()
+        (length,) = struct.unpack("!I", data[:4])
+        resp = json.loads(data[4:4 + length].decode())
+        assert resp["ok"] is True, resp
+        assert resp["rid"] == "os-ping"
