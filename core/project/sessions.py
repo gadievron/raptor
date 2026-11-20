@@ -179,17 +179,28 @@ _PIN_LINE_RE = re.compile(r"^pin (\d+) (\S+) (\S+) (/.+)$")
 #: the drain helpers below parse them.
 _DRAIN_LINE_RE = re.compile(r"^drain (\d+) (\S+) (/.+)$")
 
-#: Run-posture record: ``posture <epoch> <facts-json> <abs-dir>`` —
-#: the run's FINAL telemetry-key posture (weakest-wins across its
+#: Run-posture record: ``posture <epoch> <facts-json> <mac> <abs-dir>``
+#: — the run's FINAL telemetry-key posture (weakest-wins across its
 #: sandbox calls, see ``core.sandbox.summary.record_run_posture``),
 #: written by the owning parent at run end and keyed by the FULL
 #: resolved run-dir path. sessions.d sits OUTSIDE any sandbox write
-#: grant, so a FRESH-process triage can trust this record where the
-#: parent memory it mirrors has died with the owning process. Like
-#: drain lines, posture lines ride the unknown-lines channel: every
-#: existing reader/rewriter carries them verbatim and the
+#: grant, but its LOCATION is env-derived (``HOME`` /
+#: ``RAPTOR_REGISTRY_HOME`` both survive ``get_safe_env()`` — a shared
+#: cross-language contract with the bash consumers), so the record
+#: itself carries the trust anchor: ``<mac>`` is an HMAC over the
+#: record under this install's pwd-derived telemetry key
+#: (``telemetry_mac.run_posture_fields``), and readers grade evidence
+#: only from records that verify. ``-`` marks a record written while
+#: no key was usable; readers treat it as unverifiable (posture
+#: unknown — the fail-closed direction). The epoch is bounded to 20
+#: digits: an unbounded ``\d+`` fed ``int()`` a hostile oversized
+#: line (Python's int-str conversion limit raises past ~4300 digits),
+#: crashing the WRITER's dedup scan and blocking posture recording.
+#: Like drain lines, posture lines ride the unknown-lines channel:
+#: every existing reader/rewriter carries them verbatim and the
 #: ``(records, pins, unknown)`` tuple contract never changes.
-_POSTURE_LINE_RE = re.compile(r"^posture (\d+) (\S+) (/.+)$")
+_POSTURE_LINE_RE = re.compile(
+    r"^posture (\d{1,20}) (\S+) ([0-9a-f]{64}|-) (/.+)$")
 
 #: Character class for posture fact keys and string values — keeps the
 #: compact-JSON facts token free of whitespace (the line grammar is
@@ -1991,9 +2002,13 @@ def _posture_facts_encode(posture: dict) -> str | None:
 
 def _posture_parse(line: str) -> dict | None:
     """Parse one posture ledger line to
-    ``{"epoch", "run_dir", "posture"}``, or None for any other line.
-    Same defensive filtering as the encoder: a hand-edited or
-    future-format facts token never yields non-bool/str values."""
+    ``{"epoch", "facts_token", "mac", "run_dir", "posture"}``, or None
+    for any other line. Purely mechanical — MAC verification is the
+    reader's job (``_posture_verified``), kept separate so the writer's
+    dedup/prune scan never needs key access. Same defensive filtering
+    as the encoder: a hand-edited or future-format facts token never
+    yields non-bool/str values. ``facts_token`` is the raw on-line
+    token, preserved byte-for-byte because it is MAC input."""
     m = _POSTURE_LINE_RE.match(line)
     if not m:
         return None
@@ -2009,8 +2024,26 @@ def _posture_parse(line: str) -> dict | None:
         if isinstance(k, str) and type(v) in (bool, str)}
     if not isinstance(posture.get("mac_key_hidden"), bool):
         return None
-    return {"epoch": int(m.group(1)), "run_dir": m.group(3),
+    return {"epoch": int(m.group(1)), "facts_token": m.group(2),
+            "mac": m.group(3), "run_dir": m.group(4),
             "posture": posture}
+
+
+def _posture_verified(rec: dict) -> bool:
+    """Whether a parsed posture record carries a valid MAC under this
+    install's pwd-derived telemetry key.
+
+    The registry location is env-steerable (see the grammar comment at
+    ``_POSTURE_LINE_RE``), so the record content — not the directory it
+    was found in — is what gets trusted. Fail-closed: an unstamped
+    (``-``) or non-verifying record never grades evidence; the posture
+    stays unknown, which is the caller's fail-closed direction.
+    ``telemetry_mac.verify`` never raises."""
+    from core.sandbox import telemetry_mac
+    return telemetry_mac.verify(
+        telemetry_mac.run_posture_fields(
+            rec["epoch"], rec["facts_token"], rec["run_dir"]),
+        rec["mac"])
 
 
 def ledger_record_posture(run_dir: str | os.PathLike[str],
@@ -2026,9 +2059,13 @@ def ledger_record_posture(run_dir: str | os.PathLike[str],
     — never read back from anything the target can write — so a
     fresh-process triage (``--require-evidence`` CI gates, post-hoc
     re-triage) can grade the run's evidence after the parent memory is
-    gone. Same registered-session + identity gates as the record
-    writers; riding the unknown-lines channel means every other writer
-    preserves the line verbatim. Returns True when durably recorded.
+    gone. The line is MAC-stamped under the pwd-derived telemetry key
+    (``telemetry_mac.run_posture_fields``) because the registry
+    LOCATION is env-steerable; a record written while no key is usable
+    carries ``-`` and reads as unverifiable (posture unknown). Same
+    registered-session + identity gates as the record writers; riding
+    the unknown-lines channel means every other writer preserves the
+    line verbatim. Returns True when durably recorded.
     """
     import time
     try:
@@ -2069,7 +2106,11 @@ def ledger_record_posture(run_dir: str | os.PathLike[str],
             if not Path(rec["run_dir"]).is_dir():
                 continue  # record for a vanished run dir — prune
             kept.append(line)
-        kept.append(f"posture {int(time.time())} {facts} {resolved}")
+        from core.sandbox import telemetry_mac
+        epoch = int(time.time())
+        token = telemetry_mac.mint(telemetry_mac.run_posture_fields(
+            epoch, facts, resolved)) or "-"
+        kept.append(f"posture {epoch} {facts} {token} {resolved}")
         return _write_ledger(pid, records, pins, kept)
 
 
@@ -2081,15 +2122,22 @@ def ledger_run_posture(
     FULL-resolved-path keyed, across all session ledgers whose
     registry entry still exists (orphan ledgers never steer — same
     gate as ``ledger_pinned_dirs``; a recycled pid's leftover history
-    must not grade evidence). The newest record wins when several
-    sessions touched one run dir (resume).
+    must not grade evidence). The newest VERIFIED record wins when
+    several sessions touched one run dir (resume) — the registry
+    location is env-steerable, so only records whose MAC verifies
+    under this install's pwd-derived telemetry key
+    (``_posture_verified``) ever grade evidence; a forged or
+    unstamped record is skipped, never a tiebreaker.
 
     ``posture=None`` means UNKNOWN — the caller owns the fail-closed
     consequence. ``name_collision`` is True only when no record
     matches this path but one exists for a DIFFERENT directory with
     the same basename: telemetry MACs bind only the basename
     (``telemetry_mac.run_binding``), so that is the cross-run replay
-    signature, never a usable posture. Best-effort: unreadable
+    signature, never a usable posture. Collision records are
+    deliberately NOT MAC-gated — the flag only ever tightens (it
+    reports a replay signature alongside ``posture=None``), so a
+    forger gains nothing by raising it. Best-effort: unreadable
     ledgers are skipped, never raised."""
     best: dict | None = None
     best_epoch = -1
@@ -2117,7 +2165,7 @@ def ledger_run_posture(
             if rec is None:
                 continue
             if rec["run_dir"] == resolved:
-                if rec["epoch"] >= best_epoch:
+                if rec["epoch"] >= best_epoch and _posture_verified(rec):
                     best = dict(rec["posture"])
                     best_epoch = rec["epoch"]
             elif Path(rec["run_dir"]).name == basename:

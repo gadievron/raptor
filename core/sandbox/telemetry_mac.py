@@ -649,6 +649,36 @@ def run_binding(run_dir: Path | str) -> str:
     return Path(run_dir).resolve().name
 
 
+def run_posture_fields(epoch: int, facts: str, run_dir: str) -> dict:
+    """MAC fields for a session-ledger run-posture record
+    (``core.project.sessions.ledger_record_posture``).
+
+    The session registry root is env-derived — ``HOME`` and
+    ``RAPTOR_REGISTRY_HOME`` both survive ``get_safe_env()``, a shared
+    cross-language contract the bash consumers (bin/raptor, the
+    coverage hook) rely on — so a same-UID process can point a posture
+    READER at an attacker-stocked registry. A forged posture record is
+    a both-directions anchor: it can RESTORE strict admission
+    (key-hidden → pass) in a fresh-process triage. The MAC moves the
+    trust decision to this install's pwd-derived key: a record grades
+    evidence only when it verifies, and the verifier recomputes these
+    fields from the directory it is actually asking about, so a record
+    minted for one run and replayed under another path fails.
+
+    ``facts`` is the exact space-free facts token as written on the
+    line (never a re-serialisation — byte drift would break
+    verification); ``run_dir`` is the FULL resolved path the record is
+    keyed by, bound alongside the basename ``run_binding``.
+    """
+    return {
+        "kind": "session-run-posture",
+        "run": run_binding(run_dir),
+        "epoch": str(epoch),
+        "facts": facts,
+        "run_dir": run_dir,
+    }
+
+
 def proxy_event_fields(event: Mapping[str, object], run: str) -> dict:
     """The exact proxy-event fields triage acts on, in MAC form.
 
