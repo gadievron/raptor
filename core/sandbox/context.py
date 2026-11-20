@@ -1556,6 +1556,29 @@ def _nproc_eagain_shaped(detail: str) -> bool:
     return any(_m in detail for _m in _NPROC_EAGAIN_MARKERS)
 
 
+#: The exec 'X' detail tag the spawn child writes when execve itself
+#: failed ETXTBSY (core/sandbox/_spawn.py names the errno precisely so
+#: consumers can tell a per-invocation transient from a wrong-binary
+#: shape).
+_ETXTBSY_EXEC_MARKER = "exec: [ETXTBSY]"
+
+
+def _etxtbsy_exec_shaped(setup_status: "tuple[str, str] | None") -> bool:
+    """True when a spawn child's setup status reports the execve
+    failing ETXTBSY — a writer fd was still open on a healthy binary,
+    a per-invocation transient.
+
+    Like ``_nproc_eagain_shaped``, the detail text can EMBED
+    target-influenced substrings (bind paths ride 'X' tracebacks), but
+    unlike it this shape needs no corroborating evidence: a forged
+    match only SKIPS a speculative-cache write, so the next call
+    re-probes the stronger lane — strictly less standing state, never
+    a lane grant.
+    """
+    return (setup_status is not None and setup_status[0] == "X"
+            and _ETXTBSY_EXEC_MARKER in setup_status[1])
+
+
 def _nproc_pressure_evidence() -> "str | None":
     """Live evidence that THIS process tree runs at/near a finite
     RLIMIT_NPROC ceiling: the honest attribution for a fork/clone
@@ -7345,6 +7368,28 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                         "transient host condition), not "
                                         "a property of this binary's "
                                         "bind tree.",
+                                        cmd[0],
+                                    )
+                                elif _etxtbsy_exec_shaped(_setup_status):
+                                    # Do NOT memoise an ETXTBSY exec
+                                    # failure either: a writer fd
+                                    # still open on a healthy binary
+                                    # (a concurrent build/copy) is a
+                                    # per-invocation transient, and
+                                    # memoising it buys a standing
+                                    # mount-ns demotion for every
+                                    # later call on that binary —
+                                    # a SandboxFloorError denial for
+                                    # floors the mountless lane
+                                    # cannot meet.
+                                    logger.info(
+                                        "Sandbox: not memoising the "
+                                        "bind-tree failure for %r — the "
+                                        "exec failed ETXTBSY (a writer "
+                                        "fd was still open on the "
+                                        "binary), a per-invocation "
+                                        "transient, not a property of "
+                                        "this binary's bind tree.",
                                         cmd[0],
                                     )
                                 else:

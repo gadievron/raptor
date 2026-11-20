@@ -715,6 +715,50 @@ def test_nproc_pressure_double_eagain_degrades_with_honest_warning(
     assert not state._speculative_failure_cache
 
 
+def test_etxtbsy_shape_predicate() -> None:
+    """Every gate of the ETXTBSY carve-out shape, pinned directly.
+
+    The match keys on the spawn child's own bracketed errno tag
+    (`exec: [ETXTBSY]`, written by the execve failure handler), never
+    on free-text strerror prose — and only for the 'X' exec-failure
+    category, where the detail is kernel-attributed. A forged match
+    elsewhere could only SKIP a cache write (strictly less standing
+    state), but the category gate keeps even that surface closed."""
+    etxtbsy = "exec: [ETXTBSY] Text file busy"
+    assert context._etxtbsy_exec_shaped(("X", etxtbsy))
+    # Clean status / other categories / other exec failures: no match.
+    assert not context._etxtbsy_exec_shaped(None)
+    for cat in ("M", "U", "P", "C", "F", "L", "S", "!"):
+        assert not context._etxtbsy_exec_shaped((cat, etxtbsy))
+    assert not context._etxtbsy_exec_shaped(("X", "exec: file not found"))
+    assert not context._etxtbsy_exec_shaped(
+        ("X", "exec: [EACCES] Permission denied"))
+    # strerror text alone (no bracketed tag) is not the child's errno.
+    assert not context._etxtbsy_exec_shaped(("X", "exec: Text file busy"))
+
+
+def test_etxtbsy_exec_failure_degrades_this_call_but_is_not_memoised(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        caplog: pytest.LogCaptureFixture) -> None:
+    """ETXTBSY is a per-invocation transient — a writer fd was still
+    open on the binary at execve time — not a property of the binary's
+    bind tree. The failing call still takes the existing mountless
+    fallback (nothing rides on the carve-out succeeding), but the
+    failure must NOT be memoised: a memoised entry would steer every
+    future run of that binary to the weaker mountless lane on the
+    strength of one close/exec race."""
+    etxtbsy = "exec: [ETXTBSY] Text file busy"
+    with caplog.at_level("INFO"):
+        result, rec, _ = _pressure_run(
+            monkeypatch, tmp_path, [("X", etxtbsy)], pressure=False)
+    assert result.returncode == 0
+    # This call degrades exactly as before: mount attempt → mountless.
+    assert [kw.get("skip_mount_ns") for kw in rec.calls] == [False, True]
+    # ...but no standing demotion is recorded against the binary.
+    assert not state._speculative_failure_cache
+    assert any("ETXTBSY" in r.getMessage() for r in caplog.records)
+
+
 def test_nproc_pressure_u_category_retry_and_honest_terminal_cause(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The namespace-staging forks ('U') race the same inherited limit:
