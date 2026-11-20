@@ -167,11 +167,12 @@ def run_pipeline(manifest: RecallManifest, target: Path, repo_root: Path,
                 msg = f"pipeline timed out after {timeout_s}s"
                 raise RunnerError(msg) from exc
 
-        # The lifecycle contract is "the LAST line of output is
-        # OUTPUT_DIR=<path>" — earlier occurrences (echoed config,
-        # nested tool output) can name other directories, so bind the
-        # final one. Scan the stdout portion of the log line by line
-        # (bounded memory).
+        # Bind the FIRST sentinel: the lifecycle prints OUTPUT_DIR=
+        # before any pipeline child runs, so later occurrences in the
+        # stream are child-controlled text — a scanned repo's build or
+        # tool output could print a second, spoofed sentinel and steer
+        # where results are read from. Scan the stdout portion of the
+        # log line by line (bounded memory).
         # Hardened reopen (O_NOFOLLOW + non-regular refusal): the
         # pipeline's children wrote under this directory, so the
         # write-side symlink/FIFO discipline applies to the reads
@@ -207,14 +208,20 @@ def run_pipeline(manifest: RecallManifest, target: Path, repo_root: Path,
     finally:
         with contextlib.suppress(OSError):
             stderr_tmp.unlink(missing_ok=True)
-    sentinel_dir = (Path(sentinel_matches[-1].strip())
+    sentinel_dir = (Path(sentinel_matches[0].strip())
                     if sentinel_matches else None)
+    if len(sentinel_matches) > 1:
+        logger.warning(
+            "%d extra OUTPUT_DIR sentinel line(s) in the pipeline "
+            "stream — binding the first (lifecycle-printed) one; "
+            "later occurrences are child output", len(sentinel_matches) - 1)
 
     # The artifacts land in the --out dir we pinned; the lifecycle's
     # OUTPUT_DIR sentinel can point elsewhere (raptor.py resolves the
     # lifecycle dir before honouring a forwarded --out — it never
     # passes it to get_output_dir(explicit_out=...)). Score where the
-    # artifacts actually are; the sentinel is only a fallback.
+    # artifacts actually are; a divergent sentinel never redirects a
+    # pinned run — child output could print one naming any directory.
     if pipeline_out.is_dir() and any(pipeline_out.glob("*.sarif")):
         if sentinel_dir is not None and sentinel_dir != pipeline_out:
             logger.warning(
@@ -222,6 +229,15 @@ def run_pipeline(manifest: RecallManifest, target: Path, repo_root: Path,
                 "--out dir; scoring the pinned dir", sentinel_dir)
         out_dir = pipeline_out
     elif sentinel_dir is not None:
+        if sentinel_dir != pipeline_out:
+            msg = (
+                f"pipeline produced no SARIFs in the pinned --out dir "
+                f"{pipeline_out} and its OUTPUT_DIR sentinel names a "
+                f"different directory ({sentinel_dir}); refusing to "
+                f"score an unpinned location (exit {proc.returncode}); "
+                f"full log: {log_path}"
+            )
+            raise RunnerError(msg)
         out_dir = sentinel_dir
     else:
         msg = (

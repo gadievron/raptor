@@ -166,29 +166,43 @@ class TestRunPipeline:
         return _run
 
     def test_sentinel_parsed_and_log_written(self, tmp_path):
-        out = tmp_path / "run_out"
-        out.mkdir()
         log = tmp_path / "pipeline.log"
+        out = log.parent / "pipeline-run"
+        out.mkdir()
         with mock_module_attribute(_mock_owner('core.recall.runner'), 'subprocess', 'run',
                    side_effect=self._proc(f"noise\nOUTPUT_DIR={out}\n")):
             got = run_pipeline(_manifest(), tmp_path / "t", tmp_path, log)
         assert got == out
         assert "OUTPUT_DIR" in log.read_text(encoding="utf-8")
 
-    def test_last_sentinel_occurrence_wins(self, tmp_path):
-        # The lifecycle contract is "the LAST line is OUTPUT_DIR=…";
-        # echoed config or nested tool output can print the sentinel
-        # shape earlier and must not steer the binding.
-        early = tmp_path / "echoed_config"
-        early.mkdir()
-        final = tmp_path / "run_out"
-        final.mkdir()
+    def test_first_sentinel_occurrence_wins(self, tmp_path):
+        # The lifecycle prints OUTPUT_DIR= before any child runs; a
+        # second sentinel later in the stream is child-controlled text
+        # (a hostile build step can print one) and must not steer the
+        # binding.
         log = tmp_path / "pipeline.log"
-        stdout = f"OUTPUT_DIR={early}\nprogress\nOUTPUT_DIR={final}\n"
+        pinned = log.parent / "pipeline-run"
+        pinned.mkdir()
+        spoofed = tmp_path / "attacker_dir"
+        spoofed.mkdir()
+        stdout = f"OUTPUT_DIR={pinned}\nprogress\nOUTPUT_DIR={spoofed}\n"
         with mock_module_attribute(_mock_owner('core.recall.runner'), 'subprocess', 'run',
                    side_effect=self._proc(stdout)):
             got = run_pipeline(_manifest(), tmp_path / "t", tmp_path, log)
-        assert got == final
+        assert got == pinned
+
+    def test_divergent_sentinel_without_pinned_sarifs_refused(
+            self, tmp_path):
+        # The run pinned --out; with no SARIFs there, a sentinel naming
+        # a different directory must refuse rather than fall back to
+        # scoring the (possibly child-chosen) location.
+        log = tmp_path / "pipeline.log"
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        with mock_module_attribute(_mock_owner('core.recall.runner'), 'subprocess', 'run',
+                   side_effect=self._proc(f"OUTPUT_DIR={elsewhere}\n")), \
+             pytest.raises(RunnerError, match="refusing to score"):
+            run_pipeline(_manifest(), tmp_path / "t", tmp_path, log)
 
     def test_missing_sentinel_errors(self, tmp_path):
         log = tmp_path / "pipeline.log"
@@ -216,7 +230,7 @@ class TestRunPipeline:
         assert "diverges" in caplog.text
 
     def test_nonzero_exit_with_dir_still_scores(self, tmp_path, caplog):
-        out = tmp_path / "run_out"
+        out = tmp_path / "pipeline-run"
         out.mkdir()
         with mock_module_attribute(_mock_owner('core.recall.runner'), 'subprocess', 'run',
                    side_effect=self._proc(f"OUTPUT_DIR={out}\n", rc=1)):
@@ -225,7 +239,7 @@ class TestRunPipeline:
         assert got == out
 
     def test_llm_profile_warns(self, tmp_path, caplog):
-        out = tmp_path / "run_out"
+        out = tmp_path / "pipeline-run"
         out.mkdir()
         with mock_module_attribute(_mock_owner('core.recall.runner'), 'subprocess', 'run',
                    side_effect=self._proc(f"OUTPUT_DIR={out}\n")), \
@@ -307,7 +321,7 @@ class TestStreamedPipelineOutput:
     run's output is never buffered in memory to grep one sentinel."""
 
     def test_run_called_with_file_streams(self, tmp_path):
-        out = tmp_path / "run_out"
+        out = tmp_path / "pipeline-run"
         out.mkdir()
         log = tmp_path / "pipeline.log"
         seen = {}
@@ -344,7 +358,7 @@ class TestStreamedPipelineOutput:
         # its target's bytes copied into the log.
         victim = tmp_path / "victim"
         victim.write_text("INJECTED-VICTIM-LINE\n", encoding="utf-8")
-        out = tmp_path / "run_out"
+        out = tmp_path / "pipeline-run"
         out.mkdir()
         log = tmp_path / "pipeline.log"
 

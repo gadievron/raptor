@@ -15,7 +15,7 @@ from core.source import streams
 
 @pytest.fixture
 def pipeline(tmp_path, monkeypatch):
-    output = tmp_path / 'owned-output'
+    output = tmp_path / 'pipeline-run'
     output.mkdir()
     state = {'root': tmp_path, 'output': output, 'log': tmp_path / 'pipeline.log',
              'roles': {}, 'opened': [], 'closed': [], 'live': set(), 'calls': 0,
