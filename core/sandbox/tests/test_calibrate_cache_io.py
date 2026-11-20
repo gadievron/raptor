@@ -147,3 +147,34 @@ else:
     assert result.returncode == 0, result.stderr
     assert (cache / "blocked.json").exists()
     assert (cache / "valid.json").exists() is (operation == "load")
+
+
+@pytest.mark.parametrize("mode", [0o620, 0o602, 0o622])
+def test_entry_writable_by_other_accounts_is_a_miss(cache, caplog, mode):
+    # The cache steers sandbox posture: an entry another account can
+    # rewrite is untrusted, so the load degrades to a recalibration.
+    path = cache / "entry.json"
+    path.write_text(json.dumps(profile()))
+    os.chmod(path, mode)
+    with caplog.at_level("WARNING", logger=cal.logger.name):
+        assert cal._load_from_cache("entry") is None
+    assert "treating as miss" in caplog.text
+    assert path.exists()
+
+
+def test_entry_owned_by_another_account_is_a_miss(cache, monkeypatch):
+    path = cache / "entry.json"
+    path.write_text(json.dumps(profile()))
+    os.chmod(path, 0o600)
+    patch_module_attribute(
+        monkeypatch, cal, "os", "geteuid", lambda: os.geteuid() + 1,
+    )
+    assert cal._load_from_cache("entry") is None
+
+
+@pytest.mark.parametrize("mode", [0o600, 0o644])
+def test_read_only_sharing_bits_still_load(cache, mode):
+    path = cache / "entry.json"
+    path.write_text(json.dumps(profile()))
+    os.chmod(path, mode)
+    assert cal._load_from_cache("entry") is not None

@@ -64,6 +64,7 @@ from pathlib import Path
 from core.atomic_fs import write_text_atomically
 from core.json import dumps_artifact, dumps_canonical
 from core.sandbox.evidence import _unique_evidence_object
+from core.security.file_policy import validate_file_permissions
 from core.security.log_sanitisation import sanitise_exception_message, sanitise_for_terminal
 
 logger = logging.getLogger(__name__)
@@ -656,6 +657,13 @@ def _read_cache_profile(path: Path) -> SandboxProfile:
         metadata = os.fstat(fd)
         if not stat.S_ISREG(metadata.st_mode):
             raise ValueError("calibration cache entry is not a regular file")
+        # The cache steers sandbox posture, so an entry another account
+        # owns or can write is not trusted evidence. Refusal is a
+        # ValueError, which the caller already treats as a cache miss —
+        # the profile is recalibrated and rewritten with 0600/0700.
+        validate_file_permissions(
+            metadata, owner_uid=os.geteuid(), forbidden_mode_bits=0o022,
+        )
         if metadata.st_size > _MAX_CACHE_BYTES:
             raise ValueError("calibration cache entry exceeds the byte limit")
         data = bytearray()
