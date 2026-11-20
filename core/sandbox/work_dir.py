@@ -27,11 +27,16 @@ from __future__ import annotations
 import os
 import re
 import stat
+import threading
 from pathlib import Path
 
 from core.run.metadata import RUN_METADATA_FILE
 
-__all__ = ["WORK_SUBDIR_PREFIX", "hostile_work_subdir", "is_run_root"]
+from ._fake_home import _DIR_FLAGS, _open_directory
+from ._pathpin import canonical_bind_path
+
+__all__ = ["WORK_SUBDIR_PREFIX", "hostile_work_subdir", "is_run_root",
+           "verified_subdir_identity"]
 
 #: Every work subdirectory carries this prefix so run-dir consumers
 #: (artifact walkers, cleanup) can recognise child scratch space.
@@ -41,6 +46,33 @@ WORK_SUBDIR_PREFIX = "work-"
 #: a strict charset keeps the minted path shell- and log-safe and
 #: forecloses traversal ("." / ".." cannot match).
 _LABEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+
+#: Verified-identity registry: canonical bind path of a minted work
+#: subdir → (verification-time walk path, st_dev, st_ino) of the
+#: fd-verified directory. The spawn layer's bind-source pin step
+#: (``core.sandbox._spawn._pin_bind_sources``) consults this so a
+#: symlink swapped in AFTER :func:`hostile_work_subdir` returned is
+#: refused at pin time instead of being followed by a fresh
+#: ``realpath``. Lock discipline mirrors ``core.sandbox.state``:
+#: brief holds around every read/write.
+_identity_lock = threading.Lock()
+_verified_subdirs: dict[str, tuple[str, int, int]] = {}
+
+
+def verified_subdir_identity(
+        canonical_path: str) -> tuple[str, int, int] | None:
+    """Recorded identity for a work subdir minted by
+    :func:`hostile_work_subdir`, keyed by its canonical bind path
+    (``core.sandbox._pathpin.canonical_bind_path``).
+
+    Returns ``(walk_path, st_dev, st_ino)`` — the symlink-resolved
+    path the verification walked (resolved BEFORE the fd-verified
+    creation, so pinning along it refuses any later-planted symlink
+    with ELOOP) and the verified directory's inode identity — or
+    ``None`` for paths this module never minted.
+    """
+    with _identity_lock:
+        return _verified_subdirs.get(canonical_path)
 
 
 def is_run_root(path: str | os.PathLike[str]) -> bool:
@@ -66,12 +98,23 @@ def hostile_work_subdir(run_root: str | os.PathLike[str],
     (max 64 chars) — never target-derived text. The subdirectory is
     ``<run_root>/work-<label>``.
 
-    Symlink defence mirrors the fake-home materialisation in
-    :mod:`core.sandbox.context`: a prior sandboxed child holding the
-    run-root write grant could have replaced the work subdir with a
-    symlink so THIS parent-side mkdir/chmod lands outside the run
-    dir. Anything pre-existing that is not a plain directory refuses
-    with ``ValueError``.
+    Symlink defence mirrors ``core.sandbox._fake_home.prepare_home``:
+    a prior sandboxed child holding the run-root write grant could
+    replace the work subdir with a symlink so parent-side file
+    operations land outside the run dir — and it can re-plant at any
+    instant, so an advisory ``lstat`` before ``mkdir`` proves nothing
+    about what ``mkdir`` then operated on. The materialisation is
+    therefore fd-anchored end to end: the run root is walked with
+    O_DIRECTORY|O_NOFOLLOW dir fds, the subdir is created and opened
+    through the pinned parent fd, and the opened fd is fstat-verified
+    (directory, owned by this euid, mode 0o700 — re-asserted via
+    ``fchmod`` on the fd when a pre-existing owned dir drifted).
+    Anything pre-existing that is not a plain owned directory refuses
+    with ``ValueError`` — including a regular file raced in under the
+    mkdir, which must never escape as ``FileExistsError``.
+
+    The verified identity is recorded for the spawn layer's pin step
+    (see :func:`verified_subdir_identity`).
     """
     if not _LABEL_RE.fullmatch(label):
         msg = (
@@ -81,19 +124,71 @@ def hostile_work_subdir(run_root: str | os.PathLike[str],
         )
         raise ValueError(msg)
     work = Path(run_root) / f"{WORK_SUBDIR_PREFIX}{label}"
+    name = work.name
+
+    def _refuse(detail: str) -> ValueError:
+        return ValueError(
+            f"hostile_work_subdir refuses to materialise: "
+            f"{str(work)!r} {detail}. A prior sandboxed process "
+            f"may have replaced it to redirect parent-side file "
+            f"operations. Clean the run dir or use a fresh one."
+        )
+
+    # realpath BEFORE the pinned walk (the _pathpin contract): benign
+    # pre-existing symlinks in the run-root ancestry resolve here, and
+    # any symlink appearing after this point refuses mid-walk.
+    parent_real = os.path.realpath(os.fspath(run_root))
+    parent_fd = _open_directory(parent_real)
+    work_fd = -1
     try:
-        st = os.lstat(work)
-    except FileNotFoundError:
-        pass
-    else:
-        if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
-            msg = (
-                f"hostile_work_subdir refuses to materialise: "
-                f"{str(work)!r} exists but is not a regular directory "
-                f"(mode=0o{st.st_mode:o}). A prior sandboxed process "
-                f"may have replaced it to redirect parent-side file "
-                f"operations. Clean the run dir or use a fresh one."
-            )
-            raise ValueError(msg)
-    work.mkdir(mode=0o700, exist_ok=True)
+        try:
+            os.mkdir(name, mode=0o700, dir_fd=parent_fd)
+        except FileExistsError:
+            # Something already sits at the name — a prior mint, or a
+            # planted entry. Never trust the name: the fd open +
+            # fstat below is the only verification.
+            pass
+        try:
+            work_fd = os.open(name, _DIR_FLAGS, dir_fd=parent_fd)
+        except OSError as exc:
+            # ELOOP (symlink), ENOTDIR/ENOENT (regular file / raced
+            # unlink): every planted shape lands here, converted to
+            # the module's refusal type so callers that catch
+            # ValueError never see a raw FileExistsError/OSError.
+            raise _refuse(
+                "exists but is not a regular directory "
+                f"({exc.strerror or exc.__class__.__name__})") from exc
+        st = os.fstat(work_fd)
+        if not stat.S_ISDIR(st.st_mode):
+            raise _refuse("exists but is not a regular directory")
+        if st.st_uid != os.geteuid():
+            raise _refuse(
+                f"is owned by uid {st.st_uid}, not this process "
+                f"(euid {os.geteuid()})")
+        if stat.S_IMODE(st.st_mode) != 0o700:
+            # Pre-existing owned dir with drifted bits: re-assert via
+            # the verified fd, never the name.
+            try:
+                os.fchmod(work_fd, 0o700)
+            except OSError as exc:
+                raise _refuse(
+                    "exists with mode "
+                    f"0o{stat.S_IMODE(st.st_mode):o} that cannot be "
+                    "re-asserted to 0o700") from exc
+            st = os.fstat(work_fd)
+            if stat.S_IMODE(st.st_mode) != 0o700:
+                raise _refuse(
+                    "did not hold mode 0o700 after fchmod "
+                    f"(mode=0o{stat.S_IMODE(st.st_mode):o})")
+        with _identity_lock:
+            _verified_subdirs[canonical_bind_path(os.fspath(work))] = (
+                os.path.join(parent_real, name), st.st_dev, st.st_ino)
+    finally:
+        if work_fd >= 0:
+            try:
+                os.close(work_fd)
+            finally:
+                os.close(parent_fd)
+        else:
+            os.close(parent_fd)
     return work

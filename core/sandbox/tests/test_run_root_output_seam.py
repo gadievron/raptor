@@ -216,3 +216,45 @@ class TestHostileWorkSubdir:
         (tmp_path / "work-target").write_text("", encoding="utf-8")
         with pytest.raises(ValueError, match="not a regular directory"):
             hostile_work_subdir(tmp_path, "target")
+
+    def test_file_plant_never_escapes_fileexists(self, tmp_path):
+        """A planted regular file must surface as the module's
+        ValueError refusal, never a raw FileExistsError (callers catch
+        ValueError only — see packages/frida/active.py)."""
+        (tmp_path / "work-target").write_text("", encoding="utf-8")
+        try:
+            hostile_work_subdir(tmp_path, "target")
+        except FileExistsError:
+            pytest.fail("FileExistsError escaped hostile_work_subdir")
+        except ValueError:
+            pass
+        else:
+            pytest.fail("planted regular file was not refused")
+
+    def test_dangling_symlink_plant_refused(self, tmp_path):
+        (tmp_path / "work-target").symlink_to(tmp_path / "nowhere")
+        with pytest.raises(ValueError, match="not a regular directory"):
+            hostile_work_subdir(tmp_path, "target")
+
+    def test_preexisting_owned_dir_mode_reasserted(self, tmp_path):
+        pre = tmp_path / "work-target"
+        pre.mkdir(mode=0o755)
+        os.chmod(pre, 0o755)
+        work = hostile_work_subdir(tmp_path, "target")
+        assert stat.S_IMODE(os.stat(work).st_mode) == 0o700
+
+    def test_verified_identity_registered(self, tmp_path):
+        from core.sandbox._pathpin import canonical_bind_path
+        from core.sandbox.work_dir import verified_subdir_identity
+        work = hostile_work_subdir(tmp_path, "target")
+        identity = verified_subdir_identity(canonical_bind_path(str(work)))
+        assert identity is not None
+        walk_path, st_dev, st_ino = identity
+        st = os.stat(work)
+        assert (st_dev, st_ino) == (st.st_dev, st.st_ino)
+        assert os.path.realpath(walk_path) == os.path.realpath(str(work))
+
+    def test_unminted_path_has_no_identity(self, tmp_path):
+        from core.sandbox.work_dir import verified_subdir_identity
+        missing = verified_subdir_identity(str(tmp_path / "never-minted"))
+        assert missing is None

@@ -1217,6 +1217,45 @@ def _cleanup_stub(root_dir: str) -> None:
 
 
 
+def _pin_one_source(key: str) -> int:
+    """Pin one canonical bind-source path as an O_PATH fd.
+
+    Work subdirs minted by ``core.sandbox.work_dir`` carry a recorded
+    verification identity. For those keys the walk follows the
+    verification-time resolved path (NOT a fresh ``realpath``, which
+    would follow a symlink swapped in after the helper returned), and
+    the pinned inode must BE the verified one — a mismatch raises the
+    bind-pin tamper errno so the caller's required-pin handling fails
+    the spawn closed instead of binding a replacement. Unregistered
+    paths keep the realpath-immediately-before-walk contract
+    (``core.sandbox._pathpin`` module docstring).
+    """
+    from ._pathpin import open_pinned
+    from .work_dir import verified_subdir_identity
+
+    identity = verified_subdir_identity(key)
+    if identity is None:
+        return open_pinned(os.path.realpath(key))
+    walk_path, want_dev, want_ino = identity
+    fd = open_pinned(walk_path)
+    try:
+        st = os.fstat(fd)
+        if (st.st_dev, st.st_ino) != (want_dev, want_ino):
+            raise OSError(
+                _PIN_TAMPER_ERRNO,
+                f"bind source {key!r} no longer resolves to its "
+                f"verified work-subdir inode (dev/ino "
+                f"{st.st_dev}/{st.st_ino} != recorded "
+                f"{want_dev}/{want_ino}); refusing to pin the "
+                f"replacement",
+            )
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+        raise
+    return fd
+
+
 def _pin_bind_sources(
     target: str | None,
     output: str | None,
@@ -1269,8 +1308,6 @@ def _pin_bind_sources(
     child-side after ``setup_mount_ns`` returns; every returned fd is
     closed here on failure, so no fd leaks when this raises.
     """
-    from ._pathpin import open_pinned
-
     fds: dict[str, int] = {}
     try:
         # writable_extra_paths (out-of-view writable grants carried
@@ -1284,7 +1321,7 @@ def _pin_bind_sources(
             key = _canonical_bind_path(req)
             if key in fds:
                 continue
-            fds[key] = open_pinned(os.path.realpath(key))
+            fds[key] = _pin_one_source(key)
         for extra in (readable_paths or ()):
             if not extra:
                 continue
@@ -1299,8 +1336,13 @@ def _pin_bind_sources(
                 # other process's walk can reproduce. Nothing to pin.
                 continue
             try:
-                fds[key] = open_pinned(os.path.realpath(key))
-            except OSError:
+                fds[key] = _pin_one_source(key)
+            except OSError as _pin_exc:
+                if _pin_exc.errno == _PIN_TAMPER_ERRNO:
+                    # A registered work-subdir identity mismatch is a
+                    # tamper signal, never a skippable "path absent on
+                    # this host" shape — fail the spawn closed.
+                    raise
                 # Non-pinnable readable path (typically: does not
                 # exist on this host — /lib64 on non-multilib, an
                 # optional tool dir). The child skips unpinned

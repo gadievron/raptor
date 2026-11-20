@@ -192,6 +192,87 @@ class TestPinBindSources(unittest.TestCase):
                          "pin cycles left fds open into the test base")
 
 
+class TestWorkSubdirRegisteredPins(unittest.TestCase):
+    """_spawn._pin_one_source for work subdirs minted by
+    core.sandbox.work_dir: the pin walks the verification-time path
+    (never a fresh realpath, which would follow a post-mint symlink
+    swap) and requires the verified inode identity."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name)
+
+    def _mint(self) -> str:
+        from core.sandbox._pathpin import canonical_bind_path
+        from core.sandbox.work_dir import (
+            _identity_lock,
+            _verified_subdirs,
+            hostile_work_subdir,
+        )
+        work = hostile_work_subdir(self.base, "target")
+        key = canonical_bind_path(str(work))
+
+        def _forget() -> None:
+            with _identity_lock:
+                _verified_subdirs.pop(key, None)
+
+        self.addCleanup(_forget)
+        return key
+
+    def test_registered_pin_matches_verified_inode(self) -> None:
+        from core.sandbox._spawn import _pin_one_source
+        key = self._mint()
+        fd = _pin_one_source(key)
+        self.addCleanup(os.close, fd)
+        st_fd = os.fstat(fd)
+        st_path = os.stat(key)
+        self.assertEqual((st_fd.st_dev, st_fd.st_ino),
+                         (st_path.st_dev, st_path.st_ino))
+
+    def test_post_mint_symlink_swap_refused(self) -> None:
+        """The post-return window shape: the helper returned, then the
+        subdir is renamed away and a symlink to VICTIM planted. A
+        realpath-based pin would follow it; the registered pin must
+        refuse."""
+        from core.sandbox._spawn import _pin_one_source
+        key = self._mint()
+        victim = self.base / "victim"
+        victim.mkdir()
+        os.rename(key, self.base / "moved-away")
+        os.symlink(victim, key)
+        with self.assertRaises(OSError):
+            _pin_one_source(key)
+
+    def test_rename_swap_to_real_dir_refused_estale(self) -> None:
+        """Swap to a REAL directory (no symlink) still mismatches the
+        registered (st_dev, st_ino) → the bind-pin tamper errno, which
+        the required-pin path fails closed on."""
+        from core.sandbox._spawn import _pin_one_source
+        from core.sandbox.mount_ns import _ESTALE
+        key = self._mint()
+        os.rename(key, self.base / "moved-away")
+        os.mkdir(key, 0o700)
+        with self.assertRaises(OSError) as cm:
+            _pin_one_source(key)
+        self.assertEqual(cm.exception.errno, _ESTALE)
+
+    def test_unregistered_path_keeps_realpath_contract(self) -> None:
+        """Paths work_dir never minted pin exactly as before: benign
+        pre-existing symlinks resolve at the realpath step."""
+        from core.sandbox._spawn import _pin_one_source
+        real = self.base / "real"
+        real.mkdir()
+        link = self.base / "link"
+        os.symlink(real, link)
+        fd = _pin_one_source(str(link))
+        self.addCleanup(os.close, fd)
+        st_fd = os.fstat(fd)
+        st_real = os.stat(real)
+        self.assertEqual((st_fd.st_dev, st_fd.st_ino),
+                         (st_real.st_dev, st_real.st_ino))
+
+
 class TestBindPinnedSourceIdentityRefusal(unittest.TestCase):
     """mount_ns._bind_pinned_source with a validation-time fd refuses —
     BEFORE any mount(2) — when the source no longer resolves to the
