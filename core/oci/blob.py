@@ -441,6 +441,19 @@ def extract_files_from_layer(
             target = _normalise_tar_path(
                 posixpath.join(posixpath.dirname(name), member.linkname))
             if not _escapes_layer_root(target) and target in normalised_wanted:
+                if name in regular_names or name in hardlinks:
+                    # The name already materialised as selected
+                    # content: tar/overlay last-wins would leave the
+                    # RUNTIME this link while the scan returned the
+                    # earlier bytes — the same scanner-vs-runtime
+                    # divergence unique_keys refuses for duplicated
+                    # regular entries. (The reverse order — link
+                    # first, regular file after — is the benign
+                    # last-wins shape: the later content is what both
+                    # the scan and the runtime see.)
+                    raise WantedEntryRefused(
+                        "selected content shadowed by a later wanted "
+                        "symlink")
                 carved_symlinks[name] = target
                 return
         if not member.islnk() or not resolve_selected_hardlinks:

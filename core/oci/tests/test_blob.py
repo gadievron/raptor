@@ -560,6 +560,43 @@ def test_wanted_self_symlink_is_loud():
         extract_files_from_layer(_stream(blob), {"var/lib/dpkg/status"})
 
 
+def test_wanted_regular_shadowed_by_later_symlink_is_loud():
+    """A regular wanted file (decoy bytes) followed by a self-symlink
+    at the SAME name: tar/overlay last-wins leaves the runtime a
+    dangling link while the scan holds the decoy — the carve-out must
+    refuse the shadow instead of returning the divergent inventory."""
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w") as tf:
+        decoy = tarfile.TarInfo(name="var/lib/dpkg/status")
+        decoy.size = len(b"BENIGN")
+        tf.addfile(decoy, io.BytesIO(b"BENIGN"))
+        link = tarfile.TarInfo(name="var/lib/dpkg/status")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "status"
+        tf.addfile(link)
+    blob = gzip.compress(raw.getvalue())
+    with pytest.raises(WantedEntryRefused, match="shadowed"):
+        extract_files_from_layer(_stream(blob), {"var/lib/dpkg/status"})
+
+
+def test_wanted_symlink_then_regular_last_wins_is_quiet():
+    """The reverse order is the benign last-wins shape: the regular
+    file shipped AFTER the link is what both the runtime and the scan
+    see, so the layer must not fail and must return the later bytes."""
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w") as tf:
+        link = tarfile.TarInfo(name="var/lib/dpkg/status")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "status"
+        tf.addfile(link)
+        content = tarfile.TarInfo(name="var/lib/dpkg/status")
+        content.size = len(b"pkgdata")
+        tf.addfile(content, io.BytesIO(b"pkgdata"))
+    blob = gzip.compress(raw.getvalue())
+    out = extract_files_from_layer(_stream(blob), {"var/lib/dpkg/status"})
+    assert out == {"var/lib/dpkg/status": b"pkgdata"}
+
+
 def test_wanted_symlink_to_absent_wanted_target_is_loud():
     """Both spellings are wanted, but the layer ships only the link —
     the target regular file never appears, so nothing reaches the
