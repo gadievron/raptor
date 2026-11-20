@@ -581,7 +581,6 @@ def _reject_non_finite_floats(data: Any) -> None:
                 stack.extend(obj.values())
             else:
                 stack.extend(obj)
-            stack.extend(obj)
 
 
 def dumps_canonical(data: Any) -> str:

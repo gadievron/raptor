@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -395,3 +396,25 @@ class TestNonFinitePrescanCycles:
         shared = [1, 2]
         assert json.loads(dumps_artifact({'a': shared, 'b': shared})) == {
             'a': [1, 2], 'b': [1, 2]}
+
+    def test_deep_nesting_walks_in_linear_time(self) -> None:
+        """The walk must push each child exactly once: a duplicated
+        push re-walks every subtree after its exit sentinel clears the
+        active set, turning the scan exponential in nesting depth —
+        deep LEGAL artifacts then hang the save. Depth 10000 completes
+        only on the linear walk (the exponential shape never returns);
+        the wall-clock bound guards against superlinear regressions
+        shallower than full duplication."""
+        payload: list = [1.0]
+        for _ in range(10000):
+            payload = [payload, 1.0]
+        start = time.monotonic()
+        utils._reject_non_finite_floats(payload)
+        assert time.monotonic() - start < 5.0
+
+    def test_deep_nested_nan_still_rejected(self) -> None:
+        payload: list = [float('nan')]
+        for _ in range(10000):
+            payload = [payload]
+        with pytest.raises(ValueError, match='JSON compliant'):
+            utils._reject_non_finite_floats(payload)
