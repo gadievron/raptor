@@ -500,6 +500,28 @@ class TestCorroborationGrading:
         )
         assert not is_human_grade(_human_interactive(envm="claudecode"))
 
+    def test_trusted_dispatch_marker_alone_does_not_demote(self):
+        # Direction pin for the deliberate divergence from the live
+        # grant: every ``bin/raptor`` lane exports _RAPTOR_TRUSTED=1
+        # (the dispatch gate requires a marker to run the CLI at
+        # all), so ``trusted`` is the shape a genuine bare-shell
+        # operator add stamps — demoting it would retire the human
+        # tier outright. The agent shapes are carried by the
+        # ``claudecode`` marker and the agent-comm chain rule.
+        assert is_human_grade(_human_interactive(envm="trusted"))
+
+    def test_agent_comm_in_parent_chain_demotes(self):
+        # Parity with the live grant: a stored annotation whose
+        # recorded ancestry carries a known agent binary (the agent
+        # CLI name, a version-named binary, or the runtime it ships
+        # under) was written from an agent session — hint tier only.
+        assert not is_human_grade(
+            _human_interactive(parents="bash,claude,sshd"),
+        )
+        assert not is_human_grade(
+            _human_interactive(parents="bash,node,sshd"),
+        )
+
     def test_script_wrapper_in_parent_chain_demotes(self):
         assert not is_human_grade(
             _human_interactive(parents="script,bash"),
@@ -921,12 +943,15 @@ class TestLiveContextGrantsOperator:
         assert not live_context_grants_operator(
             dict(self._BASE, parents=f"bash,{runtime},sshd"))
 
-    def test_runtime_comm_demotion_is_scoped_to_the_live_grant(self):
-        # Direction pin for the scoping: the annotation READER keys
-        # only on the stock ``script`` wrapper (module doctrine —
-        # the rest of the chain is recorded audit trail), so a human
-        # note written from a node-hosted terminal keeps its grade.
-        assert is_human_grade(
+    def test_runtime_comm_demotion_matches_the_live_grant(self):
+        # Direction pin: the annotation READER applies the same
+        # agent-comm rule as the live grant — a stored stamp whose
+        # ancestry carries a runtime comm demotes to hint tier. The
+        # false-demotion trade (a genuine human note from a
+        # runtime-hosted terminal) falls to the ordinary tier, the
+        # safe direction; the alternative lets the stock agent shape
+        # store an annotation that outranks the live grant it mirrors.
+        assert not is_human_grade(
             _human_interactive(parents="bash,node,sshd"))
 
     def test_broken_ancestry_demotes(self):

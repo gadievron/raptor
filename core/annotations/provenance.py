@@ -550,7 +550,17 @@ def _corroboration_ok(
     Demotes on: the process having been its own session leader (the
     ``script -qec`` shape — a shell never execs a command as session
     leader), an agent-session environment marker, or the stock
-    ``script`` wrapper anywhere in the recorded parent chain. The
+    ``script`` wrapper or a known agent-binary comm
+    (:func:`_is_agent_comm`) anywhere in the recorded parent chain.
+    Unlike :func:`live_context_grants_operator`, the ``trusted``
+    marker deliberately does NOT demote here: the dispatch trust gate
+    requires one of the two markers to run the CLI at all and every
+    ``bin/raptor`` lane exports ``_RAPTOR_TRUSTED=1``, so ``trusted``
+    is the shape a genuine bare-shell operator invocation stamps —
+    demoting it would retire the human tier outright. An in-session
+    agent that scrubs ``claudecode`` must still present ``trusted``
+    AND its recorded ancestry carries the agent binary (the deep-scan
+    append defeats fork stacking), which the chain rule demotes. The
     ``ancestry-truncated`` token (bounded ancestor scan exhausted
     before the session root) deliberately does NOT demote —
     deep-but-legitimate shell stacks exist — the truncation is
@@ -583,7 +593,10 @@ def _corroboration_ok(
         return False
     if parents is None or not valid_parents_value(parents):
         return False
-    return "script" not in parents.split(",")
+    chain = parents.split(",")
+    return "script" not in chain and not any(
+        _is_agent_comm(c) for c in chain
+    )
 
 
 def classify_provenance(metadata: Mapping[str, str] | None) -> str:
