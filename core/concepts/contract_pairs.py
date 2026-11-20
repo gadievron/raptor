@@ -139,6 +139,20 @@ _NOISE_NOUNS: frozenset[str] = frozenset({
 # Minimum noun length to avoid matching single-character remnants.
 _MIN_NOUN_LEN = 2
 
+#: Per-noun verb-set cap for pair enumeration. ``combinations(K, 2)``
+#: is quadratic in the number of verbs sharing a noun, so a hostile
+#: inventory handing ONE noun thousands of distinct verbs forces
+#: millions of candidate pairs. Both directions of the bound: real
+#: naming conventions pair a handful of verbs per noun (alloc/free/
+#: init/destroy/get/put style families stay well under 32), so 32
+#: loses nothing legitimate, while lower would start dropping verbs
+#: on genuinely verb-rich core objects and higher only grows the
+#: quadratic term a planted inventory can force (C(32,2) = 496 pairs
+#: per noun). Overflow keeps the inventory-wide most frequent verbs —
+#: the ones evidenced across many functions — and sheds one-off junk
+#: names.
+_MAX_VERBS_PER_NOUN = 32
+
 
 # ── Name splitting ───────────────────────────────────────────────────
 
@@ -219,7 +233,13 @@ def discover_project_verbs(
 
     pair_nouns: dict[tuple[str, str], set[str]] = defaultdict(set)
     for noun, verbs in noun_to_verbs.items():
-        for v1, v2 in combinations(sorted(verbs), 2):
+        kept: list[str] = sorted(verbs)
+        if len(kept) > _MAX_VERBS_PER_NOUN:
+            kept = sorted(
+                sorted(kept, key=lambda v: (-first_word_counts[v], v))
+                [:_MAX_VERBS_PER_NOUN],
+            )
+        for v1, v2 in combinations(kept, 2):
             pair_nouns[(v1, v2)].add(noun)
 
     results: list[tuple[frozenset[str], frozenset[str], ContractKind]] = []

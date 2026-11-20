@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import time
+
+from core.concepts import contract_pairs
 from core.concepts.contract_pairs import (
     ContractKind,
     _split_name,
@@ -108,6 +111,35 @@ class TestDiscoverProjectVerbs:
         if release_entries:
             _, _, kind = release_entries[0]
             assert kind != ContractKind.DISCOVERED
+
+    def test_verb_blowup_is_capped(self):
+        """Thousands of distinct verbs on ONE noun stay bounded.
+
+        Without the per-noun cap this enumerated C(5000, 2) = 12.5M
+        candidate pairs; the capped path sorts once and enumerates at
+        most C(_MAX_VERBS_PER_NOUN, 2) pairs for the noun.
+        """
+        funcs = [_func(f"v{i}_data") for i in range(5000)]
+        started = time.monotonic()
+        discovered = discover_project_verbs(funcs)
+        elapsed = time.monotonic() - started
+        # No verb pair spans two nouns, so nothing is discovered —
+        # and the enumeration must finish without the quadratic pump
+        # (generous margin for slow CI machines).
+        assert discovered == []
+        assert elapsed < 5.0
+
+    def test_cap_keeps_most_frequent_verbs(self, monkeypatch):
+        """Overflow sheds one-off junk verbs, not evidenced pairs."""
+        monkeypatch.setattr(contract_pairs, "_MAX_VERBS_PER_NOUN", 4)
+        funcs = [
+            _func("begin_transaction"), _func("end_transaction"),
+            _func("begin_session"), _func("end_session"),
+        ] + [_func(f"zz{i}_transaction") for i in range(20)]
+        discovered = discover_project_verbs(funcs)
+        assert any(
+            kind == ContractKind.DISCOVERED for _, _, kind in discovered
+        )
 
 
 # ── Call-graph enrichment ───────────────────────────────────────────
