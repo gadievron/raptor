@@ -47,7 +47,7 @@ def exercise(case, deny, expected_closed, tmp_path):
     pt = production.read_text()
     assert (
         hashlib.sha256(pt.encode()).hexdigest()
-        == "5956061b2faf6f8e02794d22ad6a36710b86f93ae2a63dbcca04b3ef987ffb61"
+        == "e4f8eb9090a38ce20567499c4e8af6d8c56d547fb565316cceedcc6afb3d53e1"
     )
     schema_node = next(
         n

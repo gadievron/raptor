@@ -726,7 +726,7 @@
     "file": "core/recall/tests/test_runner.py",
     "anchor": [
       "TestRunPipeline",
-      "test_last_sentinel_occurrence_wins"
+      "test_first_sentinel_occurrence_wins"
     ],
     "owner": "core.recall.runner",
     "binding": "subprocess",
