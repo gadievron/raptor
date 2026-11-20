@@ -970,19 +970,25 @@ def test_hardening_absent_from_permissive_profiles():
 
 
 def test_hardening_audit_duals_report_every_denied_family():
-    """Audit reports ordinary operations but retains hard broker denials."""
+    """Audit reports ordinary operations but retains hard broker
+    denials — and the SysV family deny, which stays ENFORCED under
+    audit on both platforms (the Linux audit lane keeps its seccomp
+    SysV deny; an audited run must not hand the target a same-UID
+    cross-process shm primitive the enforcement run refuses)."""
     p = seatbelt.build_profile(seccomp_profile="full", audit_mode=True,
                                output="/tmp/x")
     for family in (
         "process-info*", "iokit-open", "signal", "nvram*",
-        "mach-lookup", "sysctl-read", "ipc-posix-shm*", "ipc-sysv*",
+        "mach-lookup", "sysctl-read", "ipc-posix-shm*",
         "darwin-notification-post", "appleevent-send",
         "user-preference-write",
     ):
         assert f"(allow {family} (with report))" in p, family
+    assert "(deny ipc-sysv*)" in p
+    assert "(allow ipc-sysv* (with report))" not in p
     for fragment in (
         "(deny process-info", "(deny iokit-open", "(deny signal",
-        "(deny nvram", "(deny sysctl-read", "(deny ipc-",
+        "(deny nvram", "(deny sysctl-read", "(deny ipc-posix-shm",
     ):
         assert fragment not in p, fragment
 

@@ -842,7 +842,15 @@ def build_profile(*,
         # /proc/self equivalents via libproc still work).
         if audit_mode:
             # Observe-don't-block duals for every family the
-            # enforcement branch denies below.
+            # enforcement branch denies below — EXCEPT ipc-sysv*,
+            # which stays a hard deny under audit. SysV shm is a live
+            # cross-process read+write primitive against same-UID
+            # segments (no path for the fs clauses to see), and the
+            # Linux audit lane keeps its seccomp SysV deny enforced
+            # for exactly that reason (context.py threads the
+            # construction-time key into the audit rebuild). An
+            # audited run must not hand the target a primitive the
+            # enforcement run refuses.
             parts.append("(allow process-info* (with report))")
             parts.append("(allow iokit-open (with report))")
             parts.append("(allow signal (with report))")
@@ -850,7 +858,7 @@ def build_profile(*,
             parts.append("(allow mach-lookup (with report))")
             parts.append("(allow sysctl-read (with report))")
             parts.append("(allow ipc-posix-shm* (with report))")
-            parts.append("(allow ipc-sysv* (with report))")
+            parts.append("(deny ipc-sysv*)")
             parts.append(
                 "(allow darwin-notification-post (with report))"
             )
