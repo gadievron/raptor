@@ -411,8 +411,14 @@ class TestNonceFileValidation:
 
     def _mint(self, d: Path, nonce: str, *, content: str | None = None,
               mode: int = 0o600) -> Path:
+        """Write a consent file. Default body is the real mint format
+        (digest line + fresh ``minted_at`` line); an explicit
+        ``content=`` is written raw so malformed-content tests keep
+        their meaning."""
         path = d / dc._nonce_filename(nonce)
-        body = content if content is not None else dc._nonce_digest(nonce)
+        body = content if content is not None else (
+            f"{dc._nonce_digest(nonce)}\n"
+            f"{dc.MINTED_AT_PREFIX}{time.time():.6f}")
         fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
         try:
             os.write(fd, (body + "\n").encode("ascii"))
@@ -510,6 +516,78 @@ class TestNonceFileValidation:
         path = self._mint(consents, self.NONCE)
         future = time.time() + 120.0
         os.utime(path, (future, future))
+        monkeypatch.setenv(dc.NONCE_ENV_VAR, self.NONCE)
+        assert dc.resolve_disable_consent() is None
+
+    def _mint_with_minted_at(self, d: Path, minted_at: object) -> Path:
+        return self._mint(
+            d, self.NONCE,
+            content=(f"{dc._nonce_digest(self.NONCE)}\n"
+                     f"{dc.MINTED_AT_PREFIX}{minted_at}"))
+
+    def test_missing_minted_at_refuses(self, consents, monkeypatch):
+        """A digest-only file (the pre-minted_at format) grants
+        nothing: without an in-content mint time the TTL cannot be
+        enforced from anything an unauthorised same-uid process could
+        not refresh, so the gate fails closed."""
+        self._mint(consents, self.NONCE,
+                   content=dc._nonce_digest(self.NONCE))
+        monkeypatch.setenv(dc.NONCE_ENV_VAR, self.NONCE)
+        assert dc.resolve_disable_consent() is None
+
+    def test_mtime_refresh_does_not_extend_expired_mint(
+            self, consents, monkeypatch) -> None:
+        """THE utimensat extension: mtime is metadata any same-uid
+        process can refresh without holding the nonce. A file whose
+        in-content minted_at is past the TTL must refuse even when its
+        mtime says fresh — the content stamp is the TTL authority."""
+        path = self._mint_with_minted_at(
+            consents, f"{time.time() - 601.0:.6f}")
+        now = time.time()
+        os.utime(path, (now, now))  # the utimensat(2) refresh
+        monkeypatch.setenv(dc.NONCE_ENV_VAR, self.NONCE)
+        assert dc.resolve_disable_consent() is None
+
+    def test_future_minted_at_beyond_skew_refuses(
+            self, consents, monkeypatch) -> None:
+        """A pre-dated mint time (trying to outlive the TTL) is tamper
+        evidence once it exceeds the skew allowance."""
+        self._mint_with_minted_at(
+            consents, f"{time.time() + dc.MINT_FUTURE_SKEW_S + 1.0:.6f}")
+        monkeypatch.setenv(dc.NONCE_ENV_VAR, self.NONCE)
+        assert dc.resolve_disable_consent() is None
+
+    def test_future_minted_at_within_skew_consents(
+            self, consents, monkeypatch) -> None:
+        """Small forward wobble (NTP step, cross-filesystem clock)
+        stays inside the allowance — a mint seconds "ahead" of the
+        validator's clock still consents."""
+        self._mint_with_minted_at(consents, f"{time.time() + 60.0:.6f}")
+        monkeypatch.setenv(dc.NONCE_ENV_VAR, self.NONCE)
+        assert dc.resolve_disable_consent() == "nonce"
+
+    @pytest.mark.parametrize("bad_stamp", [
+        "garbage",            # unparseable float
+        "",                   # empty value
+        "inf",                # parses, non-finite
+        "nan",                # parses, non-finite — and NaN compares
+                              # False both ways, so without the
+                              # isfinite gate it would slip the TTL
+    ])
+    def test_malformed_minted_at_refuses(self, consents, monkeypatch,
+                                         bad_stamp: str) -> None:
+        self._mint_with_minted_at(consents, bad_stamp)
+        monkeypatch.setenv(dc.NONCE_ENV_VAR, self.NONCE)
+        assert dc.resolve_disable_consent() is None
+
+    def test_stale_mtime_caps_fresh_minted_at(
+            self, consents, monkeypatch) -> None:
+        """The mtime check survives as an ADDITIONAL cap: a file whose
+        content stamp claims fresh but whose mtime is past the TTL
+        still refuses — the two checks only ever tighten each other."""
+        path = self._mint_with_minted_at(consents, f"{time.time():.6f}")
+        past = time.time() - 601.0
+        os.utime(path, (past, past))
         monkeypatch.setenv(dc.NONCE_ENV_VAR, self.NONCE)
         assert dc.resolve_disable_consent() is None
 

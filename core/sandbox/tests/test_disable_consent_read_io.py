@@ -52,7 +52,7 @@ def test_growth_past_limit_is_refused(consent, monkeypatch):
 
 def test_exact_limit_content_remains_valid(consent):
     path, nonce = consent
-    content = dc._nonce_digest(nonce).encode()
+    content = path.read_bytes().rstrip(b'\n')  # digest + minted_at lines
     path.write_bytes(content + b' ' * (dc.NONCE_FILE_MAX_BYTES - len(content)))
     assert dc._nonce_file_consents(path, nonce) is True
 

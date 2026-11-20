@@ -21,9 +21,12 @@ def test_partial_writes_produce_valid_complete_digest(tmp_path, monkeypatch, chu
     patch_module_attribute(monkeypatch, dc, 'os', 'write', short_write)
     nonce = dc._mint_nonce(tmp_path)
     path = tmp_path / dc._nonce_filename(nonce)
-    expected = (dc._nonce_digest(nonce) + '\n').encode()
-    assert path.read_bytes() == expected
-    assert calls[0] == expected
+    payload = path.read_bytes()
+    digest_line, minted_line, trailer = payload.split(b'\n')
+    assert digest_line == dc._nonce_digest(nonce).encode()
+    assert minted_line.startswith(dc.MINTED_AT_PREFIX.encode())
+    assert trailer == b''
+    assert calls[0] == payload
     assert len(calls) > 1
     assert dc._nonce_file_consents(path, nonce) is True
 

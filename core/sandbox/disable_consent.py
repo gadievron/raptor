@@ -67,6 +67,7 @@ import errno
 import hashlib
 import hmac
 import logging
+import math
 import os
 import pwd
 import secrets
@@ -112,12 +113,28 @@ NONCE_HEX_LEN = 32
 NONCE_FILE_TTL_S = 600.0
 
 # Upper bound on the consent file size we are willing to read. The
-# legitimate content is one 64-char digest line; 4096 bytes is
-# generous slack for trailing whitespace while still refusing to
-# slurp an arbitrarily large planted file. Lower would be brittle
-# against harmless editor artifacts (trailing newline variants);
-# higher serves no legitimate content.
+# legitimate content is one 64-char digest line plus the minted_at
+# line; 4096 bytes is generous slack for trailing whitespace while
+# still refusing to slurp an arbitrarily large planted file. Lower
+# would be brittle against harmless editor artifacts (trailing
+# newline variants); higher serves no legitimate content.
 NONCE_FILE_MAX_BYTES = 4096
+
+# Content line carrying the mint time (epoch seconds). The TTL is
+# enforced from THIS value, not the file mtime: mtime is metadata any
+# same-uid process can refresh with utimensat(2) without ever holding
+# the nonce, so an mtime-keyed TTL was silently extensible. The mint
+# time inside the 0600/O_NOFOLLOW-read content participates in the
+# same ownership/permission discipline as the digest; the mtime
+# freshness check stays as an ADDITIONAL cap, never the authority.
+MINTED_AT_PREFIX = "minted_at="
+
+# A minted_at this far in the future is tamper evidence, not clock
+# skew (the same stance host_consent._FUTURE_SKEW takes for its grant
+# timestamps). Legitimate mints happen on this host moments before
+# validation; the allowance only absorbs small cross-filesystem /
+# NTP-step wobble.
+MINT_FUTURE_SKEW_S = 300.0
 
 # Consent-source label stamped into state / sandbox_info. The nonce
 # is the only source; an accepted disable always stamps "nonce".
@@ -185,11 +202,17 @@ def _nonce_file_consents(path: Path, nonce: str) -> bool:
     Checks, in order: O_NOFOLLOW open (a symlink at the consent path
     is refused, not followed — a same-uid convenience symlink is not a
     consent), regular file, owned by the current euid, no group/other
-    permission bits, bounded size, fresh mtime, and content equal to
-    the full SHA-256 digest of the presented nonce (constant-time
-    compare). Storing the digest — not the nonce — means the file
-    alone (a leaked backup, a copied home directory) can never be
-    replayed as the env var.
+    permission bits, bounded size, fresh mtime (an additional cap —
+    see below), a fresh in-content ``minted_at`` stamp, and a digest
+    line equal to the full SHA-256 digest of the presented nonce
+    (constant-time compare). The TTL authority is the ``minted_at``
+    value INSIDE the file content: mtime can be refreshed with
+    utimensat(2) by any same-uid process without holding the nonce,
+    so it only ever tightens (a stale or future mtime still refuses),
+    never extends. A file without a parseable ``minted_at`` does not
+    consent (fail closed). Storing the digest — not the nonce — means
+    the file alone (a leaked backup, a copied home directory) can
+    never be replayed as the env var.
     """
     try:
         fd = os.open(
@@ -209,9 +232,12 @@ def _nonce_file_consents(path: Path, nonce: str) -> bool:
             return False
         if st.st_size > NONCE_FILE_MAX_BYTES:
             return False
-        age = time.time() - st.st_mtime
-        # Negative age (mtime in the future) fails closed too — a
-        # legitimate mint is always in the past on the same host.
+        now = time.time()
+        age = now - st.st_mtime
+        # Additional cap, not the TTL authority (that is minted_at in
+        # the content below): negative age (mtime in the future) fails
+        # closed too — a legitimate mint is always in the past on the
+        # same host.
         if not (0 <= age <= NONCE_FILE_TTL_S):
             return False
         chunks = []
@@ -225,8 +251,30 @@ def _nonce_file_consents(path: Path, nonce: str) -> bool:
         data = b"".join(chunks)
         if len(data) > NONCE_FILE_MAX_BYTES:
             return False
-        content = data.decode("ascii", errors="replace").strip()
-        return hmac.compare_digest(content, _nonce_digest(nonce))
+        lines = [line.strip()
+                 for line in data.decode("ascii", errors="replace")
+                 .splitlines()]
+        digest_line = lines[0] if lines else ""
+        minted_at: float | None = None
+        for line in lines[1:]:
+            if line.startswith(MINTED_AT_PREFIX):
+                try:
+                    minted_at = float(line[len(MINTED_AT_PREFIX):])
+                except ValueError:
+                    return False
+                break
+        # No parseable mint time → no consent (fail closed): the TTL
+        # cannot be enforced from metadata alone (see docstring).
+        if minted_at is None or not math.isfinite(minted_at):
+            return False
+        content_age = now - minted_at
+        if content_age > NONCE_FILE_TTL_S:
+            return False
+        if content_age < -MINT_FUTURE_SKEW_S:
+            # Future-dated mint beyond the skew allowance is tamper
+            # evidence (a pre-dated file trying to outlive the TTL).
+            return False
+        return hmac.compare_digest(digest_line, _nonce_digest(nonce))
     except OSError:
         return False
     except BaseException:
@@ -310,7 +358,9 @@ def _mint_nonce(consents_dir: Path | None = None) -> str:
     )
     write_failed = False
     try:
-        remaining = memoryview((_nonce_digest(nonce) + "\n").encode("ascii"))
+        payload = (f"{_nonce_digest(nonce)}\n"
+                   f"{MINTED_AT_PREFIX}{time.time():.6f}\n")
+        remaining = memoryview(payload.encode("ascii"))
         while remaining:
             written = os.write(fd, remaining)
             if written <= 0:
