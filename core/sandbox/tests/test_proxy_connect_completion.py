@@ -32,7 +32,7 @@ def test_invalid_upstream_response_is_502_failed_and_closed(proxy, monkeypatch, 
             client = await dial()
             proxy._upstream = ("127.0.0.1", 1234)
             async def vetted(*args):
-                return None
+                return None, "screened"
             monkeypatch.setattr(proxy, "_vet_upstream_target", vetted)
             reader = asyncio.StreamReader()
             reader.feed_data(b"CONNECT owned.invalid:443 HTTP/1.1\r\n\r\n")
@@ -115,7 +115,7 @@ def test_upstream_header_timeout_is_502_with_no_success_ack(proxy, monkeypatch):
             proxy._upstream = ("127.0.0.1", 1234)
             proxy._upstream_handshake_timeout = 0.02
             async def vetted(*args):
-                return None
+                return None, "screened"
             monkeypatch.setattr(proxy, "_vet_upstream_target", vetted)
             reader = asyncio.StreamReader()
             reader.feed_data(b"CONNECT owned.invalid:443 HTTP/1.1\r\n\r\n")
@@ -143,7 +143,7 @@ def test_complete_upstream_head_relays_the_following_payload_unchanged(proxy, mo
             client = await dial()
             proxy._upstream = ("127.0.0.1", 1234)
             async def vetted(*args):
-                return None
+                return None, "screened"
             monkeypatch.setattr(proxy, "_vet_upstream_target", vetted)
             reader = asyncio.StreamReader()
             reader.feed_data(b"CONNECT owned.invalid:443 HTTP/1.1\r\n\r\n")
@@ -164,4 +164,77 @@ def test_complete_upstream_head_relays_the_following_payload_unchanged(proxy, mo
                 events = proxy.unregister_sandbox(token)
             assert [event["result"] for event in events] == ["allowed"]
             assert events[0]["bytes_u2c"] == len(payload)
+    run(proxy, scenario())
+
+
+def test_vet_upstream_target_tags_screened_vs_skipped(proxy, monkeypatch):
+    """The vet verdict distinguishes an actually-screened target from
+    the documented local-DNS-failure fail-open forward."""
+    import socket as socket_mod
+    async def scenario():
+        async def unresolvable(host, port):
+            raise socket_mod.gaierror(-2, "owned resolver failure")
+        monkeypatch.setattr(proxy, "_cached_getaddrinfo", unresolvable)
+        assert await proxy._vet_upstream_target("owned.invalid", 443) == (
+            None, "skipped_local_dns_failure")
+        # Literal IPs never touch the resolver: still screened.
+        assert await proxy._vet_upstream_target("10.0.0.5", 443) == (
+            "10.0.0.5", "screened")
+        def entry(ip):
+            return (socket_mod.AF_INET, socket_mod.SOCK_STREAM, 6, "",
+                    (ip, 443))
+        async def public(host, port):
+            return [entry("8.8.8.8")]
+        monkeypatch.setattr(proxy, "_cached_getaddrinfo", public)
+        assert await proxy._vet_upstream_target("owned.invalid", 443) == (
+            None, "screened")
+        async def mixed(host, port):
+            return [entry("8.8.8.8"), entry("169.254.169.254")]
+        monkeypatch.setattr(proxy, "_cached_getaddrinfo", mixed)
+        assert await proxy._vet_upstream_target("owned.invalid", 443) == (
+            "169.254.169.254", "screened")
+    run(proxy, scenario())
+
+
+@pytest.mark.parametrize("resolvable", [False, True],
+                         ids=["dns-failure-fail-open", "screened"])
+def test_upstream_event_carries_vet_tag_into_the_sink(proxy, monkeypatch,
+                                                      resolvable):
+    """The vet tag stamped at CONNECT decision time survives on the
+    recorded event through the unregister copy — a consumer of the
+    event sink can tell which allowed upstream tunnels were actually
+    screened by gate 2."""
+    import socket as socket_mod
+    expected = "screened" if resolvable else "skipped_local_dns_failure"
+    async def scenario():
+        async with sockets() as dial:
+            backend = await dial()
+            client = await dial()
+            proxy._upstream = ("127.0.0.1", 1234)
+            if resolvable:
+                async def resolver(host, port):
+                    return [(socket_mod.AF_INET, socket_mod.SOCK_STREAM,
+                             6, "", ("8.8.8.8", 443))]
+            else:
+                async def resolver(host, port):
+                    raise socket_mod.gaierror(-2, "owned resolver failure")
+            monkeypatch.setattr(proxy, "_cached_getaddrinfo", resolver)
+            reader = asyncio.StreamReader()
+            reader.feed_data(b"CONNECT owned.invalid:443 HTTP/1.1\r\n\r\n")
+            reader.feed_eof()
+            backend[3].write(b"HTTP/1.1 200 Connection established\r\n\r\n")
+            await backend[3].drain()
+            backend[3].write_eof()
+            async def connect(**kwargs):
+                return backend[:2]
+            token = proxy.register_sandbox()
+            try:
+                with mock_module_attribute(proxy_mod, "asyncio",
+                                           "open_connection", connect):
+                    await asyncio.wait_for(
+                        proxy._serve_tunnel(reader, client[1]), 2)
+            finally:
+                events = proxy.unregister_sandbox(token)
+            assert [event["result"] for event in events] == ["allowed"]
+            assert [event["vet"] for event in events] == [expected]
     run(proxy, scenario())

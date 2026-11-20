@@ -186,7 +186,7 @@ def test_upstream_negotiation_failure_closes_backend_before_propagating(proxy, m
             client = await dial()
             proxy._upstream = ("127.0.0.1", 1234)
             async def vetted(*args):
-                return None
+                return None, "screened"
             monkeypatch.setattr(proxy, "_vet_upstream_target", vetted)
             reader = asyncio.StreamReader()
             reader.feed_data(b"CONNECT owned.invalid:443 HTTP/1.1\r\n\r\n")
@@ -230,7 +230,7 @@ def test_oversized_upstream_line_cannot_strand_a_connected_backend(proxy, monkey
             client = await dial()
             proxy._upstream = ("127.0.0.1", 1234)
             async def vetted(*args):
-                return None
+                return None, "screened"
             monkeypatch.setattr(proxy, "_vet_upstream_target", vetted)
             reader = asyncio.StreamReader()
             reader.feed_data(b"CONNECT owned.invalid:443 HTTP/1.1\r\n\r\n")

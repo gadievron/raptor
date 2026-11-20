@@ -3041,11 +3041,18 @@ class EgressProxy:
         self._dns_cache[key] = (now + _DNS_CACHE_TTL, addrinfo)
         return addrinfo
 
-    async def _vet_upstream_target(self, host: str, port: int) -> str | None:
+    async def _vet_upstream_target(
+            self, host: str, port: int) -> tuple[str | None, str]:
         """Gate 2 (blocked-IP defense) for the upstream-proxy path.
 
-        Returns the offending address when the CONNECT must be denied,
-        or None when it may be forwarded to the upstream. Pre-fix the
+        Returns ``(blocked_ip, vet)``: ``blocked_ip`` is the offending
+        address when the CONNECT must be denied, or None when it may
+        be forwarded to the upstream. ``vet`` is the telemetry honesty
+        tag — ``"screened"`` when the target was actually judged
+        (literal IP or every locally-resolved address vetted) and
+        ``"skipped_local_dns_failure"`` on the documented fail-open
+        forward below, so event consumers can tell a vetted tunnel
+        from one this gate never screened. Pre-fix the
         upstream branch forwarded every allowlist-passing CONNECT with
         NO IP vetting at all — a child on a corporate-proxy host could
         CONNECT to ``10.0.0.5:443`` or ``169.254.169.254:443`` and the
@@ -3087,7 +3094,7 @@ class EgressProxy:
         else:
             literal_ip = True
         if literal_ip:
-            return host if _ip_is_blocked(host) else None
+            return (host if _ip_is_blocked(host) else None), "screened"
         try:
             addrinfo = await self._cached_getaddrinfo(host, port)
         except (asyncio.TimeoutError, OSError, UnicodeError) as e:
@@ -3103,12 +3110,12 @@ class EgressProxy:
                 "for this tunnel.",
                 host, e.__class__.__name__,
             )
-            return None
+            return None, "skipped_local_dns_failure"
         for entry in (addrinfo or []):
             candidate = entry[4][0]
             if _ip_is_blocked(candidate):
-                return candidate
-        return None
+                return candidate, "screened"
+        return None, "screened"
 
     async def _open_owned_connection(self, owner, timeout, **kwargs):
         """Register a stream before timeout/cancellation can hide its result."""
@@ -4128,7 +4135,16 @@ class EgressProxy:
             # documented residual vs the upstream's own resolver.
             # Blocking (not log-only) in audit mode as well, matching
             # the direct-path gate 2.
-            blocked_ip = await self._vet_upstream_target(host, port)
+            blocked_ip, vet_status = await self._vet_upstream_target(
+                host, port)
+            # Telemetry honesty: an upstream-path event records whether
+            # gate 2 actually screened the target or forwarded it on
+            # the documented local-DNS-failure fail-open. The field
+            # rides the shared event dict, so every later update
+            # (allowed / denied / upstream_failed) and the wholesale
+            # unregister copies carry it into the event sink and the
+            # persisted mirror.
+            event["vet"] = vet_status
             if blocked_ip is not None:
                 logger.warning(
                     "egress proxy: DENY %s:%s — upstream path, target "
