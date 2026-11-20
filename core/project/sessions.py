@@ -179,6 +179,23 @@ _PIN_LINE_RE = re.compile(r"^pin (\d+) (\S+) (\S+) (/.+)$")
 #: the drain helpers below parse them.
 _DRAIN_LINE_RE = re.compile(r"^drain (\d+) (\S+) (/.+)$")
 
+#: Run-posture record: ``posture <epoch> <facts-json> <abs-dir>`` —
+#: the run's FINAL telemetry-key posture (weakest-wins across its
+#: sandbox calls, see ``core.sandbox.summary.record_run_posture``),
+#: written by the owning parent at run end and keyed by the FULL
+#: resolved run-dir path. sessions.d sits OUTSIDE any sandbox write
+#: grant, so a FRESH-process triage can trust this record where the
+#: parent memory it mirrors has died with the owning process. Like
+#: drain lines, posture lines ride the unknown-lines channel: every
+#: existing reader/rewriter carries them verbatim and the
+#: ``(records, pins, unknown)`` tuple contract never changes.
+_POSTURE_LINE_RE = re.compile(r"^posture (\d+) (\S+) (/.+)$")
+
+#: Character class for posture fact keys and string values — keeps the
+#: compact-JSON facts token free of whitespace (the line grammar is
+#: space-delimited) and of anything a terminal or parser could trip on.
+_POSTURE_TOKEN_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
 
 # ---------------------------------------------------------------------------
 # process identity
@@ -1944,6 +1961,168 @@ def ledger_clear_drain_requests(
             logger.debug("sessions: drain clear failed for pid %s",
                          stem, exc_info=True)
     return cleared
+
+
+def _posture_facts_encode(posture: dict) -> str | None:
+    """Render *posture* as the single space-free facts token the
+    one-line ledger grammar needs, or None when it cannot be carried
+    faithfully. Only boolean facts and short identifier-shaped string
+    facts (tier/floor labels) are persisted; ``mac_key_hidden`` is the
+    fact triage acts on and is mandatory — a record that lost it would
+    read as posture-known while answering nothing."""
+    import json
+    facts: dict[str, bool | str] = {}
+    for key in sorted(posture):
+        if not isinstance(key, str) or not _POSTURE_TOKEN_RE.match(key):
+            continue
+        value = posture[key]
+        if isinstance(value, bool):
+            facts[key] = value
+        elif isinstance(value, str) and _POSTURE_TOKEN_RE.match(value):
+            facts[key] = value
+    if not isinstance(facts.get("mac_key_hidden"), bool):
+        return None
+    encoded = json.dumps(facts, sort_keys=True, ensure_ascii=True,
+                         separators=(",", ":"))
+    if " " in encoded or not encoded.isprintable():
+        return None
+    return encoded
+
+
+def _posture_parse(line: str) -> dict | None:
+    """Parse one posture ledger line to
+    ``{"epoch", "run_dir", "posture"}``, or None for any other line.
+    Same defensive filtering as the encoder: a hand-edited or
+    future-format facts token never yields non-bool/str values."""
+    m = _POSTURE_LINE_RE.match(line)
+    if not m:
+        return None
+    import json
+    try:
+        facts = json.loads(m.group(2))
+    except ValueError:
+        return None
+    if not isinstance(facts, dict):
+        return None
+    posture: dict[str, bool | str] = {
+        k: v for k, v in facts.items()
+        if isinstance(k, str) and type(v) in (bool, str)}
+    if not isinstance(posture.get("mac_key_hidden"), bool):
+        return None
+    return {"epoch": int(m.group(1)), "run_dir": m.group(3),
+            "posture": posture}
+
+
+def ledger_record_posture(run_dir: str | os.PathLike[str],
+                          posture: dict,
+                          pid: int | None = None) -> bool:
+    """Durably record the run's FINAL telemetry-key posture: one
+    ``posture`` line on the owning session's ledger, keyed by the FULL
+    resolved run-dir path and deduplicated per run dir (a re-finalise
+    replaces — the posture is already weakest-wins merged by
+    ``core.sandbox.summary.record_run_posture`` before it gets here).
+
+    Written by the (unsandboxed) parent at run end, from parent memory
+    — never read back from anything the target can write — so a
+    fresh-process triage (``--require-evidence`` CI gates, post-hoc
+    re-triage) can grade the run's evidence after the parent memory is
+    gone. Same registered-session + identity gates as the record
+    writers; riding the unknown-lines channel means every other writer
+    preserves the line verbatim. Returns True when durably recorded.
+    """
+    import time
+    try:
+        resolved = str(Path(run_dir).resolve())
+    except OSError:
+        return False
+    if not _valid_run_dir(resolved):
+        logger.debug("sessions: posture record refused run dir %r",
+                     resolved)
+        return False
+    facts = _posture_facts_encode(posture)
+    if facts is None:
+        logger.debug("sessions: posture record refused facts for %s",
+                     resolved)
+        return False
+    if pid is None:
+        pid = resolve_session_pid()
+    if pid is None:
+        return False
+    fields = _parse_entry(_sessions_dir() / str(pid))
+    if not fields:
+        return False
+    if (fields.get("v") == ENTRY_VERSION
+            and not _identity_matches(pid, fields)):
+        return False
+    with _ledger_lock(pid):
+        if not _parse_entry(_sessions_dir() / str(pid)):
+            return False  # entry pruned since the pre-lock gate
+        records, pins, unknown = _read_ledger_full(pid)
+        kept: list[str] = []
+        for line in unknown:
+            rec = _posture_parse(line)
+            if rec is None:
+                kept.append(line)  # foreign future-format line
+                continue
+            if rec["run_dir"] == resolved:
+                continue  # replaced below (dedup per run dir)
+            if not Path(rec["run_dir"]).is_dir():
+                continue  # record for a vanished run dir — prune
+            kept.append(line)
+        kept.append(f"posture {int(time.time())} {facts} {resolved}")
+        return _write_ledger(pid, records, pins, kept)
+
+
+def ledger_run_posture(
+        run_dir: str | os.PathLike[str]) -> tuple[dict | None, bool]:
+    """The persisted final posture for *run_dir*:
+    ``(posture_or_None, name_collision)``.
+
+    FULL-resolved-path keyed, across all session ledgers whose
+    registry entry still exists (orphan ledgers never steer — same
+    gate as ``ledger_pinned_dirs``; a recycled pid's leftover history
+    must not grade evidence). The newest record wins when several
+    sessions touched one run dir (resume).
+
+    ``posture=None`` means UNKNOWN — the caller owns the fail-closed
+    consequence. ``name_collision`` is True only when no record
+    matches this path but one exists for a DIFFERENT directory with
+    the same basename: telemetry MACs bind only the basename
+    (``telemetry_mac.run_binding``), so that is the cross-run replay
+    signature, never a usable posture. Best-effort: unreadable
+    ledgers are skipped, never raised."""
+    best: dict | None = None
+    best_epoch = -1
+    collision = False
+    try:
+        resolved = str(Path(run_dir).resolve())
+        basename = Path(resolved).name
+        children = list(_sessions_dir().iterdir())
+    except OSError:
+        return None, False
+    for f in children:
+        if not f.name.endswith(".run"):
+            continue
+        stem = f.name[:-len(".run")]
+        if _pid_from_name(stem) is None:
+            continue
+        if not (_sessions_dir() / stem).exists():
+            continue  # orphan ledger — never steers
+        try:
+            _records, _pins, unknown = _read_ledger_full(int(stem))
+        except Exception:  # noqa: BLE001 — observation is best-effort
+            continue
+        for line in unknown:
+            rec = _posture_parse(line)
+            if rec is None:
+                continue
+            if rec["run_dir"] == resolved:
+                if rec["epoch"] >= best_epoch:
+                    best = dict(rec["posture"])
+                    best_epoch = rec["epoch"]
+            elif Path(rec["run_dir"]).name == basename:
+                collision = True
+    return best, (best is None and collision)
 
 
 def ledger_runs(pid: int | None = None,
