@@ -3851,16 +3851,20 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
     # SysV IPC deny rides the FILESYSTEM-wall engagement, not just the
     # restrict_reads posture: a composed write set (truthy
     # writable_paths — the empty-list shape is exclude_tmp_baseline
-    # with no output, where Landlock leaves fs semantics untouched) or
-    # a read allowlist means the run promises filesystem confinement,
-    # and same-UID SysV shm carries no path for Landlock to evaluate —
+    # with no output, where Landlock leaves fs semantics untouched), a
+    # read allowlist, or a TCP port allowlist means the run promises
+    # filesystem confinement — a port allowlist forces the Landlock
+    # ruleset out of its net-only shape, so the write wall engages
+    # even with zero write grants (landlock.py's _net_only predicate)
+    # — and same-UID SysV shm carries no path for Landlock to evaluate:
     # shmat is a cross-process write primitive straight through the
     # write wall on the shared host IPC namespace. Wall-less lanes
-    # (no-policy contexts, profile "none") keep their filter
-    # unchanged. The ns lanes don't need the key: they unshare
-    # CLONE_NEWIPC unconditionally (_spawn.py).
+    # (no-policy contexts, net-deny-only shapes, profile "none") keep
+    # their filter unchanged. The ns lanes don't need the key: they
+    # unshare CLONE_NEWIPC unconditionally (_spawn.py).
     _seccomp_deny_sysv = bool(
-        writable_paths or _preexec_readable is not None)
+        writable_paths or _preexec_readable is not None
+        or allowed_tcp_ports)
 
     _preexec_build_kwargs: dict[str, Any] = dict(
         writable_paths=writable_paths,

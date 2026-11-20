@@ -20,8 +20,11 @@ Two layers under test:
     available (wall-less trusted lanes unchanged);
   * context threading: the plain-lane preexec builder receives
     ``seccomp_deny_sysv_ipc=True`` exactly when the composed policy
-    confines the filesystem (target/output write wall, or a read
-    allowlist), and falsy for wall-less and profile-"none" shapes.
+    confines the filesystem (target/output write wall, a read
+    allowlist, or a TCP port allowlist — a port allowlist takes the
+    Landlock ruleset out of its net-only shape, so the write wall
+    engages even with zero write grants), and falsy for wall-less and
+    profile-"none" shapes.
 
 The ns spawn lanes are out of scope by design: they unshare
 CLONE_NEWIPC unconditionally (_spawn.py), so SysV objects are
@@ -139,10 +142,9 @@ class TestContextThreading:
 
     def test_trusted_write_wall_threads_the_deny(
             self, tmp_path, monkeypatch):
-        """target/output with restrict_reads=False — the lens gap: a
-        trusted read-everywhere lane whose writes are confined must
-        carry the SysV deny while keeping the fileless-exec arms
-        off."""
+        """target/output with restrict_reads=False: a trusted
+        read-everywhere lane whose writes are confined must carry the
+        SysV deny while keeping the fileless-exec arms off."""
         from core.sandbox import context as _ctx
 
         captured = _spy_preexec_kwargs(monkeypatch)
@@ -165,6 +167,23 @@ class TestContextThreading:
             pass
         assert captured, "preexec builder never consulted"
         assert captured.get("seccomp_deny_sysv_ipc") is True
+
+    def test_ports_only_wall_threads_the_deny(self, monkeypatch):
+        """A TCP port allowlist with ZERO write grants still engages
+        the Landlock write wall (the ruleset leaves its net-only shape
+        the moment a port allowlist exists), so the SysV deny must
+        ride along — writes confined means SysV denied, however the
+        wall was engaged."""
+        from core.sandbox import context as _ctx
+
+        captured = _spy_preexec_kwargs(monkeypatch)
+        with _ctx.sandbox(allowed_tcp_ports=[443],
+                          exclude_tmp_baseline=True,
+                          block_network=False):
+            pass
+        assert captured, "preexec builder never consulted"
+        assert captured.get("seccomp_deny_sysv_ipc") is True
+        assert not captured.get("seccomp_deny_fd_exec")
 
     def test_wallless_context_keeps_the_filter_unchanged(
             self, monkeypatch):
