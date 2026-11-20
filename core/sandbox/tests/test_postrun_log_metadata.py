@@ -45,7 +45,8 @@ def write_observation(run, rows):
 def test_observe_diagnostics_escape_run_metadata(tmp_path, monkeypatch, caplog, kind):
     run = tmp_path / CONTROL
     options = dict(expected_nonce='owned', current_run=True,
-                   sandbox_info={'nonce_delivery': 'in_process'})
+                   sandbox_info={'nonce_delivery': 'in_process',
+                                 'restrict_reads': True})
     rows = [{'type': 'audit_summary', 'nonce': 'owned'}]
     if kind == 'unprotected':
         options['sandbox_info'] = {'nonce_delivery': CONTROL}

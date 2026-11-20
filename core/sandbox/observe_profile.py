@@ -581,18 +581,24 @@ def parse_observe_log(run_dir, *,
 
     `sandbox_info`: the run's ``result.sandbox_info`` dict, used as
     a fail-safe backstop on nonce trust. When the run executed on a
-    namespace-less backend (no mount-ns, not macOS seatbelt) AND
-    ``sandbox_info["nonce_delivery"]`` does not record a protected
-    channel ("anonymous_fd" / "in_process"), nonce-matching records
-    cannot be distinguished from target-minted ones (the nonce was
-    exposed at a same-UID-readable location — the pre-relocation
-    /tmp config file, or an unknown future regression). The parser
-    then marks the profile ``nonce_trusted=False`` and logs a
-    warning; records are still parsed so the observation remains
-    available as UNAUTHENTICATED signal. ``None`` (default)
-    preserves the pre-existing behaviour for callers without run
-    metadata. Malformed metadata is not proof of isolation: the mount flag
-    must be boolean True and a protected delivery label must be a string.
+    namespace-less backend (no mount-ns, not macOS seatbelt), trust
+    requires BOTH ``sandbox_info["nonce_delivery"]`` recording a
+    protected channel ("anonymous_fd" / "in_process") AND
+    ``sandbox_info["restrict_reads"]`` being boolean True (an
+    ENFORCED read wall — the stamp is honest, so observe-only and
+    unenforced walls read False). A protected handoff alone is not
+    enough: a same-UID child that can read parent-side state (the
+    evidence stream's earlier records, the telemetry MAC key — the
+    same posture under which the run summary stamps
+    ``mac_key_hidden=False``) learns the nonce mid-run, so
+    nonce-matching records cannot be distinguished from
+    target-minted ones. The parser then marks the profile
+    ``nonce_trusted=False`` and logs a warning; records are still
+    parsed so the observation remains available as UNAUTHENTICATED
+    signal. ``None`` (default) preserves the pre-existing behaviour
+    for callers without run metadata. Malformed metadata is not
+    proof of isolation: the mount and read-wall flags must be
+    boolean True and a protected delivery label must be a string.
 
     Returns an empty profile if the file does not exist or cannot
     be read — a caller with no observe records gets a defaulted
@@ -613,15 +619,29 @@ def parse_observe_log(run_dir, *,
         )
         _delivery = info.get("nonce_delivery")
         _protected = isinstance(_delivery, str) and _delivery in _PROTECTED_NONCE_DELIVERY
-        if not _isolated and not _protected:
+        # A protected delivery channel only covers the HANDOFF. Without
+        # a mount namespace, nonce confidentiality for the rest of the
+        # run also needs an enforced read wall: a same-UID child that
+        # can read the parent-side evidence stream (or the telemetry
+        # MAC key) learns the nonce from the records already written
+        # and can mint matching forgeries. Same posture condition under
+        # which the summary stamps mac_key_hidden=False — the stamp is
+        # the ENFORCED truth (observe-only / unenforced read walls
+        # stamp restrict_reads=False), so the two verdicts cannot
+        # drift apart.
+        _reads_enforced = info.get("restrict_reads") is True
+        if not _isolated and not (_protected and _reads_enforced):
             logger.warning(
                 "parse_observe_log: refusing nonce-based trust for %s "
-                "— run lacks a recorded isolated backend and the "
-                "nonce delivery channel (%s) is not recorded as "
-                "protected. Records are parsed but the profile is "
-                "marked unauthenticated (nonce_trusted=False).",
+                "— run lacks a recorded isolated backend and does not "
+                "record BOTH a protected nonce delivery channel (%s) "
+                "and an enforced read restriction (restrict_reads=%s), "
+                "so the nonce was not provably hidden from the child. "
+                "Records are parsed but the profile is marked "
+                "unauthenticated (nonce_trusted=False).",
                 sanitise_for_terminal(str(run_dir)),
                 sanitise_for_terminal(repr(_delivery)),
+                sanitise_for_terminal(repr(info.get("restrict_reads"))),
             )
             profile.nonce_trusted = False
     if current_run and expected_nonce is None:

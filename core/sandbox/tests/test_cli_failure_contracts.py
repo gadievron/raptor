@@ -66,7 +66,8 @@ def test_observe_shell_status_preserves_raw_metadata(tmp_path, monkeypatch, caps
             'type': 'audit_summary', 'nonce': 'owned', 'dropped_by_category': {},
         }) + '\n')
         result = subprocess.CompletedProcess(cmd, return_code, stdout=b'', stderr=b'')
-        result.sandbox_info = {'observe_nonce': 'owned', 'nonce_delivery': 'in_process'}
+        result.sandbox_info = {'observe_nonce': 'owned', 'nonce_delivery': 'in_process',
+                               'restrict_reads': True}
         return result
 
     monkeypatch.setattr(sandbox, 'run', completed)

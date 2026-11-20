@@ -21,7 +21,8 @@ def parse(tmp_path):
 
 @pytest.mark.parametrize('delivery', [[], {}, ['anonymous_fd'], {'kind': 'anonymous_fd'}, 1, True])
 def test_invalid_delivery_shape_demotes_without_raising(parse, delivery):
-    assert parse({'mount_ns_active': False, 'nonce_delivery': delivery}).nonce_trusted is False
+    assert parse({'mount_ns_active': False, 'restrict_reads': True,
+                  'nonce_delivery': delivery}).nonce_trusted is False
 
 
 @pytest.mark.parametrize('active', ['false', 'true', 1, [True], {'active': True}])
@@ -37,11 +38,30 @@ def test_nonobject_metadata_is_unknown_and_untrusted(parse, info):
 @pytest.mark.parametrize('info', [
     {'mount_ns_active': True},
     {'backend': 'macos-seatbelt'},
-    {'mount_ns_active': False, 'nonce_delivery': 'anonymous_fd'},
-    {'mount_ns_active': False, 'nonce_delivery': 'in_process'},
+    {'mount_ns_active': False, 'restrict_reads': True,
+     'nonce_delivery': 'anonymous_fd'},
+    {'mount_ns_active': False, 'restrict_reads': True,
+     'nonce_delivery': 'in_process'},
 ])
 def test_valid_protection_metadata_remains_trusted(parse, info):
     assert parse(info).nonce_trusted is True
+
+
+@pytest.mark.parametrize('reads', [None, False, 'true', 1, [True]])
+def test_protected_delivery_without_enforced_reads_is_demoted(parse, reads):
+    # A protected handoff only covers delivery; without a mount
+    # namespace or an ENFORCED read wall the child can learn the
+    # nonce from parent-side state mid-run (the same posture that
+    # stamps mac_key_hidden=False), so the profile is demoted.
+    info = {'mount_ns_active': False, 'nonce_delivery': 'anonymous_fd'}
+    if reads is not None:
+        info['restrict_reads'] = reads
+    assert parse(info).nonce_trusted is False
+
+
+def test_enforced_reads_without_protected_delivery_is_demoted(parse):
+    assert parse({'mount_ns_active': False,
+                  'restrict_reads': True}).nonce_trusted is False
 
 
 def test_absent_metadata_preserves_offline_compatibility(parse):

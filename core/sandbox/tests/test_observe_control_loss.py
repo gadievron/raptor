@@ -34,7 +34,8 @@ def tail(**fields):
 
 def profile(run):
     return observe.parse_observe_log(run, expected_nonce=NONCE, current_run=True,
-                                     sandbox_info={'nonce_delivery': 'in_process'})
+                                     sandbox_info={'nonce_delivery': 'in_process',
+                                                   'restrict_reads': True})
 
 
 def load(run, control):

@@ -592,6 +592,24 @@ class TestNonceTrustRefusal:
 
     def test_trusted_on_namespaceless_with_protected_delivery(
             self, tmp_path):
+        # Namespace-less trust needs the protected handoff AND an
+        # enforced read wall — delivery alone leaves the nonce
+        # readable to the child for the rest of the run.
+        from core.sandbox.observe_profile import parse_observe_log
+        self._write_log(tmp_path, "n1")
+        profile = parse_observe_log(
+            tmp_path, expected_nonce="n1",
+            sandbox_info={"mount_ns_active": False,
+                          "restrict_reads": True,
+                          "nonce_delivery": "anonymous_fd"},
+        )
+        assert profile.nonce_trusted is True
+
+    def test_refused_on_namespaceless_without_read_wall(self, tmp_path):
+        # Same run minus the enforced read restriction: the child
+        # could read the nonce from parent-side state mid-run (the
+        # mac_key_hidden=False posture), so a matching nonce proves
+        # nothing.
         from core.sandbox.observe_profile import parse_observe_log
         self._write_log(tmp_path, "n1")
         profile = parse_observe_log(
@@ -599,7 +617,7 @@ class TestNonceTrustRefusal:
             sandbox_info={"mount_ns_active": False,
                           "nonce_delivery": "anonymous_fd"},
         )
-        assert profile.nonce_trusted is True
+        assert profile.nonce_trusted is False
 
     def test_refused_on_namespaceless_without_delivery_record(
             self, tmp_path, caplog):
