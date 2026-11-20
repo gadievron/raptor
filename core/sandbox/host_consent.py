@@ -30,9 +30,12 @@ applies only while ALL of these hold, and is inert otherwise:
   plus one warning per process — fail-closed to the normal refusal,
   never a guessed grant.
 
-Storage is machine-scoped under ``$XDG_DATA_HOME/raptor/`` (default
-``~/.local/share/raptor/``) — the same per-user data directory as the
-per-purpose MAC keys, deliberately OUTSIDE every sandbox-readable
+Storage is machine-scoped under ``<passwd home>/.local/share/raptor/``
+— the XDG data layout under the PASSWD-DERIVED home, never ``$HOME``
+or ``$XDG_DATA_HOME`` (both survive ``get_safe_env()``, so an
+env-steered marker path would let a composed invocation plant its own
+"consent" and lower the floor) — the same per-user data directory as
+the per-purpose MAC keys, deliberately OUTSIDE every sandbox-readable
 tree: several sandbox profiles grant children repo-root read, and a
 consent marker a sandboxed target could rewrite would let the target
 lower its own containment. Writes are atomic (tempfile + rename in
@@ -70,6 +73,7 @@ import errno
 import json
 import logging
 import os
+import pwd
 import re
 import stat
 import sys
@@ -146,17 +150,28 @@ class HostConsent:
     kernel_identity: str
 
 
+def _data_home() -> Path:
+    """Trust-anchor base: the XDG data layout under the passwd-derived
+    home. ``$HOME`` and ``$XDG_DATA_HOME`` are deliberately ignored —
+    both are in ``SAFE_ENV_ALLOWLIST``, so an env-steered base would
+    let a composed invocation point marker validation at a directory
+    the composer can write (a planted marker lowers the floor). The
+    passwd entry for the current euid is kernel-account truth that
+    argv/env composition cannot move (same derivation as
+    ``disable_consent._consents_dir``)."""
+    return Path(pwd.getpwuid(os.geteuid()).pw_dir) / ".local" / "share"
+
+
 def marker_path() -> Path:
     """Location of the host-consent marker.
 
-    ``$XDG_DATA_HOME/raptor/wsl-host-consent.json`` (default
-    ``~/.local/share/raptor/wsl-host-consent.json``) — machine-scoped,
-    outside every sandbox-readable tree (same placement rationale as
-    the per-purpose MAC keys in ``core/sage/rowmac.py``).
+    ``<passwd home>/.local/share/raptor/wsl-host-consent.json`` —
+    machine-scoped, outside every sandbox-readable tree (same
+    placement rationale as the per-purpose MAC keys in
+    ``core/sage/rowmac.py``), and immune to ``$HOME`` /
+    ``$XDG_DATA_HOME`` steering (see ``_data_home``).
     """
-    xdg = os.environ.get("XDG_DATA_HOME")
-    base = Path(xdg) if xdg else Path.home() / ".local" / "share"
-    return base / "raptor" / _MARKER_NAME
+    return _data_home() / "raptor" / _MARKER_NAME
 
 
 def kernel_family(identity: str) -> str:

@@ -26,7 +26,7 @@ def owned(tmp_path, monkeypatch, request, caplog):
     data = tmp_path / CONTROL
     if request.param == 'long':
         data = data / ('a' * 100) / ('b' * 100)
-    monkeypatch.setenv('XDG_DATA_HOME', str(data))
+    monkeypatch.setattr(mac, '_data_home', lambda: data)
     monkeypatch.setattr(mac, '_warned_paths', set())
     private = ModuleType('telemetry_log_os')
     vars(private).update(vars(os))

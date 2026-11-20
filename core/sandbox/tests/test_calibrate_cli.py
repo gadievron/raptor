@@ -261,12 +261,25 @@ class TestE2EShim:
         if not shim.exists():
             pytest.skip(f"shim not present at {shim}")
 
-        # Redirect cache to tmp_path via env so the shim's
-        # subprocess sees it. Easiest: monkeypatch HOME — the cache
-        # dir is rooted at Path.home().
-        env = {**os.environ, "_RAPTOR_TRUSTED": "1", "HOME": str(tmp_path)}
+        # Redirect the child's cache to tmp_path. The cache dir is a
+        # passwd-derived trust anchor that deliberately ignores HOME /
+        # XDG env steering, so the redirect has to happen INSIDE the
+        # child: a driver patches the module seam, then runs the real
+        # shim file as __main__ (same pattern as the cache/binary IO
+        # tests' in-child ``module._CACHE_DIR`` harnesses).
+        driver = (
+            "import runpy, sys\n"
+            "from pathlib import Path\n"
+            "from core.sandbox import calibrate as cal\n"
+            "cal._CACHE_DIR = Path(sys.argv[1])\n"
+            "sys.argv = sys.argv[2:]\n"
+            "runpy.run_path(sys.argv[0], run_name='__main__')\n"
+        )
+        env = {**os.environ, "_RAPTOR_TRUSTED": "1",
+               "PYTHONPATH": str(repo_root)}
         result = run_standalone_cli(
-            [str(shim), "--bin", "/bin/cat",
+            [sys.executable, "-c", driver, str(tmp_path / "cache"),
+             str(shim), "--bin", "/bin/cat",
              "--probe-args", "/etc/hosts",
              "--json", "--timeout", "15"],
             env=env, capture_output=True, text=True, timeout=30,

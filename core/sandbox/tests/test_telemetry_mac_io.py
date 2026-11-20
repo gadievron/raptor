@@ -15,7 +15,9 @@ from core.testing.module_bindings import patch_module_attribute
 
 @pytest.fixture(autouse=True)
 def isolated_key(tmp_path, monkeypatch):
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    # The key path is passwd-derived (env steering is deliberately
+    # ignored), so isolation patches the module seam.
+    monkeypatch.setattr(tmac, "_data_home", lambda: tmp_path / "xdg")
 
 
 def test_partial_creation_writes_produce_a_verifiable_key(monkeypatch):
@@ -89,17 +91,25 @@ def test_fifo_key_is_quarantined_without_waiting_for_a_writer():
     key = tmac._key_path()
     key.parent.mkdir(mode=0o700, parents=True)
     os.mkfifo(key, 0o600)
+    # The child derives the key path from the passwd database, so the
+    # scratch anchor rides in argv and rebinds the module's _data_home
+    # seam. run_path returns a COPY of the module globals — the patch
+    # must go through a returned function's __globals__, which is the
+    # dict the module's functions actually close over.
     script = """
 import runpy, sys
 from pathlib import Path
 module = runpy.run_path(sys.argv[1])
+base = Path(sys.argv[2])
+module["mint"].__globals__["_data_home"] = lambda: base
 fields = {"kind": "proxy-event"}
 token = module["mint"](fields)
 assert token is not None
 assert module["verify"](fields, token)
 """
     result = subprocess.run(
-        [sys.executable, "-c", script, str(Path(tmac.__file__).resolve())],
+        [sys.executable, "-c", script, str(Path(tmac.__file__).resolve()),
+         str(key.parent.parent)],
         capture_output=True, text=True, timeout=5,
     )
     assert result.returncode == 0, result.stderr

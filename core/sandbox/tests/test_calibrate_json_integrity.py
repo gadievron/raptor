@@ -11,10 +11,14 @@ from core.testing.state_isolation import pin_user_state_dirs
 
 
 @pytest.fixture(autouse=True)
-def owned_state(tmp_path):
+def owned_state(tmp_path, _trust_anchors_in_tmp):
+    # _trust_anchors_in_tmp is requested EXPLICITLY: the local
+    # ``monkeypatch`` shadow below makes this fixture a transitive
+    # dependency of conftest's autouse guards, which would otherwise
+    # order the scratch anchor pin AFTER this fixture and clobber the
+    # _CACHE_DIR patch.
     with pytest.MonkeyPatch.context() as monkeypatch:
         pin_user_state_dirs(monkeypatch, tmp_path / 'state')
-        monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'xdg'))
         monkeypatch.setattr(cal, '_CACHE_DIR', tmp_path / 'cache')
         yield
 

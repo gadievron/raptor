@@ -53,6 +53,7 @@ import hashlib
 import json
 import logging
 import os
+import pwd
 import stat
 import tempfile
 from collections.abc import Iterable
@@ -80,7 +81,14 @@ _CACHE_VERSION = 3
 # Match the observation reader's total input ceiling. Cache entries are
 # normally much smaller, but damaged artifacts must not be unbounded.
 _MAX_CACHE_BYTES = 64 * 1024 * 1024
-_CACHE_DIR = Path.home() / ".cache" / "raptor" / "sandbox-profiles"
+# Passwd-derived home, never $HOME: cached profiles feed sandbox
+# policy decisions, and $HOME survives get_safe_env() (allowlisted),
+# so a HOME-steered cache dir would let a composed invocation feed
+# attacker-authored profiles to every later run. The passwd entry is
+# kernel-account truth that argv/env composition cannot move (same
+# derivation as disable_consent._consents_dir).
+_CACHE_DIR = (Path(pwd.getpwuid(os.geteuid()).pw_dir)
+              / ".cache" / "raptor" / "sandbox-profiles")
 
 
 # Calibration probe defaults. Operators tune these via the CLI; the

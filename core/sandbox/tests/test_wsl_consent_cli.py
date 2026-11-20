@@ -24,20 +24,47 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = REPO_ROOT / "libexec" / "raptor-wsl-consent"
 
 
+# The marker path is a passwd-derived trust anchor that deliberately
+# ignores $HOME / $XDG_DATA_HOME, so steering a CHILD's marker into
+# scratch has to happen inside the child: this driver patches the
+# module seam, then runs the real script file as __main__ (the script's
+# trust preamble, TTY gates and argument handling all still run).
+# The driver must itself run under ``python3 -I``: the script's
+# interpreter-isolation guard re-execs any non-isolated __main__ into a
+# fresh isolated interpreter, which would discard the in-process patch.
+# Under -I, PYTHONPATH is ignored, so the repo root rides in argv and
+# the driver inserts it before importing the seam module (the script's
+# own Path(__file__)-relative insert then resolves the SAME module).
+_DRIVER = (
+    "import runpy, sys\n"
+    "from pathlib import Path\n"
+    "base = Path(sys.argv[1])\n"
+    "sys.path.insert(0, sys.argv[2])\n"
+    "from core.sandbox import host_consent as hc\n"
+    "hc._data_home = lambda: base\n"
+    "sys.argv = sys.argv[3:]\n"
+    "runpy.run_path(sys.argv[0], run_name='__main__')\n"
+)
+
+
+def _argv(tmp_path: Path, *args: str) -> list:
+    return [sys.executable, "-I", "-c", _DRIVER, str(tmp_path / "xdg"),
+            str(REPO_ROOT), str(SCRIPT), *args]
+
+
 def _env(tmp_path: Path, *, trusted: bool = True) -> dict:
     env = dict(os.environ)
     env.pop("CLAUDECODE", None)
     env.pop("_RAPTOR_TRUSTED", None)
     if trusted:
         env["_RAPTOR_TRUSTED"] = "1"
-    env["XDG_DATA_HOME"] = str(tmp_path / "xdg")
     return env
 
 
 def _run(tmp_path: Path, *args: str, trusted: bool = True,
          stdin=subprocess.DEVNULL) -> subprocess.CompletedProcess:
     return run_standalone_cli(
-        [sys.executable, str(SCRIPT), *args],
+        _argv(tmp_path, *args),
         stdin=stdin, capture_output=True, text=True, timeout=60,
         env=_env(tmp_path, trusted=trusted), data_home=tmp_path / "xdg", check=False)
 
@@ -67,7 +94,7 @@ def test_grant_refuses_piped_confirmation(tmp_path):
     """Piping the confirmation text does not help — the TTY check
     fires regardless of what stdin would say."""
     r = run_standalone_cli(
-        [sys.executable, str(SCRIPT), "grant"],
+        _argv(tmp_path, "grant"),
         input="ns-only\n", capture_output=True, text=True, timeout=60,
         env=_env(tmp_path), data_home=tmp_path / "xdg", check=False)
     assert r.returncode == 3
@@ -90,7 +117,7 @@ def test_grant_on_tty_still_preflights_the_host(tmp_path):
     master, slave = pty.openpty()
     try:
         r = run_standalone_cli(
-            [sys.executable, str(SCRIPT), "grant"],
+            _argv(tmp_path, "grant"),
             stdin=slave, capture_output=True, text=True, timeout=60,
             env=_env(tmp_path), data_home=tmp_path / "xdg", check=False)
     finally:

@@ -128,6 +128,42 @@ def _resolver_seam_leak_guard():
 
 
 @pytest.fixture(autouse=True)
+def _trust_anchors_in_tmp(tmp_path):
+    """Pin the pwd-derived trust anchors into per-test scratch.
+
+    The telemetry MAC key, the WSL host-consent marker, and the
+    calibration profile cache all derive from the PASSWD home —
+    ``$HOME`` / ``$XDG_DATA_HOME`` are deliberately ignored by the
+    runtime modules (both env vars survive ``get_safe_env()``, so an
+    env-steered trust anchor would be composer-movable). That same
+    immunity means the env redirects tests carry for OTHER consumers
+    no longer isolate these three paths, and an unpinned test would
+    read — or worse, re-key / quarantine / plant — the operator's
+    REAL anchors. Pin the module seams here so every test in this
+    directory operates on scratch; tests that need a specific
+    location simply layer their own ``monkeypatch.setattr`` on top.
+
+    Uses a private ``MonkeyPatch`` context rather than the
+    ``monkeypatch`` fixture: a test module may shadow ``monkeypatch``
+    with a local fixture that depends on its own patching fixtures
+    (test_host_consent_log_metadata does), and requesting it here
+    would force those to run FIRST — this pin would then clobber the
+    test's own anchor patch instead of underlaying it.
+    """
+    from core.sandbox import calibrate as cal
+    from core.sandbox import host_consent as hc
+    from core.sandbox import telemetry_mac as tm
+
+    base = tmp_path / "trust-anchors"
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(tm, "_data_home", lambda: base / "data")
+        mp.setattr(hc, "_data_home", lambda: base / "data")
+        mp.setattr(cal, "_CACHE_DIR",
+                   base / "cache" / "sandbox-profiles")
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _consent_env_guard(monkeypatch):
     """Strip the consent variables around every test.
 

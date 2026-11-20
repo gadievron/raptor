@@ -157,7 +157,8 @@ _MARKER_MAX_BYTES = 1024 * 1024
 # Parent-side memory of each run's sandbox POSTURE, keyed by resolved
 # run-dir path. Records whether the sandbox layers this run engaged
 # could hide parent-side secrets — specifically the telemetry-MAC key
-# at $XDG_DATA_HOME/raptor/telemetry-mac.key — from the child. Kept in
+# at the passwd-derived ~/.local/share/raptor/telemetry-mac.key — from
+# the child. Kept in
 # parent memory (out of the target's reach) because the on-disk copy
 # embedded in sandbox-summary.json is only as trustworthy as the key
 # itself: a target that could read the key can mint a summary claiming

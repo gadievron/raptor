@@ -30,7 +30,9 @@ def _owned_key_warnings(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _isolated_key(tmp_path, monkeypatch):
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    # The key path derives from the passwd home (env is ignored by
+    # design); steer the module seam at the tests' historical layout.
+    monkeypatch.setattr(tmac, "_data_home", lambda: tmp_path / "xdg")
     yield
 
 

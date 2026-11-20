@@ -262,7 +262,7 @@ class TestInertnessTransitions:
         """A real marker written through the store on a mocked WSL2
         Landlock-less host (identity sources hermetic)."""
         hc._reset_warning_latches()
-        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+        monkeypatch.setattr(hc, "_data_home", lambda: tmp_path / "xdg")
         (tmp_path / "osrelease").write_text(WSL2_RELEASE + "\n",
                                             encoding="ascii")
         (tmp_path / "machine-id").write_text(MACHINE_ID + "\n",

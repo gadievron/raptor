@@ -17,7 +17,9 @@ from core.sandbox import telemetry_mac as tmac
 
 @pytest.fixture(autouse=True)
 def isolated_key(tmp_path, monkeypatch):
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    # The key/marker paths are passwd-derived (env steering is
+    # deliberately ignored), so isolation patches the module seam.
+    monkeypatch.setattr(tmac, "_data_home", lambda: tmp_path / "xdg")
     tmac.tamper_marker_path().parent.mkdir(mode=0o700, parents=True)
 
 
@@ -87,9 +89,17 @@ def test_fifo_marker_does_not_block(operation):
         # A malformed key invokes the marker writer during recovery.
         tmac._key_path().write_bytes(b"x" * 64)
         tmac._key_path().chmod(0o600)
+    # The child derives its paths from the passwd database, so the
+    # scratch anchor rides in argv and rebinds the module's _data_home
+    # seam. run_path returns a COPY of the module globals — the patch
+    # must go through a returned function's __globals__, which is the
+    # dict the module's functions actually close over.
     script = """
 import runpy, sys
+from pathlib import Path
 module = runpy.run_path(sys.argv[1])
+base = Path(sys.argv[3])
+module["mint"].__globals__["_data_home"] = lambda: base
 if sys.argv[2] == "read":
     assert module["tamper_events"]() == []
 else:
@@ -99,7 +109,8 @@ else:
     assert module["verify"](fields, token)
 """
     result = subprocess.run(
-        [sys.executable, "-c", script, str(Path(tmac.__file__).resolve()), operation],
+        [sys.executable, "-c", script, str(Path(tmac.__file__).resolve()),
+         operation, str(tmac.tamper_marker_path().parent.parent)],
         capture_output=True, text=True, timeout=5,
     )
     assert result.returncode == 0, result.stderr

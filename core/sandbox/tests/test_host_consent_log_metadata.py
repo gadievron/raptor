@@ -38,13 +38,18 @@ pytestmark = pytest.mark.skipif(os.name != 'posix', reason='owned POSIX control 
 
 
 @pytest.fixture(params=['control', 'long'])
-def owned(tmp_path, request, caplog):
+def owned(tmp_path, request, caplog, _trust_anchors_in_tmp):
+    # _trust_anchors_in_tmp is requested EXPLICITLY: the local
+    # ``monkeypatch`` shadow below makes this fixture a transitive
+    # dependency of conftest's autouse guards, which would otherwise
+    # order the scratch anchor pin AFTER this fixture's _data_home
+    # patch and clobber it.
     with isolated_module_state(hc, {'_warned_reasons': set()}, lock=hc._warned_lock), pytest.MonkeyPatch.context() as patch:
         pin_user_state_dirs(patch, tmp_path / 'state')
         data = tmp_path / CONTROL
         if request.param == 'long':
             data = data / ('a' * 100) / ('b' * 100)
-        patch.setenv('XDG_DATA_HOME', str(data))
+        patch.setattr(hc, '_data_home', lambda: data)
         machine, release = tmp_path / 'machine-id', tmp_path / 'osrelease'
         machine.write_text(MACHINE + '\n', encoding='ascii')
         release.write_text(RUNNING + '\n', encoding='ascii')
@@ -190,7 +195,7 @@ def test_family_excerpts_are_bounded_on_plain_paths(owned, tmp_path, monkeypatch
     data = tmp_path / 'ascii-marker'
     if layout == 'long':
         data = data / ('a' * 100) / ('b' * 100)
-    monkeypatch.setenv('XDG_DATA_HOME', str(data))
+    monkeypatch.setattr(hc, '_data_home', lambda: data)
     path = hc.marker_path()
     assert str(path).isprintable()
     expected_record = seed(path, release, 'oversized-families')

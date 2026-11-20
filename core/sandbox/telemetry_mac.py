@@ -45,8 +45,12 @@ by a key-holder" — only under a key-hiding posture does that narrow
 to "written by the parent".
 
 Key
-    ``$XDG_DATA_HOME/raptor/telemetry-mac.key`` (default
-    ``~/.local/share/raptor/telemetry-mac.key``). Deliberately a
+    ``<passwd home>/.local/share/raptor/telemetry-mac.key`` — the XDG
+    data layout under the PASSWD-DERIVED home, never ``$HOME`` or
+    ``$XDG_DATA_HOME``: both survive ``get_safe_env()`` (allowlisted
+    for ordinary tools), so an env-steered key path would let a
+    composed invocation point verification at an attacker-staged key
+    and mint "verified" forged telemetry. Deliberately a
     SEPARATE key from rowmac's: per-purpose keys keep reset/rotation
     semantics scoped — deleting the SAGE key is SAGE's documented
     reset and must not also invalidate sandbox telemetry provenance,
@@ -69,6 +73,7 @@ import hashlib
 import hmac
 import json
 import os
+import pwd
 import secrets
 import stat
 import time
@@ -124,10 +129,20 @@ class _TamperedKey:
 _warned_paths: set = set()
 
 
+def _data_home() -> Path:
+    """Trust-anchor base: the XDG data layout under the passwd-derived
+    home. ``$HOME`` and ``$XDG_DATA_HOME`` are deliberately ignored —
+    both are in ``SAFE_ENV_ALLOWLIST`` (ordinary tools need them), so
+    an env-steered base would let any composed invocation relocate the
+    MAC key to an attacker-writable directory (a known key forges
+    provenance tokens). The passwd entry for the current euid is
+    kernel-account truth that argv/env composition cannot move (same
+    derivation as ``disable_consent._consents_dir``)."""
+    return Path(pwd.getpwuid(os.geteuid()).pw_dir) / ".local" / "share"
+
+
 def _key_path() -> Path:
-    xdg = os.environ.get("XDG_DATA_HOME")
-    base = Path(xdg) if xdg else Path.home() / ".local" / "share"
-    return base / "raptor" / "telemetry-mac.key"
+    return _data_home() / "raptor" / "telemetry-mac.key"
 
 
 def _warn_once_suspect_key(path: Path, reason: str, remedy: str) -> None:

@@ -3,7 +3,8 @@ handling, atomic writes, grant/revoke semantics.
 
 Everything here runs hermetically off-WSL: the WSL/Landlock probes and
 the kernel-identity / machine-id sources are monkeypatched, and the
-marker path is redirected through ``XDG_DATA_HOME``.
+marker path is redirected through the ``_data_home`` seam (the real
+derivation is passwd-based and deliberately ignores the environment).
 """
 
 from __future__ import annotations
@@ -41,7 +42,7 @@ def _fresh_latches(monkeypatch):
 def wsl_host(tmp_path, monkeypatch):
     """A mocked WSL2 host without Landlock, with hermetic identity
     sources and a tmp marker path. Returns the tmp base dir."""
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    monkeypatch.setattr(hc, "_data_home", lambda: tmp_path / "xdg")
     osrelease = tmp_path / "osrelease"
     osrelease.write_text(WSL2_RELEASE + "\n", encoding="ascii")
     machine_id = tmp_path / "machine-id"

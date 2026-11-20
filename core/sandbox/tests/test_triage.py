@@ -1107,7 +1107,8 @@ class TestProvenanceUnavailable:
         key = keydir / "telemetry-mac.key"
         key.write_bytes(b"short")  # wrong length
         key.chmod(0o600)
-        monkeypatch.setenv("XDG_DATA_HOME", str(xdg))
+        from core.sandbox import telemetry_mac as tmac
+        monkeypatch.setattr(tmac, "_data_home", lambda: xdg)
 
     def test_unusable_key_is_notable_not_tampering(
             self, tmp_path, monkeypatch):
