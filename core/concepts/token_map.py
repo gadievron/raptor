@@ -52,6 +52,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from core.source import read_text_capped
+
 logger = logging.getLogger(__name__)
 
 TOKEN_MAP_VERSION = "1"
@@ -76,6 +78,17 @@ MAX_CALL_DEPTH = 6
 
 #: Include-splice recursion bound (also the cycle guard's backstop).
 MAX_INCLUDE_DEPTH = 8
+
+#: Per-file parse budget (characters). The projection reads hostile
+#: repo text, so the read must be capped before any lexing. Both
+#: directions of the bound: real PHP entry/include files are well
+#: under 2 MiB (the largest mainstream app sources are hundreds of
+#: KiB), while a lower cap would start truncating legitimate
+#: generated-but-real code; higher only grows the memory a planted
+#: blob can force. An over-budget file degrades the unit to
+#: ``unknown`` ("file exceeds parse budget"), never to a truncated
+#: parse (a truncated prefix could hide the check → false absence).
+MAX_UNIT_CHARS = 2 * 1024 * 1024
 
 #: Total include-splice budget per entry. Depth and cycle guards alone
 #: leave K sibling requires of the same target × depth = K^depth
@@ -299,17 +312,24 @@ class _PhpUnit:
     short_tag_offsets: list[int] = field(default_factory=list)
 
 
-def _match_brace_span(stripped: str, open_idx: int) -> tuple[int, int] | None:
-    depth = 0
-    for j in range(open_idx, len(stripped)):
-        c = stripped[j]
-        if c == "{":
-            depth += 1
-        elif c == "}":
-            depth -= 1
-            if depth == 0:
-                return (open_idx, j + 1)
-    return None
+def _brace_match_table(stripped: str) -> dict[int, int]:
+    """Map each ``{`` offset to its matching ``}`` offset.
+
+    ONE linear stack pass over the stripped text replaces a
+    per-function forward rescan: K planted function definitions each
+    rescanning toward the file tail is a quadratic pump on hostile
+    repo text, while the table costs O(n) once and every body lookup
+    is O(1). Unmatched opens simply have no entry (the caller treats
+    a missing/out-of-span match as unbalanced).
+    """
+    table: dict[int, int] = {}
+    stack: list[int] = []
+    for idx, ch in enumerate(stripped):
+        if ch == "{":
+            stack.append(idx)
+        elif ch == "}" and stack:
+            table[stack.pop()] = idx
+    return table
 
 
 def _parse_php_unit(path: Path, source_root: Path) -> _PhpUnit:
@@ -318,12 +338,17 @@ def _parse_php_unit(path: Path, source_root: Path) -> _PhpUnit:
     except ValueError:
         rel = str(path)
     unit = _PhpUnit(path=path, rel=rel)
-    try:
-        unit.text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
+    capped = read_text_capped(path, MAX_UNIT_CHARS)
+    if capped is None:
         unit.parse_ok = False
-        unit.parse_error = f"unreadable: {exc.__class__.__name__}"
+        unit.parse_error = "unreadable: OSError"
         return unit
+    text, truncated = capped
+    if truncated:
+        unit.parse_ok = False
+        unit.parse_error = "file exceeds parse budget"
+        return unit
+    unit.text = text
     unit.stripped = _strip_php(unit.text)
     tagged_spans = _php_code_spans(unit.text)
     unit.html_offsets = _inline_html_offsets(unit.text, tagged_spans)
@@ -343,6 +368,7 @@ def _parse_php_unit(path: Path, source_root: Path) -> _PhpUnit:
     unit.html_offsets.sort()
 
     body_spans: list[tuple[int, int]] = []
+    brace_close: dict[int, int] | None = None
     for span_start, span_end in code_spans:
         segment = unit.stripped[span_start:span_end]
         for m in _FUNC_DEF_RE.finditer(segment):
@@ -353,18 +379,21 @@ def _parse_php_unit(path: Path, source_root: Path) -> _PhpUnit:
                     f"function {m.group(1)} has no body brace"
                 )
                 return unit
-            body = _match_brace_span(segment, open_idx)
-            if body is None:
+            if brace_close is None:
+                brace_close = _brace_match_table(unit.stripped)
+            close_abs = brace_close.get(span_start + open_idx)
+            if close_abs is None or close_abs >= span_end:
                 unit.parse_ok = False
                 unit.parse_error = (
                     f"unbalanced braces in function {m.group(1)}"
                 )
                 return unit
+            body_end = close_abs + 1 - span_start
             unit.functions[m.group(1)] = (
-                span_start + body[0], span_start + body[1],
+                span_start + open_idx, span_start + body_end,
             )
             body_spans.append(
-                (span_start + m.start(), span_start + body[1]),
+                (span_start + m.start(), span_start + body_end),
             )
 
     # Top-level = code spans minus function-definition spans.
