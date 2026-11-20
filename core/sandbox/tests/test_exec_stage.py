@@ -137,8 +137,8 @@ class TestSymlinksNeverStaged:
             assert staged == link
 
     def test_intermediate_symlink_dir_not_staged(self, tmp_path):
-        """The lens shape: callers pass target-repo build paths, so a
-        planted DIRECTORY link (``build -> <elsewhere>``) is as
+        """Callers pass target-repo build paths, so a planted
+        DIRECTORY link (``build -> <elsewhere>``) is as
         attacker-reachable as a linked leaf — the parent-side copy
         would re-expose, executable, a file the child could not
         read. Any symlink component means no staging."""

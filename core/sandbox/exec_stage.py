@@ -96,6 +96,15 @@ def executable_stage(binary_path: str | os.PathLike) -> Iterator[Path]:
     (Linux) and binds the opened fd to the lstat-gated inode by
     (st_dev, st_ino) on every platform.
 
+    Operational consequence of the no-symlink rule: a BENIGN linked
+    prefix also disables staging — e.g. macOS's ``/tmp`` is a symlink
+    to ``/private/tmp``, so a non-executable artifact addressed
+    through it is yielded unchanged and the subsequent spawn fails
+    with EACCES instead of running a staged copy. Callers hitting
+    that shape should address the artifact by its canonical
+    (``realpath``-stable) path; the gate cannot tell a benign prefix
+    link from a planted one, so it refuses both.
+
     The staging dir lives under :func:`core.run.workdir.exec_workdir`
     (executable even when the system tmp is mounted noexec, swept with
     the session); the ``raptor-exec-stage-`` prefix is additionally

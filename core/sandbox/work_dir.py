@@ -109,11 +109,12 @@ def adopt_subdir_identity(identity: object) -> str:
     Trust boundary: the record must arrive over a channel only the
     minting parent writes (the coordinator's request pipe) — a
     registered identity steers the pin step's WALK, so an attacker
-    who could inject one would choose the walk path. It cannot
-    weaken an already-registered path (the seed verifies nothing
-    itself; ``_pin_one_source`` still fstat-matches the pinned inode
-    against the shipped dev/ino and refuses with the tamper errno on
-    mismatch), but it must never be fed target-derived data.
+    who could inject one would choose the walk path. The seed
+    verifies nothing itself and REPLACES any existing registration
+    for the same path unconditionally: safety rests entirely on the
+    trusted channel plus ``_pin_one_source``'s downstream fstat
+    match (the pinned inode must equal the shipped dev/ino, tamper
+    errno on mismatch). It must never be fed target-derived data.
 
     Raises ``ValueError`` on any malformed record — a shape drift
     between exporter and adopter must fail the spawn loudly, never
