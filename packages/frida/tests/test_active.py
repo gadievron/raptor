@@ -352,6 +352,18 @@ class TestObservePaired:
         # flow's own success check) a hostile child must not rewrite.
         assert request["target"]["output"] == str(run_dir / "work-target")
         assert (run_dir / "work-target").is_dir()
+        # The mint's fd-verified identity must travel with the path:
+        # the coordinator pins in a FRESH interpreter whose registry
+        # is empty, and without the shipped record its pin silently
+        # degrades to a realpath walk — the swapped-symlink window
+        # the mint exists to close.
+        identity = request["target"]["output_identity"]
+        st = os.stat(run_dir / "work-target")
+        assert identity["path"] == str(run_dir / "work-target")
+        assert identity["walk_path"] == str(
+            (run_dir / "work-target").resolve())
+        assert (identity["st_dev"], identity["st_ino"]) == (
+            st.st_dev, st.st_ino)
         assert request["target"]["restrict_reads"] is True
         assert request["exploit"]["profile"] == "frida"
         assert request["wait_listen_port"] == 8080

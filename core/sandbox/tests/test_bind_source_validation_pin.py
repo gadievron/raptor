@@ -273,6 +273,103 @@ class TestWorkSubdirRegisteredPins(unittest.TestCase):
                          (st_real.st_dev, st_real.st_ino))
 
 
+class TestShippedIdentityAcrossProcesses(unittest.TestCase):
+    """exported_subdir_identity → adopt_subdir_identity: the registry
+    is process-local, but the production hostile-work-subdir flow
+    (frida → netns coordinator) pins in a FRESH interpreter. The
+    shipped record must give the receiving process's pin step the
+    same swap refusal the minting process gets."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name)
+
+    def _mint_and_ship(self) -> tuple[str, dict]:
+        from core.sandbox import work_dir
+        work = work_dir.hostile_work_subdir(self.base, "target")
+        identity = work_dir.exported_subdir_identity(work)
+        assert identity is not None
+        key = identity["path"]
+
+        def _forget() -> None:
+            with work_dir._identity_lock:
+                work_dir._verified_subdirs.pop(key, None)
+
+        self.addCleanup(_forget)
+        # Fresh-process simulation: the receiving interpreter starts
+        # with an empty registry.
+        _forget()
+        return key, identity
+
+    def test_adopted_identity_roundtrip_pins_verified_inode(self) -> None:
+        from core.sandbox import work_dir
+        from core.sandbox._spawn import _pin_one_source
+        key, identity = self._mint_and_ship()
+        self.assertEqual(work_dir.adopt_subdir_identity(identity), key)
+        fd = _pin_one_source(key)
+        self.addCleanup(os.close, fd)
+        st = os.fstat(fd)
+        self.assertEqual((st.st_dev, st.st_ino),
+                         (identity["st_dev"], identity["st_ino"]))
+
+    def test_adopted_identity_refuses_post_mint_swap(self) -> None:
+        """The cross-process window: mint in process A, swap while the
+        request travels, pin in process B. The adopted record must
+        refuse the swap."""
+        from core.sandbox import work_dir
+        from core.sandbox._spawn import _pin_one_source
+        key, identity = self._mint_and_ship()
+        victim = self.base / "victim"
+        victim.mkdir()
+        os.rename(key, self.base / "moved-away")
+        os.symlink(victim, key)
+        work_dir.adopt_subdir_identity(identity)
+        with self.assertRaises(OSError):
+            _pin_one_source(key)
+
+    def test_unshipped_identity_follows_the_swap(self) -> None:
+        """Control documenting the hole the shipping closes: with an
+        empty registry (the pre-fix coordinator state) the identical
+        swap pins the attacker's victim directory silently."""
+        from core.sandbox._spawn import _pin_one_source
+        key, _identity = self._mint_and_ship()
+        victim = self.base / "victim"
+        victim.mkdir()
+        os.rename(key, self.base / "moved-away")
+        os.symlink(victim, key)
+        fd = _pin_one_source(key)
+        self.addCleanup(os.close, fd)
+        st = os.fstat(fd)
+        st_victim = os.stat(victim)
+        self.assertEqual((st.st_dev, st.st_ino),
+                         (st_victim.st_dev, st_victim.st_ino))
+
+    def test_adopt_refuses_malformed_records(self) -> None:
+        from core.sandbox import work_dir
+        good = {"path": "/a/b", "walk_path": "/a/b",
+                "st_dev": 1, "st_ino": 2}
+
+        def _forget() -> None:
+            with work_dir._identity_lock:
+                work_dir._verified_subdirs.pop("/a/b", None)
+
+        self.addCleanup(_forget)
+        for label, bad in (
+            ("not a dict", ["/a/b"]),
+            ("missing path", {k: v for k, v in good.items()
+                              if k != "path"}),
+            ("relative path", {**good, "path": "a/b"}),
+            ("non-canonical walk", {**good, "walk_path": "/a//b"}),
+            ("string dev", {**good, "st_dev": "1"}),
+            ("bool ino", {**good, "st_ino": True}),
+            ("negative ino", {**good, "st_ino": -1}),
+        ):
+            with self.assertRaises(ValueError, msg=label):
+                work_dir.adopt_subdir_identity(bad)
+        self.assertIsNone(work_dir.verified_subdir_identity("/a/b"))
+
+
 class TestBindPinnedSourceIdentityRefusal(unittest.TestCase):
     """mount_ns._bind_pinned_source with a validation-time fd refuses —
     BEFORE any mount(2) — when the source no longer resolves to the

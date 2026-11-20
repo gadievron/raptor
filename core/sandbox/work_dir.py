@@ -35,8 +35,9 @@ from core.run.metadata import RUN_METADATA_FILE
 from ._fake_home import _DIR_FLAGS, _open_directory
 from ._pathpin import canonical_bind_path
 
-__all__ = ["WORK_SUBDIR_PREFIX", "hostile_work_subdir", "is_run_root",
-           "verified_subdir_identity"]
+__all__ = ["WORK_SUBDIR_PREFIX", "adopt_subdir_identity",
+           "exported_subdir_identity", "hostile_work_subdir",
+           "is_run_root", "verified_subdir_identity"]
 
 #: Every work subdirectory carries this prefix so run-dir consumers
 #: (artifact walkers, cleanup) can recognise child scratch space.
@@ -73,6 +74,73 @@ def verified_subdir_identity(
     """
     with _identity_lock:
         return _verified_subdirs.get(canonical_path)
+
+
+def exported_subdir_identity(
+        work: str | os.PathLike[str]) -> dict[str, str | int] | None:
+    """JSON-safe identity record for a minted work subdir, for
+    shipping across a process boundary.
+
+    The registry is process-local, but the pin step that consults it
+    may run in a DIFFERENT process: the netns coordinator receives
+    ``output=<work subdir>`` over its request pipe and calls
+    ``sandbox_run`` in a fresh interpreter, where an unseeded registry
+    would silently fall back to the realpath walk — the exact
+    swapped-symlink window :func:`hostile_work_subdir` exists to
+    close. The minting parent ships this record alongside the path and
+    the receiver seeds its registry with
+    :func:`adopt_subdir_identity`.
+
+    Returns ``None`` for paths this process never minted.
+    """
+    key = canonical_bind_path(os.fspath(work))
+    identity = verified_subdir_identity(key)
+    if identity is None:
+        return None
+    walk_path, st_dev, st_ino = identity
+    return {"path": key, "walk_path": walk_path,
+            "st_dev": st_dev, "st_ino": st_ino}
+
+
+def adopt_subdir_identity(identity: object) -> str:
+    """Seed the registry from a TRUSTED parent's exported identity
+    (:func:`exported_subdir_identity`), returning the registry key.
+
+    Trust boundary: the record must arrive over a channel only the
+    minting parent writes (the coordinator's request pipe) — a
+    registered identity steers the pin step's WALK, so an attacker
+    who could inject one would choose the walk path. It cannot
+    weaken an already-registered path (the seed verifies nothing
+    itself; ``_pin_one_source`` still fstat-matches the pinned inode
+    against the shipped dev/ino and refuses with the tamper errno on
+    mismatch), but it must never be fed target-derived data.
+
+    Raises ``ValueError`` on any malformed record — a shape drift
+    between exporter and adopter must fail the spawn loudly, never
+    degrade to the realpath fallback.
+    """
+    if not isinstance(identity, dict):
+        msg = ("adopt_subdir_identity: identity must be a dict, got "
+               f"{type(identity).__name__}")
+        raise ValueError(msg)
+    path = identity.get("path")
+    walk_path = identity.get("walk_path")
+    st_dev = identity.get("st_dev")
+    st_ino = identity.get("st_ino")
+    for name, value in (("path", path), ("walk_path", walk_path)):
+        if (not isinstance(value, str)
+                or value != canonical_bind_path(value)):
+            msg = (f"adopt_subdir_identity: {name!r} must be a "
+                   f"canonical absolute path")
+            raise ValueError(msg)
+    for name, value in (("st_dev", st_dev), ("st_ino", st_ino)):
+        if type(value) is not int or value < 0:
+            msg = (f"adopt_subdir_identity: {name!r} must be a "
+                   f"non-negative int, got {type(value).__name__}")
+            raise ValueError(msg)
+    with _identity_lock:
+        _verified_subdirs[path] = (walk_path, st_dev, st_ino)
+    return path
 
 
 def is_run_root(path: str | os.PathLike[str]) -> bool:

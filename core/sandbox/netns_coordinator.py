@@ -411,6 +411,25 @@ def _run_child(_role: str, spec: dict[str, Any], result: _ChildResult) -> None:
         # spec, leaving returncode=None with no error string).
         target_path = spec.get("target")
         output_path = spec.get("output")
+        # Work-subdir identity minted by the PARENT's fd-verified
+        # ``hostile_work_subdir`` call. The verified-identity registry
+        # is process-local and the pin step runs HERE, in the fresh
+        # coordinator interpreter — without seeding it, the output pin
+        # silently degrades to a fresh realpath walk, following a
+        # symlink swapped in after the parent's mint. The request pipe
+        # is parent-written (never target-writable), which is the
+        # trust boundary ``adopt_subdir_identity`` requires; a
+        # malformed record raises and travels through result.error.
+        output_identity = spec.get("output_identity")
+        if output_identity is not None:
+            if not isinstance(output_identity, dict):
+                msg = (
+                    f"spec['output_identity'] must be dict, got "
+                    f"{type(output_identity).__name__}"
+                )
+                raise TypeError(msg)
+            from core.sandbox.work_dir import adopt_subdir_identity
+            adopt_subdir_identity(output_identity)
         writable_paths = spec.get("writable_paths")
         if writable_paths is not None and not isinstance(writable_paths, list):
             msg = f"spec['writable_paths'] must be list, got {type(writable_paths).__name__}"

@@ -295,11 +295,24 @@ def observe_paired(
     # and findings live there too) that a hostile child must not be
     # able to rewrite. The frida lane (trusted tooling) keeps writing
     # its observation artifacts to the run dir via --out.
-    from core.sandbox.work_dir import hostile_work_subdir
+    from core.sandbox.work_dir import (exported_subdir_identity,
+                                       hostile_work_subdir)
     try:
         target_work = hostile_work_subdir(run_dir, "target")
     except ValueError as exc:
         log.error("cannot stage target work dir: %s", exc)
+        return None
+    # The mint's verified identity lives in a process-local registry,
+    # but the pin step runs in the coordinator SUBPROCESS — without
+    # shipping it, the coordinator's registry lookup misses and the
+    # pin silently degrades to a fresh realpath walk, re-opening the
+    # swapped-symlink window the mint closed. Mandatory: a missing
+    # record means the registry contract broke, not a soft fallback.
+    work_identity = exported_subdir_identity(target_work)
+    if work_identity is None:
+        log.error("no verified identity recorded for %s; refusing to "
+                  "hand the work dir to the coordinator unpinned",
+                  target_work)
         return None
 
     target_binary = Path(target_cmd[0])
@@ -331,6 +344,7 @@ def observe_paired(
             # the spec — network-only isolation is not enough for a
             # hostile child.
             "output": str(target_work),
+            "output_identity": work_identity,
             "restrict_reads": True,
         },
         "exploit": {

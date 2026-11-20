@@ -418,3 +418,87 @@ def test_main_decoder_failures_are_structured_refusals(monkeypatch, kind):
     assert exit_code == 2 and errors[0][0] == "bad_request"
     assert "could not parse request JSON" in errors[0][1]
     assert not responses and not joins
+
+
+def test_run_child_output_identity_seeds_pin_registry(monkeypatch, tmp_path):
+    """The parent's fd-verified work-subdir identity must cross the
+    process boundary: the spec record seeds THIS interpreter's
+    registry before sandbox_run, so the output pin walks the
+    verification-time path instead of degrading to a fresh realpath
+    (the swapped-symlink window the mint exists to close)."""
+    import core.sandbox as _sandbox
+    from core.sandbox import work_dir
+
+    work = work_dir.hostile_work_subdir(tmp_path, "target")
+    identity = work_dir.exported_subdir_identity(work)
+    assert identity is not None
+    key = identity["path"]
+
+    def _forget():
+        with work_dir._identity_lock:
+            work_dir._verified_subdirs.pop(key, None)
+
+    # The mint above and the adopt inside _run_child both touch the
+    # process-global registry; the finally leaves no entry behind
+    # whichever assertion trips.
+    try:
+        # Simulate the fresh coordinator interpreter: empty registry.
+        _forget()
+
+        seen = {}
+
+        def fake_run(cmd, **kwargs):
+            seen["registered"] = work_dir.verified_subdir_identity(key)
+
+            class _R:
+                returncode = 0
+                stdout = b""
+                stderr = b""
+
+            return _R()
+
+        monkeypatch.setattr(_sandbox, "run", fake_run)
+        spec = {"cmd": ["/bin/true"], "output": str(work),
+                "output_identity": identity}
+        result = _nc._ChildResult()
+        _nc._run_child("target", spec, result)
+        assert result.error is None
+        assert seen["registered"] == (
+            identity["walk_path"], identity["st_dev"], identity["st_ino"])
+    finally:
+        _forget()
+
+
+def test_run_child_malformed_output_identity_is_structured_refusal(monkeypatch):
+    """A shape drift between exporter and adopter must fail the spawn
+    loudly through result.error — never degrade to the realpath
+    fallback, and never reach sandbox_run."""
+    import core.sandbox as _sandbox
+
+    called = {}
+
+    def fake_run(cmd, **kwargs):
+        called["ran"] = True
+
+        class _R:
+            returncode = 0
+            stdout = b""
+            stderr = b""
+
+        return _R()
+
+    monkeypatch.setattr(_sandbox, "run", fake_run)
+    for bad in (
+        "/not/a/dict",
+        {"path": "relative", "walk_path": "/w", "st_dev": 1, "st_ino": 2},
+        {"path": "/p", "walk_path": "/w", "st_dev": "1", "st_ino": 2},
+        {"path": "/p", "walk_path": "/w", "st_dev": True, "st_ino": 2},
+        {"path": "/p", "walk_path": "/w", "st_ino": 2},
+    ):
+        spec = {"cmd": ["/bin/true"], "output": "/p",
+                "output_identity": bad}
+        result = _nc._ChildResult()
+        _nc._run_child("target", spec, result)  # must not raise
+        assert result.error is not None, repr(bad)
+        json.dumps(result.to_dict())
+    assert called == {}
