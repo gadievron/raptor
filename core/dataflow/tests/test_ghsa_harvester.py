@@ -427,3 +427,23 @@ def test_fetch_pins_hash_as_positional_refspec(monkeypatch, tmp_path):
     from core.dataflow import ghsa_harvester as gh
     src = inspect.getsource(gh)
     assert '"origin", "--", fix_hash' in src
+
+
+def test_main_escapes_hostile_cve_id_in_progress_lines(
+        tmp_path: Path, fake_resolve, capsys):
+    """cve_id is advisory-authored (only a startswith gate): escape
+    sequences must reach the terminal as literal escapes on both the
+    harvest and fetch-fail lines."""
+    hostile = "CVE-2024-\x1b]0;pwn\x07"
+    _write_advisory_tree(tmp_path, [
+        (_adv(hostile, ["CWE-22"], "PyPI",
+              "https://github.com/o/good/commit/" + "0" * 40), "2024"),
+        (_adv(hostile + "b", ["CWE-22"], "PyPI",
+              "https://github.com/FAIL-REPO/x/commit/" + "1" * 40), "2024"),
+    ])
+    out = tmp_path / "m.db"
+    gh.main(["--ghsa-root", str(tmp_path), "--out", str(out), "--years", "2024"])
+    captured = capsys.readouterr().out
+    assert "FETCH FAIL" in captured and "parent=" in captured
+    assert "\x1b" not in captured and "\x07" not in captured
+    assert "\\x1b]0;pwn\\x07" in captured

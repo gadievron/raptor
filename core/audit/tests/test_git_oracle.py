@@ -459,6 +459,28 @@ class TestParsing:
         assert "overflow" in r.matched_patterns
         assert "sanitize" in r.matched_patterns
 
+    def test_parse_escapes_hostile_subject(self):
+        # Subjects are scanned-repo-authored: escape sequences must be
+        # stored inert, not relayed raw to reports/terminals.
+        sha = "c" * 40
+        stdout = (
+            f"\x1e{sha}\x1f2024-01-02T03:04:05+00:00\x1f"
+            "Fix \x1b]0;pwned\x07 thing\x1fbody\x1f\nsrc/a.c\n"
+        )
+        r = _parse_log_records(stdout)[0]
+        assert "\x1b" not in r.subject and "\x07" not in r.subject
+        assert "\\x1b]0;pwned\\x07" in r.subject
+
+    def test_parse_bounds_hostile_subject(self):
+        sha = "d" * 40
+        stdout = (
+            f"\x1e{sha}\x1f2024-01-02T03:04:05+00:00\x1f"
+            + "A" * 5000 + "\x1fbody\x1f\nsrc/a.c\n"
+        )
+        r = _parse_log_records(stdout)[0]
+        assert "...[+" in r.subject
+        assert len(r.subject) < 350
+
     def test_parse_rejects_malformed_sha(self):
         stdout = "\x1enot-a-sha\x1fd\x1fs\x1fb\x1f\nfile.c\n"
         assert _parse_log_records(stdout) == []

@@ -772,3 +772,28 @@ def test_process_pair_scratch_dirs_are_disjoint(monkeypatch, tmp_path: Path):
     assert seen[0] != seen[1]
     for dest in seen:
         assert dest.parent.parent == tmp_path
+
+
+def test_main_log_lane_escapes_and_bounds_hostile_text(monkeypatch, tmp_path, capsys):
+    """The CLI's log chokepoint renders DB-sourced / exception text inert:
+    escape sequences become literal escapes and long lines are elided."""
+    hostile = "CVE-2024-1 \x1b]0;pwned\x07 " + "A" * 600
+
+    def fake_walk(*args, **kwargs):
+        kwargs["log"](hostile)
+        return {}
+
+    monkeypatch.setattr(cvefix_walk, "walk", fake_walk)
+    monkeypatch.setattr(
+        cvefix_walk.CodeQLTunables, "from_tuning",
+        lambda overrides=None: cvefix_walk.CodeQLTunables(),
+    )
+    cvefix_walk.main([
+        "--db", str(tmp_path / "db.sqlite"),
+        "--results", str(tmp_path / "results.sqlite"),
+        "--work-dir", str(tmp_path / "work"),
+    ])
+    out = capsys.readouterr().out
+    assert "\x1b" not in out and "\x07" not in out
+    assert "\\x1b]0;pwned\\x07" in out
+    assert "...[+" in out

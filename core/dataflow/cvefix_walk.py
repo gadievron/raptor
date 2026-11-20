@@ -41,6 +41,7 @@ from core.git.clone import (
     safe_git_readonly_command,
 )
 from core.sarif.parser import SARIF_MAX_BYTES, get_run_execution_diagnostics
+from core.security.log_sanitisation import sanitise_for_terminal
 
 logger = logging.getLogger(__name__)
 
@@ -707,8 +708,11 @@ def main(argv=None) -> None:
                     help="codeql database analyze timeout, seconds (default 180)")
     a = ap.parse_args(argv)
 
-    def log(m) -> None:
-        print(m, flush=True)
+    def log(m: object) -> None:
+        # Progress lines interpolate DB-sourced values (CVE ids, repo
+        # URLs) and exception text from fetches of remote repos —
+        # escape and bound at the terminal chokepoint.
+        print(sanitise_for_terminal(str(m), max_len=512), flush=True)
 
     # Resolve operator overrides against tuning.json-backed defaults.
     tunables = CodeQLTunables.from_tuning(

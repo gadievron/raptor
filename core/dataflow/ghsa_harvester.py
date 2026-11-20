@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
 from core.run.scratch import scratch_dir
+from core.security.log_sanitisation import sanitise_excerpt
 from core.source.streams import preserving_stream_error
 from core.json.bounded import load_json_bounded
 
@@ -366,8 +367,12 @@ def main(argv: list | None = None) -> int:
         parent = _resolve_parent(repo_url, sha, timeout=args.resolve_timeout)
         if parent is None:
             consecutive_fails += 1
-            print(f"  [{i}/{len(candidates)}] {cve_id} {cwe} {lang} {repo_url}: "
-                  f"FETCH FAIL (sha={sha[:8]})")
+            # cve_id is advisory-authored (only a startswith gate) —
+            # escape it before the terminal; owner/repo/sha are already
+            # charset-gated by _COMMIT_RE and cwe comes from the
+            # operator's filter set.
+            print(f"  [{i}/{len(candidates)}] {sanitise_excerpt(cve_id)} "
+                  f"{cwe} {lang} {repo_url}: FETCH FAIL (sha={sha[:8]})")
             if (args.max_parent_failures is not None
                     and consecutive_fails >= args.max_parent_failures):
                 print(f"ABORT: {consecutive_fails} consecutive fetch failures — "
@@ -376,7 +381,7 @@ def main(argv: list | None = None) -> int:
             continue
         consecutive_fails = 0
         harvested.append(HarvestedFix(cve_id, cwe, repo_url, lang, sha, parent))
-        print(f"  [{i}/{len(candidates)}] {cve_id} {cwe} {lang} "
+        print(f"  [{i}/{len(candidates)}] {sanitise_excerpt(cve_id)} {cwe} {lang} "
               f"{repo_url.split('github.com/')[-1]}: parent={parent[:8]}")
 
     _write_metadata_db(args.out, harvested)

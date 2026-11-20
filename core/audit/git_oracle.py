@@ -61,6 +61,7 @@ from core.git.security_fixes import (
     match_categories,
 )
 from core.run.scratch import scratch_dir
+from core.security.log_sanitisation import sanitise_for_terminal
 
 from ._util import safe_join
 
@@ -263,7 +264,10 @@ def _parse_log_records(stdout: str) -> list:
         )[:_MAX_FILES_PER_COMMIT]
         records.append(CorroborationRecord(
             sha=sha,
-            subject=subject.strip()[:300],
+            # Commit subjects are scanned-repo-authored text that flows
+            # into reports and terminal lines downstream — escape and
+            # bound at composition, not just slice.
+            subject=sanitise_for_terminal(subject.strip(), max_len=300),
             date=date.strip(),
             files=files,
             matched_patterns=_match_labels(subject, body),
