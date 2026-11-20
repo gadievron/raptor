@@ -108,3 +108,50 @@ except HTTPError as error:
             assert rows[0]["worker"] == "controller"
         assert "tripwire proof" in rows[0]["body_excerpt"]
         assert "LLM tripwire FAILED" in result.stdout
+
+
+def test_terminal_summary_escapes_hostile_rows(tmp_path):
+    """Journal rows quote whatever connected (method, path, raw SNI
+    hostname bytes); the terminal relay must render them inert —
+    non-printables escaped — before the operator terminal sees them."""
+    from types import SimpleNamespace
+
+    from core.testing import llm_tripwire as tw
+
+    directory = tmp_path / "journal"
+    directory.mkdir()
+    hostile_path = "/v1/\x1b]0;owned\x07\x1b[2J\x9bchat"
+    (directory / "gw0.jsonl").write_text(json.dumps({
+        "time_ns": 0, "worker": "gw0", "active_test": "pkg/t.py::test_x",
+        "previous_test": None, "method": "POST", "path": hostile_path,
+        "body_excerpt": "",
+    }) + "\n")
+    host_dir = tmp_path / "host"
+    host_dir.mkdir()
+    (host_dir / "connections.jsonl").write_text(json.dumps({
+        "owner_pid": 1234, "worker": "gw0",
+        "origin_test": "pkg/t.py::test_x", "active_test": "pkg/t.py::test_x",
+        "hostname": "evil.\x1b[31mexample\x07.com",
+    }) + "\n")
+    listener = SimpleNamespace(count=1, worker_requests=0,
+                               journal_errors=["\x1b[31mjournal boom"],
+                               host_dir=host_dir)
+
+    lines: list[str] = []
+
+    class _FakeReporter:
+        config = SimpleNamespace(stash={tw._KEY: (listener, directory, {})})
+
+        def section(self, title, **kw):
+            lines.append(title)
+
+        def write_line(self, line, **kw):
+            lines.append(line)
+
+    tw.pytest_terminal_summary(_FakeReporter())
+    joined = "\n".join(lines)
+    assert "LLM tripwire FAILED" in joined
+    assert "LLM hostname tripwire FAILED" in joined
+    for raw in ("\x1b", "\x07", "\x9b"):
+        assert raw not in joined, "raw control byte reached the terminal"
+    assert "\\x1b" in joined  # escaped, not stripped: evidence survives
