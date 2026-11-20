@@ -185,7 +185,11 @@ def hardlink_layer(entries):
 def test_opt_in_layer_local_hardlink_resolution():
     blob = hardlink_layer([('cache/LICENSE', tarfile.REGTYPE, b'notice'),
                            ('pkg/LICENSE', tarfile.LNKTYPE, 'cache/LICENSE')])
-    assert extract_files_from_layer([blob], {'pkg/LICENSE'}) == {}
+    # Without the opt-in, a wanted path materialised as a hard link is
+    # refused LOUDLY — the silent empty result was a falsely-clean
+    # inventory.
+    with pytest.raises(WantedEntryRefused):
+        extract_files_from_layer([blob], {'pkg/LICENSE'})
     result = extract_files_from_layer([blob], {'pkg/LICENSE', 'cache/LICENSE'}, resolve_selected_hardlinks=True)
     assert result['pkg/LICENSE'] == b'notice'
     from core.oci.blob import UnresolvedLayerHardlinks

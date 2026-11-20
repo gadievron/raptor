@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import posixpath
 import re
 import zlib
 import unicodedata
@@ -299,8 +300,11 @@ def extract_files_from_layer(
     ``wanted_paths`` is the set of in-archive paths we care about,
     e.g. ``{"var/lib/dpkg/status", "lib/apk/db/installed"}``. Paths
     are matched against the tar entry name with leading ``./`` and
-    leading ``/`` normalised away (different image build pipelines
-    emit them differently).
+    leading ``/`` normalised away and interior ``.``/``..``
+    components collapsed (different image build pipelines emit them
+    differently; a ``..``-aliased spelling of a wanted path is refused
+    loudly instead of being silently missed). Names whose
+    normalisation escapes the layer root never match.
 
     Returns a dict mapping wanted-path → file content bytes. Paths
     not present in this layer are simply absent from the result —
@@ -364,6 +368,12 @@ def extract_files_from_layer(
     regular_names: set[str] = set()
 
     def _wanted(name: str) -> bool:
+        if _escapes_layer_root(name):
+            # A normalised name still starting with ".." points above
+            # the layer root: no in-image path corresponds to it, so it
+            # can never satisfy a wanted path, and the attacker-chosen
+            # spelling is kept away from the discover_path callback.
+            return False
         if name in normalised_wanted:
             return True
         if discover_path is not None and discover_path(name):
@@ -411,6 +421,20 @@ def extract_files_from_layer(
                 raise WantedEntryRefused("unsafe or duplicate selected symlink metadata")
             symlinks[name] = member.linkname
             return
+        if member.issym():
+            # selected_symlinks is None here (the opt-in branch above
+            # handled the other case). A wanted path shipped as a
+            # symlink whose target is ITSELF another wanted path is
+            # the standard benign aliasing pattern (``etc/os-release
+            # -> ../usr/lib/os-release``): the content still reaches
+            # the caller under its canonical wanted name, so skipping
+            # the link is not a falsely-clean result. Anything else —
+            # a wanted path symlinked at content the scan never sees —
+            # must refuse loudly below.
+            target = _normalise_tar_path(
+                posixpath.join(posixpath.dirname(name), member.linkname))
+            if not _escapes_layer_root(target) and target in normalised_wanted:
+                return
         if not member.islnk() or not resolve_selected_hardlinks:
             raise WantedEntryRefused("selected layer entry is not a regular file")
         target = _normalise_tar_path(member.linkname)
@@ -472,7 +496,14 @@ def extract_files_from_layer(
         max_entry_count=layer_entry_count_budget(compressed_size),
         max_total_bytes=layer_decompression_budget(compressed_size),
         on_skipped=_refuse_wanted_skip,
-        on_nonregular=_nonregular if resolve_selected_hardlinks or selected_symlinks is not None else None,
+        # Always installed: with link resolution off, a WANTED path
+        # materialised as a symlink/hardlink/device would otherwise be
+        # skipped silently by the extractor's isfile() pre-filter —
+        # the same falsely-clean inventory WantedEntryRefused exists
+        # to prevent. _nonregular still ignores directories and
+        # unwanted members, and only honours link metadata when the
+        # corresponding opt-in is set.
+        on_nonregular=_nonregular,
     )
     # Drain the source to EOF before returning anything. stream_blob
     # only performs its sha256 check on exhaustion; returning after
@@ -508,8 +539,9 @@ _LEADING_PREFIX_RE = re.compile(r"^(?:\.?/)+")
 
 
 def _normalise_tar_path(p: str) -> str:
-    """Remove leading ``./`` and ``/`` so the same logical path
-    matches across builders that emit different shapes.
+    """Remove leading ``./`` and ``/``, then collapse interior
+    ``.``/``..`` components, so the same logical path matches across
+    builders that emit different shapes.
 
     Single regex pass (constant-time amortised) replaces the
     previous two ``while`` loops which were O(n) per leading
@@ -517,8 +549,29 @@ def _normalise_tar_path(p: str) -> str:
     entry like ``./././...`` repeated 10M times forced 10M string
     slices through the old loops; the regex bounds peak memory
     + CPU regardless of the leading prefix.
+
+    ``posixpath.normpath`` closes the interior-spelling gap: a member
+    named ``var/x/../lib/dpkg/status`` resolves to the wanted path on
+    an overlay filesystem, but an exact-string match missed the alias
+    entirely — the safety filter refuses ``..`` spellings, and with no
+    wanted-match that refusal was SILENT, yielding the falsely-clean
+    inventory this module refuses elsewhere. Normalising first makes
+    the alias match, so the refusal surfaces as
+    :class:`WantedEntryRefused`. Names whose normalisation still
+    ESCAPES the root (a leading ``..`` component) name no in-layer
+    path; :func:`_escapes_layer_root` lets matching refuse them.
     """
-    return _LEADING_PREFIX_RE.sub("", p)
+    stripped = _LEADING_PREFIX_RE.sub("", p)
+    if not stripped:
+        return stripped
+    norm = posixpath.normpath(stripped)
+    return "" if norm == "." else norm
+
+
+def _escapes_layer_root(name: str) -> bool:
+    """True for a NORMALISED path that still points above the layer
+    root — nothing inside the image filesystem can correspond to it."""
+    return name == ".." or name.startswith("../")
 
 
 __all__ = [

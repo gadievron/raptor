@@ -162,6 +162,50 @@ def test_leading_dot_slash_normalised():
     assert out == {"var/lib/dpkg/status": b"x"}
 
 
+def test_interior_dotdot_alias_of_wanted_path_is_loud():
+    """A member spelled ``var/x/../lib/dpkg/status`` resolves to the
+    wanted path on an overlay filesystem, but the safety filter
+    categorically refuses ``..`` segments — so it can never be
+    extracted here. The wanted-match must still see the NORMALISED
+    name so that refusal is LOUD: an exact-string comparison missed
+    the alias entirely and returned a falsely-clean inventory."""
+    blob = _make_gzipped_tar({"var/x/../lib/dpkg/status": b"aliased"})
+    with pytest.raises(WantedEntryRefused, match="path_traversal"):
+        extract_files_from_layer(_stream(blob), {"var/lib/dpkg/status"})
+
+
+def test_dotdot_alias_cannot_silently_shadow_wanted_path():
+    """The alias and the plain spelling name the SAME logical path.
+    An image carrying both (benign plain copy + aliased shadow) must
+    refuse loudly rather than scan only the copy and stay quiet about
+    the spelling the runtime would overlay on top of it."""
+    blob = _make_gzipped_tar_entries([
+        ("var/lib/dpkg/status", b"Package: benign-decoy\n"),
+        ("var/x/../lib/dpkg/status", b"Package: actually-installed\n"),
+    ])
+    with pytest.raises(WantedEntryRefused, match="path_traversal"):
+        extract_files_from_layer(_stream(blob), {"var/lib/dpkg/status"})
+
+
+def test_root_escaping_member_never_matches_or_discovers():
+    """A name that still starts with ``..`` after normalisation points
+    above the layer root: it corresponds to no in-image path, so it
+    must neither match a wanted path nor be offered to
+    ``discover_path`` (the spelling is attacker-chosen)."""
+    blob = _make_gzipped_tar({"../var/lib/dpkg/status": b"outside"})
+    offered: list[str] = []
+
+    def discover(path: str) -> bool:
+        offered.append(path)
+        return True
+
+    out = extract_files_from_layer(
+        _stream(blob), {"var/lib/dpkg/status"}, discover_path=discover,
+    )
+    assert out == {}
+    assert not any(p.startswith("..") for p in offered)
+
+
 # ---------------------------------------------------------------------------
 # Bounded read budget
 # ---------------------------------------------------------------------------
@@ -434,6 +478,85 @@ def test_empty_media_type_defaults_to_gzip():
         _stream(blob), {"var/lib/dpkg/status"}, media_type="",
     )
     assert out == {"var/lib/dpkg/status": b"x"}
+
+
+# ---------------------------------------------------------------------------
+# Wanted paths materialised as non-regular members — loud with the
+# default options (no link resolution opted in)
+# ---------------------------------------------------------------------------
+
+
+def _make_gzipped_tar_with_member(info: tarfile.TarInfo,
+                                  extra: Dict[str, bytes] | None = None) -> bytes:
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w") as tf:
+        tf.addfile(info)
+        for name, content in (extra or {}).items():
+            finfo = tarfile.TarInfo(name=name)
+            finfo.size = len(content)
+            tf.addfile(finfo, io.BytesIO(content))
+    return gzip.compress(raw.getvalue())
+
+
+@pytest.mark.parametrize("tar_type, linkname", [
+    (tarfile.SYMTYPE, "decoy"),
+    (tarfile.LNKTYPE, "var/lib/dpkg/decoy"),
+    (tarfile.FIFOTYPE, ""),
+])
+def test_wanted_nonregular_member_is_loud_by_default(tar_type, linkname):
+    """With neither link opt-in set, a WANTED path that exists in the
+    layer as a symlink/hardlink/FIFO used to be skipped silently by
+    the extractor's regular-file pre-filter — the falsely-clean
+    inventory WantedEntryRefused exists to prevent. It must raise."""
+    info = tarfile.TarInfo(name="var/lib/dpkg/status")
+    info.type = tar_type
+    info.linkname = linkname
+    blob = _make_gzipped_tar_with_member(info)
+    with pytest.raises(WantedEntryRefused):
+        extract_files_from_layer(_stream(blob), {"var/lib/dpkg/status"})
+
+
+@pytest.mark.parametrize("linkname", [
+    "../usr/lib/os-release",          # relative (os-release(5) shape)
+    "/usr/lib/os-release",            # absolute builder shape
+])
+def test_wanted_symlink_to_another_wanted_path_is_quiet(linkname):
+    """The standard benign aliasing pattern: ``etc/os-release`` is a
+    symlink at ``usr/lib/os-release`` on Debian-family images, and
+    BOTH spellings are wanted. The content reaches the caller under
+    its canonical wanted name, so the link skip is not falsely clean
+    and must not fail the layer."""
+    info = tarfile.TarInfo(name="etc/os-release")
+    info.type = tarfile.SYMTYPE
+    info.linkname = linkname
+    blob = _make_gzipped_tar_with_member(
+        info, {"usr/lib/os-release": b"ID=debian\n"})
+    out = extract_files_from_layer(
+        _stream(blob), {"etc/os-release", "usr/lib/os-release"})
+    assert out == {"usr/lib/os-release": b"ID=debian\n"}
+
+
+def test_wanted_symlink_to_unwanted_target_is_loud():
+    """Same shape, but the target is NOT covered by the wanted set —
+    the scan would never see the content the runtime resolves, so the
+    skip must refuse loudly."""
+    info = tarfile.TarInfo(name="etc/os-release")
+    info.type = tarfile.SYMTYPE
+    info.linkname = "../usr/lib/os-release"
+    blob = _make_gzipped_tar_with_member(info)
+    with pytest.raises(WantedEntryRefused):
+        extract_files_from_layer(_stream(blob), {"etc/os-release"})
+
+
+def test_unwanted_nonregular_member_still_quiet():
+    """Non-regular members we never asked about keep the quiet skip."""
+    info = tarfile.TarInfo(name="etc/alternatives/editor")
+    info.type = tarfile.SYMTYPE
+    info.linkname = "vi"
+    blob = _make_gzipped_tar_with_member(
+        info, {"var/lib/dpkg/status": b"pkgdata"})
+    out = extract_files_from_layer(_stream(blob), {"var/lib/dpkg/status"})
+    assert out == {"var/lib/dpkg/status": b"pkgdata"}
 
 
 def test_discovery_without_explicit_paths_uses_the_same_limits():
