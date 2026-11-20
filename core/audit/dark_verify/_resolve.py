@@ -114,13 +114,30 @@ def _norm(file_path: str) -> str:
     return file_path.replace("\\", "/")
 
 
+# Shape gate for reference components that are interpolated BARE into
+# generated harness code (the Python harness pastes module_path into
+# ``from {mp} import ...``, the Perl harness pastes use_module into
+# ``require {um};`` — no quoting is possible at either site). Same
+# identifier charset as the executor's ``_IDENTIFIER_RE`` sibling: a
+# finding file path carrying any other byte must refuse derivation
+# rather than ride into code.
+_IDENT_COMPONENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+
+
 # ---------------------------------------------------------------------------
 # Reference derivations shared with the harness generators
 # ---------------------------------------------------------------------------
 
 
 def file_to_import_path(file_path: str, _target_root: Path) -> str | None:
-    """``core/audit/gate.py`` → ``core.audit.gate``. None for non-Python."""
+    """``core/audit/gate.py`` → ``core.audit.gate``.
+
+    None for non-Python files AND for paths with any non-identifier
+    component — the result is interpolated bare into the harness's
+    ``from {module_path} import ...`` line, so a component outside the
+    identifier charset refuses derivation (and could not be imported
+    by that statement anyway).
+    """
     rel = _norm(file_path)
     p = PurePosixPath(rel)
     if p.suffix != ".py":
@@ -130,6 +147,8 @@ def file_to_import_path(file_path: str, _target_root: Path) -> str | None:
     if parts[-1] == "__init__":
         parts = parts[:-1]
     if not parts:
+        return None
+    if not all(_IDENT_COMPONENT_RE.fullmatch(part) for part in parts):
         return None
     return ".".join(parts)
 
@@ -168,14 +187,25 @@ def derive_lua_require_path(spec: DarkWitnessSpec) -> str:
     return rel.replace("/", ".")
 
 
-def derive_perl_use_module(spec: DarkWitnessSpec) -> str:
+def derive_perl_use_module(spec: DarkWitnessSpec) -> str | None:
+    """Perl bareword module spelling for the spec, or None when no
+    identifier-shaped spelling exists.
+
+    The result is interpolated bare into the harness's ``require
+    {um};`` line, so every ``::``-separated component must pass the
+    identifier gate — whether it came from the spec's explicit
+    ``use_module`` or was derived from the finding's file path.
+    """
     um = spec.lang_config.get("use_module", "")
-    if um:
-        return um
-    rel = spec.file
-    if rel.endswith((".pl", ".pm")):
-        rel = rel[:-3]
-    return rel.replace("/", "::")
+    if not um:
+        rel = spec.file
+        if rel.endswith((".pl", ".pm")):
+            rel = rel[:-3]
+        um = rel.replace("/", "::")
+    if not all(_IDENT_COMPONENT_RE.fullmatch(part)
+               for part in um.split("::")):
+        return None
+    return um
 
 
 # ---------------------------------------------------------------------------
@@ -411,6 +441,12 @@ def _resolve_lua(spec: DarkWitnessSpec, target_root: Path | None) -> str | None:
 def _resolve_perl(spec: DarkWitnessSpec, target_root: Path | None) -> str | None:
     file = _norm(spec.file)
     um = derive_perl_use_module(spec)
+    if um is None:
+        return (
+            f"finding file {spec.file!r} has no identifier-shaped Perl "
+            f"module spelling (every ::-component must be a bareword "
+            f"identifier); declining to verify"
+        )
     # Bareword ``require Foo::Bar`` maps ``::`` to ``/`` and appends
     # ``.pm`` ONLY (perlfunc) — and the harness puts the target root
     # first on @INC, so the single candidate slot is deterministic.

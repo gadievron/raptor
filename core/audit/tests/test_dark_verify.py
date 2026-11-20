@@ -111,6 +111,64 @@ class TestFileToImportPath:
     def test_top_level(self, tmp_path):
         assert file_to_import_path("setup.py", tmp_path) == "setup"
 
+    def test_non_identifier_component_returns_none(self, tmp_path):
+        # The result is pasted bare into `from {mp} import ...` — any
+        # component outside the identifier charset refuses derivation.
+        for path in (
+            "pkg;import os/mod.py",
+            "pkg/mod name.py",
+            "pkg/mod\n.py",
+            "pkg-x/mod.py",
+            "2pkg/mod.py",
+        ):
+            assert file_to_import_path(path, tmp_path) is None, path
+
+
+class TestDerivePerlUseModule:
+    def _spec(self, file, **lc):
+        return DarkWitnessSpec(
+            finding_key="f1", file=file, function="check",
+            language="perl", lang_config=lc,
+        )
+
+    def test_valid_derivation(self):
+        from core.audit.dark_verify import _resolve
+        assert (_resolve.derive_perl_use_module(self._spec("lib/Auth.pm"))
+                == "lib::Auth")
+
+    def test_explicit_valid_module_passes(self):
+        from core.audit.dark_verify import _resolve
+        spec = self._spec("lib/Auth.pm", use_module="lib::Auth")
+        assert _resolve.derive_perl_use_module(spec) == "lib::Auth"
+
+    def test_non_identifier_component_returns_none(self):
+        # Pasted bare into `require {um};` — no quoting is possible,
+        # so a hostile file path must refuse derivation.
+        from core.audit.dark_verify import _resolve
+        for file in (
+            "lib/Auth; system('x').pm",
+            "lib/Auth Module.pm",
+            "lib/Auth\n.pm",
+            "li-b/Auth.pm",
+        ):
+            assert _resolve.derive_perl_use_module(
+                self._spec(file)) is None, file
+
+    def test_explicit_hostile_module_returns_none(self):
+        from core.audit.dark_verify import _resolve
+        spec = self._spec("lib/Auth.pm", use_module="lib::Auth; exit")
+        assert _resolve.derive_perl_use_module(spec) is None
+
+    def test_resolver_refuses_underivable_spelling(self):
+        from core.audit.dark_verify import _resolve
+        err = _resolve._resolve_perl(self._spec("lib/Auth Module.pm"), None)
+        assert err is not None
+        assert "identifier-shaped" in err
+
+    def test_harness_generator_refuses_underivable_spelling(self, tmp_path):
+        with pytest.raises(ValueError):
+            generate_perl_harness(self._spec("lib/Auth Module.pm"), tmp_path)
+
 
 # -- validate_import_path ----------------------------------------------------
 

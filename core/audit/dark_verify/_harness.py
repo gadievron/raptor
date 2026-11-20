@@ -988,6 +988,16 @@ def generate_perl_harness(
     @INC entry).
     """
     use_module = derive_perl_use_module(spec)
+    if use_module is None:
+        # The resolution engine refuses these specs pre-execution;
+        # reaching here means a caller skipped validate_spec. The
+        # module name is pasted bare into `require {use_module};`,
+        # so there is no safe rendering — refuse loudly.
+        msg = (
+            f"no identifier-shaped Perl module spelling for "
+            f"{spec.file!r}"
+        )
+        raise ValueError(msg)
 
     target_str = str(target_root.resolve())
     args_str = _format_args_scripting(spec.args, nil_kw="undef")
