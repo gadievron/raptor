@@ -15,6 +15,12 @@ from core.testing.module_bindings import patch_module_attribute
 from core.testing.processes import run_in_process_group
 
 
+pytestmark = pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="Linux daemon probe requires prctl and /proc RPC hardening",
+)
+
+
 @pytest.mark.parametrize("transport", ["one-shot", "persistent"])
 @pytest.mark.parametrize("expression,refused,digit_limit", [
     ("1 << 3000", True, 640),

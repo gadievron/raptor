@@ -250,6 +250,7 @@ class TestSpawnPath:
 class TestE2EShim:
 
     def test_shim_calibrates_bin_cat(self, tmp_path, monkeypatch):
+        from core.sandbox.probes import check_mount_available
         from core.sandbox.ptrace_probe import check_ptrace_available
         from core.sandbox.seccomp import check_seccomp_available
         if not (check_seccomp_available()
@@ -284,6 +285,14 @@ class TestE2EShim:
              "--json", "--timeout", "15"],
             env=env, capture_output=True, text=True, timeout=30,
         )
+        if not check_mount_available():
+            # Observe mode has no enforced read wall. Without mount
+            # isolation, its nonce cannot authenticate a cacheable profile.
+            assert result.returncode == 70, result.stderr
+            assert "calibration observation is untrusted; profile was not cached" in result.stderr
+            assert not result.stdout.strip()
+            assert not list((tmp_path / "cache").rglob("*.json"))
+            return
         assert result.returncode == 0, (
             f"shim exited {result.returncode}; stderr={result.stderr!r}"
         )
