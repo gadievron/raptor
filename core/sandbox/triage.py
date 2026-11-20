@@ -695,10 +695,25 @@ def triage_run(run_dir: Path, *,
     # as trustworthy as the key itself, so it is trusted ONE-WAY: an
     # on-disk "exposed" claim may demote (no attacker gains from
     # forging it), an on-disk "hidden" claim proves nothing and never
-    # upgrades. Unknown posture (fresh-process re-triage, runs
-    # predating posture wiring) keeps today's behaviour.
+    # upgrades. Unknown posture (runs predating posture wiring, or a
+    # fresh process with no ledger record) keeps today's grading but
+    # is stamped unknown — the --require-evidence gate fails closed on
+    # it (_required_evidence_problem).
     posture = get_run_posture(run_dir)
     posture_source = "parent-memory" if posture is not None else None
+    posture_conflict = False
+    if posture is None:
+        # Fresh-process consumer: the parent memory above died with
+        # the owning process. The run's final posture is persisted at
+        # run end into the session run ledger — parent-owned
+        # sessions.d, OUTSIDE any sandbox write grant — keyed by the
+        # FULL resolved run-dir path (sessions.ledger_record_posture).
+        # Full-path keying also closes the basename replay the MAC
+        # run-binding (basename only) cannot see: a record for a
+        # SAME-NAMED different directory is a conflict, never a match.
+        posture, posture_conflict = _ledger_posture(run_dir)
+        if posture is not None:
+            posture_source = "session-ledger"
     if posture is None:
         _disk_posture = (summary or {}).get("posture")
         if (isinstance(_disk_posture, dict)
@@ -847,6 +862,20 @@ def triage_run(run_dir: Path, *,
         "audit_degraded": audit_degraded is not None,
         "caveats": [],
     }
+    if posture_conflict:
+        # Never a usable posture: the only record on file is bound to a
+        # DIFFERENT directory that shares this one's basename — exactly
+        # what a cross-run replay of validly-stamped artefacts into a
+        # same-named run dir looks like (the MAC run-binding is the
+        # basename alone and cannot tell the two apart).
+        report["inputs"]["posture_conflict"] = True
+        report["caveats"].append(
+            "Run posture on record is bound to a different run "
+            "directory with the same name — telemetry MACs bind only "
+            "the directory basename, so validly-stamped artefacts "
+            "could have been replayed from that run. Posture treated "
+            "as unknown."
+        )
     # The marker result is MAC-bound; its drop counters are not. Even
     # zero counters cannot attest completeness after the buffer cap.
     if any(event.get("result") == "buffer_overflow" for event in proxy_events):
@@ -1418,6 +1447,20 @@ def _remove_stale_triage_report(run_dir: Path) -> None:
         pass
 
 
+def _ledger_posture(run_dir: Path) -> tuple[dict | None, bool]:
+    """Fresh-process posture source: the parent-owned session-ledger
+    record for exactly this resolved run dir
+    (``sessions.ledger_record_posture`` writes it at run end).
+    ``(posture_or_None, name_collision)``; any failure reads as
+    ``(None, False)`` — unknown posture, which is the fail-closed
+    direction under ``--require-evidence``."""
+    try:
+        from core.project.sessions import ledger_run_posture
+        return ledger_run_posture(run_dir)
+    except Exception:  # noqa: BLE001 — unknown posture is the demote path, never an error
+        return None, False
+
+
 def _required_evidence_problem(report: dict) -> str | None:
     """Require positive, authenticated evidence before a CI gate can pass."""
     inputs = report.get("inputs")
@@ -1434,11 +1477,21 @@ def _required_evidence_problem(report: dict) -> str | None:
         for name in ("sandbox_summary", "proxy_events", "audit_degraded")
     ):
         return "telemetry provenance is not fully verified"
+    if inputs.get("posture_conflict"):
+        return ("run posture on record is bound to a different run "
+                "directory with the same name (possible cross-run "
+                "replay)")
     posture = inputs.get("mac_key_posture")
-    # Preserve existing provenance semantics for a fresh CLI process:
-    # missing parent-memory posture does not prove prior key exposure.
-    # Known exposure already demotes integrity; never promote it here.
-    if isinstance(posture, dict) and posture.get("mac_key_hidden") is False:
+    if not isinstance(posture, dict):
+        # Fail closed on unknown posture: on a key-exposed run the
+        # target can mint fully-verifying telemetry, so a verifying
+        # token proves parent provenance ONLY when the run's posture is
+        # positively known to have hidden the key. A fresh CLI process
+        # gets that from the session-ledger record written at run end;
+        # with no record (never written, session pruned, path mismatch)
+        # this gate must not vouch.
+        return "telemetry signing-key posture is unavailable"
+    if posture.get("mac_key_hidden") is False:
         return "telemetry signing-key posture is explicitly degraded"
     if inputs.get("proxy_capture_unconfirmed"):
         return "proxy event capture is unconfirmed"

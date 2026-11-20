@@ -141,18 +141,45 @@ def test_authenticated_capture_loss_cannot_pass_required_gate(
     assert ("evidence capture is incomplete" in captured.err) is bool(expected)
 
 
-def test_historical_retriage_does_not_require_ephemeral_parent_memory(
+def test_historical_retriage_requires_recorded_posture(
     authenticated_run, monkeypatch, capsys,
 ):
+    import os
+
+    from core.project import sessions
+
     run, write = authenticated_run
     write([{"type": "write", "path": "/tmp/owned", "verdict": "allow"}])
-    # A fresh CLI process has no in-memory posture from the original run.
-    # Keep the existing one-way provenance policy: disk claims cannot
-    # promote posture, while authenticated evidence still verifies.
+    # A fresh CLI process has no in-memory posture from the original
+    # run. Without the run-end ledger record the strict gate fails
+    # closed: on an unknown posture a verifying token could have been
+    # minted by a key-reading target.
     monkeypatch.setattr(triage, "get_run_posture", lambda directory: None)
-    assert triage._cli_main([str(run), "--require-evidence", "--json"]) == 0
+    assert triage._cli_main([str(run), "--require-evidence", "--json"]) == 1
+    captured = capsys.readouterr()
+    report = json.loads(captured.out)
+    assert report["inputs"]["mac_key_posture"] == "unknown"
+    assert "posture is unavailable" in captured.err
+    # Ordinary inspection stays lenient and stamps the unknown honestly.
+    assert triage._cli_main([str(run), "--json"]) == 0
     report = json.loads(capsys.readouterr().out)
     assert report["inputs"]["mac_key_posture"] == "unknown"
+    assert triage.verify_triage_report(report, run) == "verified"
+    # The run-end posture record restores fresh-process admission —
+    # disk claims still cannot promote; only the parent-owned ledger
+    # record can establish that the key stayed hidden. (The ledger
+    # writers' identity gate wants a claude-shaped session owner; the
+    # pytest process is python-shaped.)
+    monkeypatch.setattr(
+        sessions, "_comm",
+        lambda pid: "claude" if pid == os.getpid() else None)
+    sessions.record_session(sessions.NONE_SENTINEL, pid=os.getpid())
+    assert sessions.ledger_record_posture(
+        run, summary.get_run_posture(run), pid=os.getpid())
+    assert triage._cli_main([str(run), "--require-evidence", "--json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["inputs"]["mac_key_posture"]["source"] == "session-ledger"
+    assert report["inputs"]["mac_key_posture"]["mac_key_hidden"] is True
     assert triage.verify_triage_report(report, run) == "verified"
 
 
