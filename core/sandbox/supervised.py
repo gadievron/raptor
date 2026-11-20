@@ -1237,8 +1237,8 @@ class SupervisedHandle:
         # pidfd as the namespace-empty witness and flips this to False
         # until _confirm_ns_collapse_locked sees it.
         self._group_verified: bool = popen is None
-        # Group tier: the group view captured at the reap that recorded
-        # the leader's exit — the identity anchor the natural-exit
+        # Group tier: the group view captured while the exited leader
+        # was still unreaped — the identity anchor the natural-exit
         # corroboration needs before it may signal (see
         # _teardown_after_natural_exit_locked).
         self._group_exit_view: _GroupView | None = None
@@ -1247,17 +1247,41 @@ class SupervisedHandle:
 
     # -- state ------------------------------------------------------------
 
+    def _capture_group_anchor_locked(self) -> None:
+        """Capture the group identity anchor while the leader is
+        exited-but-unreaped — the only window in which self.pid is
+        kernel-guaranteed OURS (an unreaped child's pid cannot be
+        recycled), so members sighted NOW provably belonged to this
+        tree's group. ``waitid(WNOWAIT)`` observes the exit without
+        collecting it; the reap that follows (``_poll_locked``) then
+        records the returncode. A scan AFTER the reap could sight a
+        recycled pid's group and claim a false identity — never
+        capture post-reap. Occlusion or an unlistable /proc merely
+        shrinks or drops the anchor — the refuse direction later,
+        never a false identity claim."""
+        if (self._popen is None or self._group_verified
+                or self._group_exit_view is not None
+                or self.returncode is not None):
+            return
+        try:
+            res = os.waitid(os.P_PID, self.pid,
+                            os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        except (ChildProcessError, OSError):
+            return  # the reap path owns the diagnosis
+        if res is None:
+            return  # still running — nothing to anchor yet
+        self._group_exit_view = _group_sighted_members(self.pid)
+
     def _record_exit(self, returncode: int) -> None:
+        # Group tier: the identity anchor (_group_exit_view) was
+        # captured BEFORE this reap by _capture_group_anchor_locked —
+        # by now the leader is reaped and its pid may already be
+        # recycled, so no group scan may run here. An exit that lands
+        # in the microsecond between the anchor check and the reap
+        # leaves the anchor None: the natural-exit corroboration then
+        # refuses (SupervisedTeardownError), never claims a false
+        # identity.
         self.returncode = returncode
-        if self._popen is not None and not self._group_verified:
-            # Identity anchor for the natural-exit corroboration: this
-            # reap is the last instant self.pid is kernel-guaranteed
-            # OURS (an unreaped child's pid cannot be recycled), so
-            # members sighted NOW provably belonged to this tree's
-            # group. Occlusion or an unlistable /proc merely shrinks
-            # or drops the anchor — the refuse direction later, never
-            # a false identity claim.
-            self._group_exit_view = _group_sighted_members(self.pid)
         if self.ns_init_pidfd is not None:
             # pidns tier: A's OWN exit paths prove the namespace empty
             # (A reaps B, whose exit the kernel gates on
@@ -1285,6 +1309,7 @@ class SupervisedHandle:
         if self.returncode is not None:
             return self.returncode
         if self._popen is not None:
+            self._capture_group_anchor_locked()
             rc = self._popen.poll()
             if rc is not None:
                 self._record_exit(rc)
@@ -1335,9 +1360,28 @@ class SupervisedHandle:
         stale pidfd for longer than one slice."""
         slice_s = 0.5 if remaining is None else max(min(remaining, 0.5), 0.0)
         if self._popen is not None:
-            with contextlib.suppress(subprocess.TimeoutExpired):
-                self._popen.wait(timeout=slice_s)
-            return
+            # Non-reaping wait: Popen.wait() would collect the leader
+            # INSIDE Popen, before _poll_locked could capture the group
+            # identity anchor in the exited-but-unreaped window
+            # (_capture_group_anchor_locked). waitid(WNOWAIT) observes
+            # the exit without collecting it; the caller's next
+            # _poll_locked anchors, then reaps.
+            deadline = time.monotonic() + slice_s
+            while True:
+                if (self.returncode is not None
+                        or self._popen.returncode is not None):
+                    return
+                try:
+                    res = os.waitid(os.P_PID, self.pid,
+                                    os.WEXITED | os.WNOHANG | os.WNOWAIT)
+                except (ChildProcessError, OSError):
+                    return  # _poll_locked owns the diagnosis
+                if res is not None:
+                    return  # exited (unreaped) — let _poll_locked anchor
+                now = time.monotonic()
+                if now >= deadline:
+                    return
+                time.sleep(min(0.01, deadline - now))
         fd = self._pidfd
         if fd is None:
             time.sleep(min(slice_s, 0.05))
@@ -1576,9 +1620,9 @@ class SupervisedHandle:
         killpg-0 evidence alone — and sighting a live member with a
         matching pgrp proves only that the pgid is held NOW, not that
         it was held continuously since this tree owned it. Continuity
-        is anchored at the reap that recorded the leader's exit: an
+        is anchored in the leader's exited-but-unreaped window: an
         unreaped child's pid cannot be recycled, so the group view
-        captured at that reap (``_group_exit_view``) names members that
+        captured there (``_group_exit_view``) names members that
         provably belonged to this tree, identified by
         (pid, start_time). A signal is sent only when some CURRENTLY
         sighted live member matches the anchor — a member spanning the

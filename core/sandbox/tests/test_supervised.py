@@ -1189,6 +1189,67 @@ finally:
             f"signal sent at a possibly-recycled pgid with no identity "
             f"anchor: {sent}")
 
+    def test_group_anchor_captured_before_reap(self, monkeypatch):
+        # The identity anchor must be captured in the exited-but-
+        # unreaped window (waitid WNOWAIT): an unreaped child's pid
+        # cannot be recycled, so members sighted then provably belong
+        # to this tree. A capture AFTER the reap can sight a recycled
+        # pid's group and anchor a stranger's identity — the window
+        # the natural-exit killpg would then trust.
+        h = spawn_supervised(["/bin/true"], on_parent_death="kill",
+                             pid_ns="off", env=_ENV)
+        time.sleep(0.2)  # leader already exited: zombie, unreaped
+        real = sup._group_sighted_members
+        reap_states: list[object] = []
+
+        def spying(pgid):
+            if pgid == h.pid and not reap_states:
+                try:
+                    reap_states.append(os.waitid(
+                        os.P_PID, h.pid,
+                        os.WEXITED | os.WNOHANG | os.WNOWAIT))
+                except ChildProcessError:
+                    reap_states.append("already reaped")
+            return real(pgid)
+
+        monkeypatch.setattr(sup, "_group_sighted_members", spying)
+        assert h.wait(timeout=_WAIT_S) == 0
+        assert reap_states, "no group anchor was captured"
+        assert reap_states[0] != "already reaped", (
+            "anchor captured AFTER the leader's reap — the sighted "
+            "members cannot be tied to this tree's pid")
+        assert reap_states[0] is not None
+        assert h._group_exit_view is not None
+
+    def test_group_wait_blocking_path_anchors_pre_reap(self, monkeypatch):
+        # Same contract through the BLOCKING path: wait() parks in
+        # _block_for_exit while the leader is still running, so the
+        # exit must be OBSERVED there without being collected
+        # (Popen.wait would reap it before the anchor capture could
+        # run) — the capture-then-reap order belongs to _poll_locked.
+        h = spawn_supervised(["/bin/sleep", "0.3"],
+                             on_parent_death="kill", pid_ns="off",
+                             env=_ENV)
+        real = sup._group_sighted_members
+        reap_states: list[object] = []
+
+        def spying(pgid):
+            if pgid == h.pid and not reap_states:
+                try:
+                    reap_states.append(os.waitid(
+                        os.P_PID, h.pid,
+                        os.WEXITED | os.WNOHANG | os.WNOWAIT))
+                except ChildProcessError:
+                    reap_states.append("already reaped")
+            return real(pgid)
+
+        monkeypatch.setattr(sup, "_group_sighted_members", spying)
+        assert h.wait(timeout=_WAIT_S) == 0
+        assert reap_states and reap_states[0] != "already reaped", (
+            f"blocking wait reaped the leader before the anchor "
+            f"capture: {reap_states}")
+        assert h._group_exit_view is not None
+
     def test_wait_timeout(self):
         h = spawn_supervised(["/bin/sleep", "30"],
                              on_parent_death="kill", pid_ns="off",
