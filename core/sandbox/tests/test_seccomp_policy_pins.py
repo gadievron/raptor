@@ -362,10 +362,11 @@ def test_sock_raw_rule_filters_type_argument_with_kernel_mask(
 def test_ns_creation_rules_match_kernel_clone_flags(
         exit_sentinel: None) -> None:
     """block_ns_creation installs one MASKED_EQ rule per CLONE_NEW*
-    flag on unshare AND clone, plus a wholesale setns deny and a
-    clone3 ENOSYS. Flag values are pinned against the kernel's own
-    sched.h — a drifted flag filters a bitmask no caller ever passes
-    while the real namespace flag sails through."""
+    flag on unshare AND clone — plus the CLONE_UNTRACED tracer-blind
+    deny on clone — plus a wholesale setns deny and a clone3 ENOSYS.
+    Flag values are pinned against the kernel's own sched.h — a
+    drifted flag filters a bitmask no caller ever passes while the
+    real namespace flag sails through."""
     hdr = Path("/usr/include/linux/sched.h")
     if not hdr.exists():
         pytest.skip("kernel sched.h not installed")
@@ -373,18 +374,31 @@ def test_ns_creation_rules_match_kernel_clone_flags(
     expected_flags = {
         name: int(m, 16) for name, m in re.findall(
             r"#define\s+CLONE_(NEWUSER|NEWNS|NEWPID|NEWNET|NEWIPC|"
-            r"NEWUTS|NEWCGROUP|NEWTIME)\s+0x([0-9a-fA-F]+)", text)
+            r"NEWUTS|NEWCGROUP|NEWTIME|UNTRACED)\s+0x([0-9a-fA-F]+)",
+            text)
     }
-    assert len(expected_flags) == 8, expected_flags
+    assert len(expected_flags) == 9, expected_flags
+    assert sc._CLONE_UNTRACED == expected_flags["UNTRACED"]
     h = _harness("full", block_ns_creation=True)
     h.fn()
     nums = _cell(h.fn, "ns_syscall_nums")
+    ns_values = {v for k, v in expected_flags.items() if k != "UNTRACED"}
     for sysname in ("unshare", "clone"):
         num = nums[sysname]
         seen = {r.args[0][2] for r in h.lib.rules
                 if r.num == num and len(r.args) == 1
                 and r.args[0][1] == sc._SCMP_CMP_MASKED_EQ}
-        assert seen == set(expected_flags.values()), sysname
+        if sysname == "clone":
+            # CLONE_UNTRACED suppresses the ptrace clone event, so a
+            # child passing it hides its new task (and every
+            # descendant) from the audit tracer. Kernel-reserved flag
+            # — no userspace caller, so the deny rides the same
+            # install point as the namespace rules. unshare takes no
+            # thread-creation flags and clone3 is blanket-ENOSYS, so
+            # clone(2) is the only spelling needing the rule.
+            assert seen == ns_values | {sc._CLONE_UNTRACED}, sysname
+        else:
+            assert seen == ns_values, sysname
         # MASKED_EQ(flag, flag): the rule matches any flag COMBINATION
         # containing the namespace bit.
         for r in h.lib.rules:
@@ -516,6 +530,26 @@ def test_sysv_ipc_family_denied_for_restricted_reads(
     h = _harness("full")
     h.fn()
     assert _cell(h.fn, "sysv_ipc_syscalls") == []
+
+
+@requires_libseccomp
+def test_clone_untraced_stays_hard_denied_under_audit(
+        exit_sentinel: None) -> None:
+    """CLONE_UNTRACED exists to hide a clone from the attached ptrace
+    tracer — the audit lane's whole observability mechanism — so the
+    deny must keep the ERRNO action under audit mode: a TRACE action
+    would resume the syscall and blind the tracer to the new task and
+    all its descendants."""
+    h = _harness("full", block_ns_creation=True, audit_mode=True)
+    h.fn()
+    nums = _cell(h.fn, "ns_syscall_nums")
+    rules = [r for r in h.lib.rules
+             if r.num == nums["clone"] and len(r.args) == 1
+             and r.args[0][2] == sc._CLONE_UNTRACED]
+    assert rules, "no CLONE_UNTRACED rule under audit mode"
+    assert all(r.action == sc._SCMP_ACT_ERRNO(1) for r in rules)
+    assert all(r.args[0][1] == sc._SCMP_CMP_MASKED_EQ
+               and r.args[0][2] == r.args[0][3] for r in rules)
 
 
 @requires_libseccomp
@@ -1039,7 +1073,14 @@ def test_only_chromium_admits_required_nested_namespaces(exit_sentinel, profile)
     for syscall in ("clone", "unshare"):
         rules = [r for r in h.lib.rules if r.num == syscalls[syscall] and r.args]
         denied = {r.args[0][2] for r in rules}
-        assert denied == all_flags - permitted
+        # CLONE_UNTRACED (0x00800000) is denied on clone in EVERY
+        # profile — chromium included — alongside the namespace flags:
+        # it is a kernel-reserved flag whose only userspace effect is
+        # hiding the clone from an attached ptrace tracer.
+        expected = all_flags - permitted
+        if syscall == "clone":
+            expected |= {0x00800000}
+        assert denied == expected
     assert any(r.num == syscalls["setns"] and not r.args for r in h.lib.rules)
     assert any(r.num == syscalls["clone3"] and not r.args for r in h.lib.rules)
     if profile == "chromium":

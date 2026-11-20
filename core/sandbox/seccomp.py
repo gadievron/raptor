@@ -157,6 +157,16 @@ _CLONE_NS_FLAGS = {
     "NEWNET": 0x40000000, "NEWIPC": 0x08000000, "NEWUTS": 0x04000000,
     "NEWCGROUP": 0x02000000, "NEWTIME": 0x00000080,
 }
+# CLONE_UNTRACED (linux/sched.h): "the tracing process can't force
+# CLONE_PTRACE on this clone" — reserved for the kernel's own
+# in-kernel thread creation; no userspace target has a legitimate use.
+# A child that passes it to clone(2) suppresses the ptrace clone
+# event, so an attached audit tracer silently loses the new task and
+# every descendant it spawns — the audit JSONL keeps looking complete
+# while an entire subtree runs unobserved. Denied with EPERM on the
+# same install points as the CLONE_NEW* rules (clone3 is already
+# blanket-ENOSYS there, so its spelling cannot carry the flag either).
+_CLONE_UNTRACED = 0x00800000
 _SCMP_CMP_MASKED_EQ = 7  # masked equal: (arg & datum_a) == datum_b
 
 # MSG_FASTOPEN (include/linux/socket.h): sendto/sendmsg flag that makes
@@ -1297,6 +1307,35 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                                              b"failed -- refusing to exec "
                                              b"without filter\n")
                                 os._exit(126)
+                    # CLONE_UNTRACED — kernel-reserved flag that hides
+                    # the clone from an attached ptrace tracer (see
+                    # the _CLONE_UNTRACED constant). Same MASKED_EQ
+                    # construction as the CLONE_NEW* rules above (the
+                    # mask IS the flag bit, so any flag combination —
+                    # high-bit garnish included — matches); clone(2)
+                    # only — unshare takes no thread-creation flags
+                    # and clone3 is blanket-ENOSYS below. hard_deny:
+                    # blinding the audit tracer is an escape from
+                    # observability, never observable-then-harmless.
+                    # No profile carve-out — no userspace caller,
+                    # chromium's nested sandbox included, legitimately
+                    # passes a kernel-reserved flag.
+                    _cl = ns_syscall_nums.get("clone", -1)
+                    if _cl >= 0:
+                        arg = _ScmpArgCmp(arg=0,
+                                          op=_SCMP_CMP_MASKED_EQ,
+                                          datum_a=_CLONE_UNTRACED,
+                                          datum_b=_CLONE_UNTRACED)
+                        arg_arr = (_ScmpArgCmp * 1)(arg)
+                        ret = lib.seccomp_rule_add_array(
+                            ctx, hard_deny, _cl, 1, arg_arr,
+                        )
+                        if ret < 0:
+                            _os_write(2, b"sandbox: seccomp "
+                                         b"CLONE_UNTRACED rule failed"
+                                         b" -- refusing to exec "
+                                         b"without filter\n")
+                            os._exit(126)
                     _sn = ns_syscall_nums.get("setns", -1)
                     if _sn >= 0:
                         null_args = ctypes.POINTER(_ScmpArgCmp)()
