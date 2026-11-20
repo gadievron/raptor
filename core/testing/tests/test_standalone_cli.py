@@ -16,6 +16,7 @@ def test_child_owns_state_and_preserves_transport(tmp_path, monkeypatch, trusted
     monkeypatch.setenv("_RAPTOR_SCRATCH_AUTH", "stale")
     monkeypatch.setenv("RAPTOR_SESSION_PID", "999999")
     monkeypatch.setenv("RAPTOR_SESSION_TOKEN", "stale")
+    monkeypatch.setenv("RAPTOR_INSTALL_PROTECTED", "1")
     monkeypatch.setenv("RAPTOR_REGISTRY_HOME", str(tmp_path / "borrowed"))
     before = dict(os.environ)
     env = dict(before, OPENAI_BASE_URL="http://127.0.0.1:12345")
@@ -30,7 +31,10 @@ def test_child_owns_state_and_preserves_transport(tmp_path, monkeypatch, trusted
     child = json.loads(result.stdout)
     assert child["OPENAI_BASE_URL"] == env["OPENAI_BASE_URL"]
     assert child.get("_RAPTOR_TRUSTED") == ("1" if trusted else None)
-    for name in ("_RAPTOR_SCRATCH_AUTH", "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN"):
+    for name in (
+        "_RAPTOR_SCRATCH_AUTH", "RAPTOR_SESSION_PID",
+        "RAPTOR_SESSION_TOKEN", "RAPTOR_INSTALL_PROTECTED",
+    ):
         assert name not in child
     assert child["HOME"] != before["HOME"]
     assert child["TMPDIR"] != before["TMPDIR"]

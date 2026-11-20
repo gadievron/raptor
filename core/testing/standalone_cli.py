@@ -19,7 +19,15 @@ def standalone_cli_env(*, env=None, data_home=None):
         home.mkdir()
         scratch.mkdir()
         child_env = dict(os.environ if env is None else env)
-        for name in ("_RAPTOR_SCRATCH_AUTH", "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN"):
+        # Session launch state never propagates: a standalone CLI was not
+        # launched through the operator's session, so inheriting its scratch
+        # authorization, session identity, or install-protection claim is
+        # incoherent — RAPTOR_INSTALL_PROTECTED in particular makes
+        # process_init reject an ordinary (unprotected) test checkout.
+        for name in (
+            "_RAPTOR_SCRATCH_AUTH", "RAPTOR_SESSION_PID",
+            "RAPTOR_SESSION_TOKEN", "RAPTOR_INSTALL_PROTECTED",
+        ):
             child_env.pop(name, None)
         child_env.update(
             HOME=str(home), TMPDIR=str(scratch), TEMP=str(scratch), TMP=str(scratch),
