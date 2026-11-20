@@ -251,7 +251,8 @@ def _fail_or_warn_missing_analysis(out_dir: Path, rc: int,
         print(f"✗ Analysis subprocess failed (exit code {rc})",
               file=sys.stderr)
         if stderr:
-            print(f"    Error: {stderr[:500]}", file=sys.stderr)
+            print(f"    Error: {sanitise_for_terminal(stderr, max_len=500)}",
+                  file=sys.stderr)
         logger.error("Phase 3 failed - rc=%d, stderr=%s", rc, stderr[:200])
         _fail_run_and_exit(
             out_dir,
@@ -259,7 +260,8 @@ def _fail_or_warn_missing_analysis(out_dir: Path, rc: int,
         )
     print("⚠️  Analysis produced no output", file=sys.stderr)
     if stderr:
-        print(f"    Error: {stderr[:500]}", file=sys.stderr)
+        print(f"    Error: {sanitise_for_terminal(stderr, max_len=500)}",
+              file=sys.stderr)
     logger.warning("Phase 3 produced no report - rc=%d, stderr=%s",
                    rc, stderr[:200])
 

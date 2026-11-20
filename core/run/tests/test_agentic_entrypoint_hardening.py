@@ -407,6 +407,28 @@ class TestMissingAnalysisReport:
         assert not fail_run.called
         assert "produced no output" in capsys.readouterr().err
 
+    def test_relayed_stderr_is_escaped_on_failure(self, tmp_path, capsys):
+        # Child stderr is target-influenced (paths in tracebacks) —
+        # the operator-terminal relay must escape control bytes like
+        # every other child-output relay in the entry point.
+        agentic = _import_agentic()
+        hostile = "boom \x1b]0;owned\x07 path"
+        with patch("core.run.fail_run"), pytest.raises(SystemExit):
+            agentic._fail_or_warn_missing_analysis(tmp_path, 2, hostile)
+        err = capsys.readouterr().err
+        assert "\x1b" not in err and "\x07" not in err
+        assert "\\x1b" in err
+
+    def test_relayed_stderr_is_escaped_on_degrade(self, tmp_path, capsys):
+        agentic = _import_agentic()
+        hostile = "warn \x1b[2J tail"
+        with patch("core.run.fail_run") as fail_run:
+            agentic._fail_or_warn_missing_analysis(tmp_path, 0, hostile)
+        assert not fail_run.called
+        err = capsys.readouterr().err
+        assert "\x1b" not in err
+        assert "\\x1b" in err
+
 
 class TestReportWithNonzeroRc:
     """Phase 3 wrote its report but exited nonzero (post-report
