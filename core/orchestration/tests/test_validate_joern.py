@@ -417,3 +417,37 @@ class TestBoundedMaterialisation:
         # Full-product materialisation of this fixture peaks in the
         # hundred-MB range; bounded enumeration stays well under 32MB.
         assert peak < 32 * 1024 * 1024, f"peak {peak/1e6:.1f}MB"
+
+
+class TestSameFile:
+    """_same_file is a real identity check, never a suffix heuristic."""
+
+    def test_equal_strings_match(self):
+        from core.orchestration.validate_joern import _same_file
+        assert _same_file("src/a/util.c", "src/a/util.c")
+
+    def test_shared_tail_component_is_not_same(self):
+        # The old endswith("/" + b) arm equated these — attribution
+        # then landed on the wrong file.
+        from core.orchestration.validate_joern import _same_file
+        assert not _same_file("vendor/evil/util.c", "util.c")
+        assert not _same_file("util.c", "vendor/evil/util.c")
+
+    def test_symlink_resolves_to_same_identity(self, tmp_path):
+        from core.orchestration.validate_joern import _same_file
+        real = tmp_path / "real.c"
+        real.write_text("int x;")
+        link = tmp_path / "alias.c"
+        link.symlink_to(real)
+        assert _same_file(str(real), str(link))
+
+    def test_relative_spelling_variants_match(self, tmp_path, monkeypatch):
+        from core.orchestration.validate_joern import _same_file
+        (tmp_path / "a").mkdir()
+        (tmp_path / "a" / "b.c").write_text("int x;")
+        monkeypatch.chdir(tmp_path)
+        assert _same_file("./a/b.c", "a/b.c")
+
+    def test_resolution_error_fails_toward_not_same(self):
+        from core.orchestration.validate_joern import _same_file
+        assert not _same_file("a\x00b.c", "x/a\x00b.c")

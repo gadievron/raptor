@@ -28,6 +28,7 @@ prior taint annotations are cleared before re-annotating.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import time
 from typing import Any
@@ -62,7 +63,21 @@ def _first_call_name(text: Any) -> str | None:
 
 
 def _same_file(a: str, b: str) -> bool:
-    return a == b or a.endswith("/" + b) or b.endswith("/" + a)
+    """Real path identity — never a suffix heuristic.
+
+    The former ``endswith("/" + b)`` arm equated any two paths sharing
+    a trailing component ("vendor/evil/util.c" vs "util.c"), letting a
+    reported location steer enclosing-function / callee attribution
+    onto the wrong file. Equal strings match outright; otherwise both
+    sides must resolve to the same real path. Resolution errors fail
+    toward NOT-same (no attribution beats wrong attribution).
+    """
+    if a == b:
+        return True
+    try:
+        return os.path.realpath(a) == os.path.realpath(b)
+    except (OSError, ValueError):
+        return False
 
 
 def _function_spans(
