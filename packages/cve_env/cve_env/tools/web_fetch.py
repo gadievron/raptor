@@ -53,6 +53,26 @@ _USER_AGENT = "cve-env/0.1 (agentic CVE env builder)"
 # Hop budget for the caller-side redirect loop in :func:`web_fetch`.
 _MAX_REDIRECTS = 5
 
+# Credential-bearing request headers that must not follow a redirect to
+# a different host — the Location header is server-chosen, so carrying
+# these across hosts hands the caller's token to whatever host the
+# first server names.
+_CREDENTIAL_HEADERS = frozenset({"authorization", "proxy-authorization", "cookie"})
+
+
+def _crosses_hosts(from_url: str, to_url: str) -> bool:
+    """True when a redirect hop changes hosts.
+
+    Unparseable or hostless URLs count as crossing — when the
+    comparison cannot be made, fail toward dropping credentials.
+    """
+    try:
+        from_host = urlparse(from_url).hostname
+        to_host = urlparse(to_url).hostname
+    except ValueError:
+        return True
+    return from_host is None or to_host is None or from_host != to_host
+
 ReasonClass = Literal["ok", "rate_limited", "transport", "auth", "not_found"]
 """Coarse categorization of why a fetch failed (or 'ok' if it succeeded).
 
@@ -550,6 +570,10 @@ def web_fetch(
     reported as what it is — a redirect — rather than a permanent
     ``not_found`` (GitHub 301s the contents API for renamed repos;
     advisory hosts 301 http→https).
+
+    Credential-bearing headers (Authorization, Proxy-Authorization,
+    Cookie) are dropped once a hop crosses hosts — the redirect target
+    is server-chosen and must not receive the caller's token.
     """
     from urllib.parse import urljoin
 
@@ -575,7 +599,13 @@ def web_fetch(
                 reason_class="transport",
                 headers=r.headers,
             )
-        current_url = urljoin(current_url, location)
+        next_url = urljoin(current_url, location)
+        if headers and _crosses_hosts(current_url, next_url):
+            headers = {
+                k: v for k, v in headers.items()
+                if k.lower() not in _CREDENTIAL_HEADERS
+            }
+        current_url = next_url
     return FetchResult(
         ok=False,
         url=current_url,

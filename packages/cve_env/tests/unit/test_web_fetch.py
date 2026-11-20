@@ -435,6 +435,50 @@ def test_fetch_redirect_without_location_reports_redirect_not_not_found() -> Non
     assert r.reason_class != "not_found"
 
 
+def test_fetch_redirect_cross_host_strips_credentials() -> None:
+    """A redirect target is server-chosen: Authorization/Cookie must not
+    follow a hop to a different host, while innocuous headers do."""
+    fake = _FakeClient([
+        _resp(status=302,
+              headers={"location": "https://other.example.net/t"}, body=b""),
+        _resp(status=200, body=b"ok", url="https://other.example.net/t"),
+    ])
+    sent = {"Authorization": "Bearer tok", "Cookie": "sid=1",
+            "Proxy-Authorization": "Basic x", "Accept": "text/html"}
+    r = _fetch(fake, headers=sent)
+    assert r.ok is True
+    first = fake.calls[0]["headers"]
+    second = fake.calls[1]["headers"]
+    assert first["Authorization"] == "Bearer tok"
+    assert second == {"Accept": "text/html"}
+
+
+def test_fetch_same_host_redirect_preserves_credentials() -> None:
+    fake = _FakeClient([
+        _resp(status=302, headers={"location": "/moved"}, body=b""),
+        _resp(status=200, body=b"ok", url="https://example.com/moved"),
+    ])
+    sent = {"Authorization": "Bearer tok", "Cookie": "sid=1"}
+    r = _fetch(fake, headers=sent)
+    assert r.ok is True
+    assert fake.calls[1]["headers"] == sent
+
+
+def test_fetch_credentials_stay_dropped_after_return_hop() -> None:
+    """Once a hop crosses hosts the credentials are gone for ALL later
+    hops — a bounce back to the original host does not restore them."""
+    fake = _FakeClient([
+        _resp(status=302,
+              headers={"location": "https://other.example.net/t"}, body=b""),
+        _resp(status=302, headers={"location": "https://example.com/back"},
+              body=b"", url="https://other.example.net/t"),
+        _resp(status=200, body=b"ok", url="https://example.com/back"),
+    ])
+    r = _fetch(fake, headers={"Authorization": "Bearer tok"})
+    assert r.ok is True
+    assert fake.calls[2]["headers"] is None
+
+
 def test_fetch_redirect_loop_bounded() -> None:
     hops = [
         _resp(status=302, headers={"location": f"https://example.com/{i}"},
