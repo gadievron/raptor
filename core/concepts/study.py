@@ -16,7 +16,7 @@ import logging
 import os
 import re
 from dataclasses import asdict, replace
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any, TypedDict
 
@@ -1226,6 +1226,17 @@ from a related count after a transform (e.g. nents vs orig_nents).
 def _format_item(item: StudyItem, *, role: str = "focus") -> str:
     """Format a study item as a readable text block for the LLM prompt."""
     from core.security.prompt_envelope import neutralize_tag_forgery
+
+    def _nj(values: Sequence[str], cap: int | None = None) -> str:
+        """Join repo-derived signal names, neutralised for the prompt.
+
+        Signal lists (field names, lock sites, guard snippets, …) are
+        lifted verbatim from target source — the same tag/heading
+        forgery surface as the doc comment and definition fields.
+        """
+        kept = list(values) if cap is None else list(values[:cap])
+        return neutralize_tag_forgery(", ".join(kept))
+
     tag = "[FOCUS]" if role == "focus" else "[CONTEXT]"
     # The NAME is target-derived too: source extraction restricts it
     # to identifier charset, but binary-derived items carry raw
@@ -1233,7 +1244,9 @@ def _format_item(item: StudyItem, *, role: str = "focus") -> str:
     # heading or an envelope tag in the trusted prompt region.
     parts = [f"## {tag} {item.kind}: "
              f"{neutralize_tag_forgery(item.name)}"]
-    parts.append(f"File: {item.file}:{item.line or '?'}")
+    # The file path is an attacker-chosen repo file name.
+    parts.append(
+        f"File: {neutralize_tag_forgery(str(item.file))}:{item.line or '?'}")
 
     # Doc comments and definitions are target-repo text — neutralise
     # envelope/role forgery before interpolation.
@@ -1253,52 +1266,49 @@ def _format_item(item: StudyItem, *, role: str = "focus") -> str:
         parts.append(f"Definition:\n```c\n{defn}\n```")
 
     if item.fields:
-        parts.append(f"Fields: {', '.join(item.fields[:30])}")
+        parts.append(f"Fields: {_nj(item.fields, 30)}")
     if item.refcount_fields:
-        parts.append(f"Refcount fields: {', '.join(item.refcount_fields)}")
+        parts.append(f"Refcount fields: {_nj(item.refcount_fields)}")
     if item.owned_types:
         parts.append(
-            f"Owned types (pointer fields): {', '.join(item.owned_types)}",
+            f"Owned types (pointer fields): {_nj(item.owned_types)}",
         )
     if item.flexible_arrays:
-        parts.append(f"Flexible arrays: {', '.join(item.flexible_arrays)}")
+        parts.append(f"Flexible arrays: {_nj(item.flexible_arrays)}")
     if item.paired_with:
-        parts.append(f"Paired with: {', '.join(item.paired_with)}")
+        parts.append(f"Paired with: {_nj(item.paired_with)}")
     if item.calls:
-        parts.append("Calls: "
-                     + neutralize_tag_forgery(", ".join(item.calls[:20])))
+        parts.append("Calls: " + _nj(item.calls, 20))
     if item.callers:
-        parts.append("Called by: "
-                     + neutralize_tag_forgery(
-                         ", ".join(item.callers[:20])))
+        parts.append("Called by: " + _nj(item.callers, 20))
     if item.lock_sites:
-        parts.append(f"Lock sites: {', '.join(item.lock_sites)}")
+        parts.append(f"Lock sites: {_nj(item.lock_sites)}")
     if item.rcu_usage:
-        parts.append(f"RCU usage: {', '.join(item.rcu_usage)}")
+        parts.append(f"RCU usage: {_nj(item.rcu_usage)}")
     if item.ordering_annotations:
-        parts.append(f"Memory ordering: {', '.join(item.ordering_annotations)}")
+        parts.append(f"Memory ordering: {_nj(item.ordering_annotations)}")
     if item.bounds_guards:
-        parts.append(f"Bounds guards: {', '.join(item.bounds_guards)}")
+        parts.append(f"Bounds guards: {_nj(item.bounds_guards)}")
     if item.error_gotos:
-        parts.append(f"Error gotos: {', '.join(item.error_gotos)}")
+        parts.append(f"Error gotos: {_nj(item.error_gotos)}")
     if item.clamping_patterns:
-        parts.append(f"Clamping: {', '.join(item.clamping_patterns)}")
+        parts.append(f"Clamping: {_nj(item.clamping_patterns)}")
     if item.flag_checks:
-        parts.append(f"Flag checks: {', '.join(item.flag_checks)}")
+        parts.append(f"Flag checks: {_nj(item.flag_checks)}")
     if item.alloc_frees:
-        parts.append(f"Alloc/free APIs: {', '.join(item.alloc_frees)}")
+        parts.append(f"Alloc/free APIs: {_nj(item.alloc_frees)}")
     if item.state_transitions:
-        parts.append(f"State transitions: {', '.join(item.state_transitions)}")
+        parts.append(f"State transitions: {_nj(item.state_transitions)}")
     if item.gate_checks:
-        parts.append(f"Gate checks: {', '.join(item.gate_checks)}")
+        parts.append(f"Gate checks: {_nj(item.gate_checks)}")
     if item.dispatch_tables:
-        parts.append(f"Dispatch tables: {', '.join(item.dispatch_tables)}")
+        parts.append(f"Dispatch tables: {_nj(item.dispatch_tables)}")
     if item.null_guards:
-        parts.append(f"NULL guards: {', '.join(item.null_guards)}")
+        parts.append(f"NULL guards: {_nj(item.null_guards)}")
     if item.validation_bounds:
-        parts.append(f"Validation bounds: {', '.join(item.validation_bounds)}")
+        parts.append(f"Validation bounds: {_nj(item.validation_bounds)}")
     if item.related_items:
-        parts.append(f"Related: {', '.join(item.related_items)}")
+        parts.append(f"Related: {_nj(item.related_items)}")
 
     return "\n".join(parts)
 
@@ -5205,9 +5215,16 @@ def _build_cross_subsystem_prompt(
     items_by_name: dict[str, StudyItem],
 ) -> str:
     """Build a directed prompt for one cross-subsystem interaction pair."""
-    type_name = pair["type_name"]
-    sub_a = pair["subsystem_a"]
-    sub_b = pair["subsystem_b"]
+    from core.security.prompt_envelope import neutralize_tag_forgery
+
+    # Type and subsystem names are repo-derived (type identifiers,
+    # path components) — neutralise tag/heading forgery before they
+    # enter the trusted prompt region. Lookups below keep the RAW
+    # name; only the interpolated copies are neutralised.
+    raw_type_name = pair["type_name"]
+    type_name = neutralize_tag_forgery(str(raw_type_name))
+    sub_a = neutralize_tag_forgery(str(pair["subsystem_a"]))
+    sub_b = neutralize_tag_forgery(str(pair["subsystem_b"]))
     fns_a = pair.get("functions_a", [])
     fns_b = pair.get("functions_b", [])
 
@@ -5229,7 +5246,7 @@ def _build_cross_subsystem_prompt(
 
     parts = [header]
 
-    type_item = items_by_name.get(type_name)
+    type_item = items_by_name.get(raw_type_name)
     if type_item:
         parts.append(f"# Shared type: struct {type_name}\n")
         parts.append(_format_item(type_item, role="focus"))
