@@ -290,7 +290,12 @@ Threat model — what the sandbox DOES protect against:
   tty acquisition) as defence-in-depth.
 - `kill()` of host processes — PID namespace hides host PIDs; attacker
   inside sandbox sees ns-local PIDs only.
-- SysV IPC cross-process access — IPC namespace isolates shm/sem/msg.
+- SysV IPC cross-process access — IPC namespace isolates shm/sem/msg
+  on the namespace lanes; on Landlock-only lanes (no IPC namespace)
+  the restricted-reads seccomp filter denies the whole SysV family
+  instead (shm*/msg*/sem* plus the legacy `ipc` multiplexer — these
+  objects carry no path for Landlock to evaluate, so the syscall
+  deny is the only chokepoint there).
 - Nested `unshare(CLONE_NEWUSER|CLONE_NEWNS)` — denied at the
   seccomp layer on every execution lane (unshare / clone with any
   CLONE_NEW* flag / setns; clone3 → ENOSYS): the fork backend's

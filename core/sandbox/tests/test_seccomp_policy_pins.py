@@ -474,6 +474,51 @@ def test_fileless_exec_deny_and_the_frida_memfd_carveout(
 
 
 @requires_libseccomp
+def test_sysv_ipc_family_denied_for_restricted_reads(
+        exit_sentinel: None) -> None:
+    """deny_fd_exec (the restricted-reads posture key) also installs a
+    wholesale EPERM deny of the SysV IPC family: the Landlock-only
+    untrusted lanes share the HOST IPC namespace, where same-UID
+    shm/sem/msg objects carry no path for Landlock to evaluate — a
+    sandboxed child could read AND write another process's shared
+    memory. The deny must stay EPERM under audit mode
+    (escape-primitive class, never allow-and-log) and must NOT
+    install for trusted read-everywhere filters."""
+    eperm = sc._SCMP_ACT_ERRNO(1)
+    h = _harness("full", deny_fd_exec=True)
+    h.fn()
+    resolved = dict(_cell(h.fn, "sysv_ipc_syscalls"))
+    assert set(resolved) == set(sc._SECCOMP_BLOCK_SYSV_IPC)
+    covered = [name for name, num in resolved.items() if num >= 0]
+    # Every supported arch keeps at least the direct spellings or the
+    # legacy `ipc` multiplexer; a totally unresolvable family would
+    # mean the deny silently vanished.
+    assert covered, "no SysV IPC syscall resolves on this arch"
+    for name in covered:
+        rules = [r for r in h.lib.rules
+                 if r.num == resolved[name] and not r.args]
+        assert rules, f"no wholesale deny rule for {name}"
+        assert all(r.action == eperm for r in rules), name
+
+    # Audit mode: hard-denied — TRACE would resume (grant) the
+    # cross-process shared-memory access for the audited run.
+    h = _harness("full", deny_fd_exec=True, audit_mode=True)
+    h.fn()
+    resolved = dict(_cell(h.fn, "sysv_ipc_syscalls"))
+    for name, num in resolved.items():
+        if num < 0:
+            continue
+        assert any(r.num == num and not r.args and r.action == eperm
+                   for r in h.lib.rules), name
+
+    # Trusted read-everywhere posture: byte-identical filter, no SysV
+    # rules resolved or installed.
+    h = _harness("full")
+    h.fn()
+    assert _cell(h.fn, "sysv_ipc_syscalls") == []
+
+
+@requires_libseccomp
 def test_unix_dgram_socketpair_deny_follows_the_family_posture(
         exit_sentinel: None) -> None:
     """socketpair(AF_UNIX, SOCK_DGRAM) is denied exactly when

@@ -172,9 +172,12 @@ def waived_untrusted_floor() -> ContainmentTier:
     Frozen meaning: "untrusted floor := LANDLOCK_ONLY" on Linux — the
     waiver accepts namespace loss and host-procfs visibility but never
     reaches BARE (Landlock/seccomp/rlimits enforceability gates stay).
-    On macOS the waiver's existing semantics accept rlimits-only
-    containment (there is no Landlock tier to hold), so it maps to
-    BARE there.
+    The lost IPC namespace does not re-expose same-UID host SysV
+    shm/sem/msg objects: the restricted-reads seccomp filter denies
+    the whole SysV IPC family (seccomp.py _SECCOMP_BLOCK_SYSV_IPC) on
+    this lane. On macOS the waiver's existing semantics accept
+    rlimits-only containment (there is no Landlock tier to hold), so
+    it maps to BARE there.
     """
     if sys.platform == "darwin":
         return ContainmentTier.BARE

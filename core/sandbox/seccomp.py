@@ -276,6 +276,31 @@ _SECCOMP_BLOCK_UNLESS_DEBUG = (
     "process_vm_writev",
 )
 
+# SysV IPC family — denied for restricted-reads (untrusted / strict)
+# children, keyed on the same posture flag as deny_fd_exec (every
+# builder call site threads that flag from the restrict_reads
+# contract). On the namespace lanes the IPC namespace already
+# isolates shm/sem/msg objects; the Landlock-only lanes (the
+# degraded-waiver untrusted floor) share the HOST IPC namespace,
+# where same-UID SysV objects carry no path for Landlock to evaluate
+# — a sandboxed child can shmget/shmat another host process's
+# shared-memory segments (read AND write) and reach its message
+# queues/semaphores. Nothing in the sandboxed tool population uses
+# SysV IPC (POSIX shm is open()-based and Landlock-governed), so the
+# deny installs unconditionally for the posture: an IPC-namespaced
+# child loses nothing it should have. The legacy `ipc` multiplexer
+# rides along — on arches that kept it (s390x) it wraps the whole
+# family in one syscall whose real arguments live in user memory;
+# each spelling resolves negative where the arch lacks it and the
+# install loop skips those, so the family is covered on every
+# supported arch without a missing-name warning.
+_SECCOMP_BLOCK_SYSV_IPC = (
+    "shmget", "shmat", "shmdt", "shmctl",
+    "msgget", "msgsnd", "msgrcv", "msgctl",
+    "semget", "semop", "semtimedop", "semctl",
+    "ipc",  # legacy multiplexer: one syscall wraps the whole family
+)
+
 # Escape-primitive subset that stays HARD-DENIED (SCMP_ACT_ERRNO)
 # even under audit mode. Audit mode exists to OBSERVE what a workload
 # does so operators can build policy — but converting these
@@ -795,6 +820,15 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
     exec scoping (O_TMPFILE, unlinked files, non-allowlisted trees)
     is Landlock's job — see landlock.py's EXECUTE handling.
 
+    ``deny_fd_exec=True`` ALSO keys the SysV IPC family deny
+    (_SECCOMP_BLOCK_SYSV_IPC): shm*/msg*/sem* plus the legacy ``ipc``
+    multiplexer get EPERM for the same restricted-reads (untrusted /
+    strict) population whose Landlock-only spawns share the host IPC
+    namespace. hard_deny under audit mode too — cross-process
+    shared-memory access against same-UID host processes is an escape
+    primitive, not an observable. Trusted read-everywhere lanes keep
+    a byte-identical filter, exactly like the fileless-exec arms.
+
     FRIDA-PROFILE CARVE-OUT (threat model, stated): under
     ``profile == "frida"`` the memfd_create arm is NOT installed; the
     execveat AT_EMPTY_PATH arm still is. frida-core cannot function
@@ -1020,6 +1054,15 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
     deny_memfd_create = deny_fd_exec and profile not in ("frida", "chromium")
     memfd_create_num = _resolve("memfd_create") if deny_memfd_create else -1
     execveat_num = _resolve("execveat") if deny_fd_exec else -1
+    # SysV IPC deny rides the same restricted-reads posture key as the
+    # fileless-exec deny (see _SECCOMP_BLOCK_SYSV_IPC): deny_fd_exec
+    # is threaded from the untrusted/strict restrict_reads contract at
+    # every call site, and that contract is exactly the population
+    # whose Landlock-only spawns share the host IPC namespace.
+    sysv_ipc_syscalls: list[tuple[str, int]] = (
+        [(name, _resolve(name)) for name in _SECCOMP_BLOCK_SYSV_IPC]
+        if deny_fd_exec else []
+    )
 
     # socketpair(AF_UNIX, SOCK_DGRAM) is denied exactly when the
     # matching socket(AF_UNIX, SOCK_DGRAM) is denied: either AF_UNIX
@@ -1319,6 +1362,30 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                         _os_write(2, b"sandbox: seccomp execveat "
                                      b"AT_EMPTY_PATH rule failed -- "
                                      b"refusing to exec without filter\n")
+                        os._exit(126)
+
+                # SysV IPC family — restricted-reads postures only
+                # (same deny_fd_exec posture key; see
+                # _SECCOMP_BLOCK_SYSV_IPC). hard_deny: cross-process
+                # shared-memory / message-queue / semaphore access
+                # against the host IPC namespace is an escape
+                # primitive, never observable-then-harmless under
+                # audit mode. Negative resolutions are skipped, not
+                # warned: every arch keeps exactly one of the two
+                # spellings (direct syscalls vs the legacy `ipc`
+                # multiplexer), and the resolvable one carries the
+                # deny.
+                for _si_name, _si_num in sysv_ipc_syscalls:
+                    if _si_num < 0:
+                        continue
+                    null_args = ctypes.POINTER(_ScmpArgCmp)()
+                    ret = lib.seccomp_rule_add_array(
+                        ctx, hard_deny, _si_num, 0, null_args,
+                    )
+                    if ret < 0:
+                        _os_write(2, b"sandbox: seccomp SysV IPC rule"
+                                     b" failed -- refusing to exec"
+                                     b" without filter\n")
                         os._exit(126)
 
                 # socketcall(2) — deny the legacy multiplexer with
