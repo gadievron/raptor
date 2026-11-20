@@ -548,6 +548,56 @@ def test_wanted_symlink_to_unwanted_target_is_loud():
         extract_files_from_layer(_stream(blob), {"etc/os-release"})
 
 
+def test_wanted_self_symlink_is_loud():
+    """A wanted path shipped as a symlink that resolves to ITSELF
+    names a wanted target, but no content ever materialises — the
+    carve-out must not turn that into a silent empty inventory."""
+    info = tarfile.TarInfo(name="var/lib/dpkg/status")
+    info.type = tarfile.SYMTYPE
+    info.linkname = "status"
+    blob = _make_gzipped_tar_with_member(info)
+    with pytest.raises(WantedEntryRefused, match="never materialised"):
+        extract_files_from_layer(_stream(blob), {"var/lib/dpkg/status"})
+
+
+def test_wanted_symlink_to_absent_wanted_target_is_loud():
+    """Both spellings are wanted, but the layer ships only the link —
+    the target regular file never appears, so nothing reaches the
+    caller and the skip must refuse loudly."""
+    info = tarfile.TarInfo(name="etc/os-release")
+    info.type = tarfile.SYMTYPE
+    info.linkname = "../usr/lib/os-release"
+    blob = _make_gzipped_tar_with_member(info)
+    with pytest.raises(WantedEntryRefused, match="never materialised"):
+        extract_files_from_layer(
+            _stream(blob), {"etc/os-release", "usr/lib/os-release"})
+
+
+def test_wanted_symlink_chain_to_materialised_content_is_quiet():
+    """A short carved chain (link to a link to a regular file, all
+    wanted) still delivers the content under its canonical name, so
+    the layer must not fail."""
+    first = tarfile.TarInfo(name="etc/os-release")
+    first.type = tarfile.SYMTYPE
+    first.linkname = "../usr/lib/os-release"
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w") as tf:
+        tf.addfile(first)
+        second = tarfile.TarInfo(name="usr/lib/os-release")
+        second.type = tarfile.SYMTYPE
+        second.linkname = "os-release.d/base"
+        tf.addfile(second)
+        content = tarfile.TarInfo(name="usr/lib/os-release.d/base")
+        content.size = len(b"ID=debian\n")
+        tf.addfile(content, io.BytesIO(b"ID=debian\n"))
+    blob = gzip.compress(raw.getvalue())
+    out = extract_files_from_layer(
+        _stream(blob),
+        {"etc/os-release", "usr/lib/os-release",
+         "usr/lib/os-release.d/base"})
+    assert out == {"usr/lib/os-release.d/base": b"ID=debian\n"}
+
+
 def test_unwanted_nonregular_member_still_quiet():
     """Non-regular members we never asked about keep the quiet skip."""
     info = tarfile.TarInfo(name="etc/alternatives/editor")

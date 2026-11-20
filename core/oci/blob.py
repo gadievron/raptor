@@ -365,6 +365,7 @@ def extract_files_from_layer(
     selected_bytes = 0
     hardlinks: dict[str, str] = {}
     symlinks: dict[str, str] = {}
+    carved_symlinks: dict[str, str] = {}
     regular_names: set[str] = set()
 
     def _wanted(name: str) -> bool:
@@ -430,10 +431,17 @@ def extract_files_from_layer(
             # the caller under its canonical wanted name, so skipping
             # the link is not a falsely-clean result. Anything else —
             # a wanted path symlinked at content the scan never sees —
-            # must refuse loudly below.
+            # must refuse loudly below. A wanted target name alone is
+            # NOT enough: a self-symlink or a link at a wanted target
+            # the layer never ships would silently yield the
+            # falsely-clean inventory again, so the carve-out is
+            # recorded and verified after extraction — the target (or
+            # the end of a short carved chain) must actually have
+            # materialised as selected regular content.
             target = _normalise_tar_path(
                 posixpath.join(posixpath.dirname(name), member.linkname))
             if not _escapes_layer_root(target) and target in normalised_wanted:
+                carved_symlinks[name] = target
                 return
         if not member.islnk() or not resolve_selected_hardlinks:
             raise WantedEntryRefused("selected layer entry is not a regular file")
@@ -530,6 +538,28 @@ def extract_files_from_layer(
         if missing:
             raise UnresolvedLayerHardlinks(missing)
         raise WantedEntryRefused("cyclic or missing selected hard-link target")
+
+    def _carved_target_materialised(link_name: str) -> bool:
+        # Follow the carved wanted-to-wanted links (bounded, so a
+        # self-link or link cycle terminates as a refusal) until the
+        # chain reaches selected regular content.
+        target = carved_symlinks[link_name]
+        for _ in range(32):
+            if target in found:
+                return True
+            if target not in carved_symlinks:
+                return False
+            target = carved_symlinks[target]
+        return False
+
+    dangling = sorted(
+        link_name for link_name in carved_symlinks
+        if link_name not in found
+        and not _carved_target_materialised(link_name))
+    if dangling:
+        raise WantedEntryRefused(
+            "wanted symlink target never materialised as selected "
+            f"content: {dangling!r}")
     if selected_symlinks is not None:
         selected_symlinks.update(symlinks)
     return found
