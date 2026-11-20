@@ -323,8 +323,8 @@ def test_git_diff_argv_carries_safety_pins(monkeypatch, tmp_path: Path):
         return R()
 
     patch_module_attribute(monkeypatch, cvefix_bridge, "subprocess", "run", fake_run)
-    cvefix_bridge._git_diff(tmp_path, "p", "f", "src/a.py")
-    cvefix_bridge._git_touched_files(tmp_path, "p", "f")
+    cvefix_bridge._git_diff(tmp_path, "a" * 40, "b" * 40, "src/a.py")
+    cvefix_bridge._git_touched_files(tmp_path, "a" * 40, "b" * 40)
 
     assert len(calls) == 2
     for argv in calls:
@@ -337,6 +337,29 @@ def test_git_diff_argv_carries_safety_pins(monkeypatch, tmp_path: Path):
         # diff.external= fails loudly on diffs that forgot to disable
         # external drivers — every diff here must opt out explicitly.
         assert "--no-ext-diff" in argv
+
+
+@pytest.mark.parametrize("parent,fix", [
+    ("--upload-pack=/tmp/pwn", "a" * 40),
+    ("a" * 40, "--upload-pack=/tmp/pwn"),
+    ("", "a" * 40),
+    ("a" * 40, "deadbeef;rm"),
+    ("A" * 40, "b" * 40),       # uppercase fails the lowercase-hex gate
+    ("abc123", "b" * 40),       # below the 7-char abbreviation floor
+])
+def test_git_helpers_refuse_non_hex_hashes(
+    monkeypatch, tmp_path: Path, parent: str, fix: str,
+):
+    """DB-sourced hashes that fail the hex gate never reach a git argv —
+    both helpers refuse before any subprocess is spawned (an
+    option-shaped "hash" like ``--upload-pack=<cmd>`` would otherwise
+    parse as a git option)."""
+    def no_spawn(*a, **k):
+        raise AssertionError("subprocess must not be invoked")
+
+    patch_module_attribute(monkeypatch, cvefix_bridge, "subprocess", "run", no_spawn)
+    assert cvefix_bridge._git_diff(tmp_path, parent, fix, "f.py") == ""
+    assert cvefix_bridge._git_touched_files(tmp_path, parent, fix) == []
 
 
 def test_git_diff_still_works_under_pins(tmp_path: Path):
@@ -381,7 +404,7 @@ def test_git_touched_files_returns_empty_on_subprocess_fail(monkeypatch, tmp_pat
     def fake_run(*a, **k):
         raise OSError("simulated git failure")
     patch_module_attribute(monkeypatch, cvefix_bridge, "subprocess", "run", fake_run)
-    assert cvefix_bridge._git_touched_files(tmp_path, "p", "f") == []
+    assert cvefix_bridge._git_touched_files(tmp_path, "a" * 40, "b" * 40) == []
 
 
 def test_format_path_renders_codeflow_source_to_sink():

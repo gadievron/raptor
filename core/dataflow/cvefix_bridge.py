@@ -216,6 +216,13 @@ def _git_diff(repo: Path, parent: str, fix: str, uri: str,
               *, cap: int = _DIFF_CAP, timeout: int = 60) -> str:
     """`git diff parent..fix -- <uri>` (the change that added the sanitizer),
     capped; empty string on any failure."""
+    # Same hex gate as cvefix_walk._fetch_pair — DB-sourced hashes never
+    # reach a git argv unvalidated: a poisoned row whose "hash" starts
+    # with '-' (e.g. ``--upload-pack=<cmd>``) would otherwise parse as a
+    # git option.
+    if not (cvefix_walk._COMMIT_HASH_RE.fullmatch(parent)
+            and cvefix_walk._COMMIT_HASH_RE.fullmatch(fix)):
+        return ""
     try:
         r = subprocess.run(
             safe_git_readonly_command(
@@ -241,6 +248,10 @@ def _git_touched_files(repo: Path, parent: str, fix: str,
                        *, timeout: int = 30) -> list:
     """`git diff --name-only parent..fix` — every path the fix changed.
     Returns ``[]`` on failure (caller falls back to sink-file-only context)."""
+    # Same hex gate as _git_diff — refuse option-shaped "hashes".
+    if not (cvefix_walk._COMMIT_HASH_RE.fullmatch(parent)
+            and cvefix_walk._COMMIT_HASH_RE.fullmatch(fix)):
+        return []
     try:
         r = subprocess.run(
             safe_git_readonly_command(

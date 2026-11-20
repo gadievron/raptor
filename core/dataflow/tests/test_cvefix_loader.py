@@ -77,3 +77,11 @@ def test_single_parent_helper():
     assert _single_parent("[]") is None            # root
     assert _single_parent("garbage") is None
     assert _single_parent(None) is None
+
+
+def test_single_parent_parse_bombs_are_unparseable():
+    # Poisoned metadata rows that blow literal_eval's parse stack
+    # (RecursionError / MemoryError / SyntaxError depending on the
+    # interpreter version) must come back as no-parent, never raise.
+    assert _single_parent("[" * 100000 + "]" * 100000) is None
+    assert _single_parent("-" * 50000 + "1") is None

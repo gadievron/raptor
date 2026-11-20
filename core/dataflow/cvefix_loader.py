@@ -67,7 +67,12 @@ def _single_parent(parents_repr: str | None) -> str | None:
         return None
     try:
         parents = ast.literal_eval(parents_repr)
-    except (ValueError, SyntaxError):
+    except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+        # The full exception set the ast.literal_eval docs name: a
+        # deeply nested payload from a poisoned metadata row blows the
+        # parse stack (RecursionError, or MemoryError/SyntaxError
+        # depending on interpreter version) — treat it as unparseable,
+        # never fatal.
         return None
     if isinstance(parents, (list, tuple)) and len(parents) == 1:
         parent = parents[0]
