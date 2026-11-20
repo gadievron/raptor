@@ -1810,9 +1810,20 @@ def setup_mount_ns(target: str | None, output: str | None,
                 # writable like the output bind; Landlock's write
                 # rule (view-anchored to this path) scopes it.
                 return
+            _step = b"remount-ro"
             try:
                 _mount(path, inside, None, _ro_remount_flags(inside))
             except OSError as exc:
+                # "Relying on Landlock" is only an honest degrade when
+                # Landlock's write mask actually engages for THIS spawn
+                # (`rw_submounts_ok`, the same parent-computed predicate
+                # the recursive-bind rescue above keys on). Without it
+                # the bind would simply stay WRITABLE with nothing
+                # masking it — a degraded sandbox masquerading as the
+                # requested one — so fail closed via the outer handler
+                # (ExtraRoBindError → category 'C') instead.
+                if not rw_submounts_ok:
+                    raise
                 # bytes(path) keeps the message fork-safe (no f-string
                 # allocation pulling locks); fallback to a placeholder
                 # if encoding ever fails. errno also encoded as integer.

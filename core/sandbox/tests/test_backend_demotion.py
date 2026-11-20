@@ -366,6 +366,78 @@ class TestTargetRemountRoFailClosed(_Base):
         self.assertNotIn("ALIVE", r.stdout)
 
 
+@requires_userns
+class TestExtraRoRemountFailClosed(_Base):
+    """extra_ro_paths remount-ro failure: "relying on Landlock" is only
+    an honest degrade when Landlock's write mask actually engages for
+    the spawn (`rw_submounts_ok`); otherwise the caller-named read-only
+    path would silently stay WRITABLE and the spawn must abort."""
+
+    def _failing_remount(self, ro_path):
+        from core.sandbox import mount_ns as mns
+        orig = mns._ro_remount_flags
+
+        def _failing(inside, _orig=orig, _ro=ro_path):
+            if inside.endswith(_ro):
+                raise OSError(errno.EPERM, "simulated remount denial")
+            return _orig(inside)
+
+        return patch.object(mns, "_ro_remount_flags", _failing)
+
+    def _ro_dir(self):
+        ro = tempfile.mkdtemp(prefix="raptor-ro-x-", dir="/tmp")
+        self.addCleanup(shutil.rmtree, ro, True)
+        return ro
+
+    def test_remount_failure_without_landlock_backstop_aborts(self):
+        """No writable paths and no TCP allowlist → no Landlock write
+        mask engages → the backstop is vacuous → fail closed."""
+        from core.sandbox._spawn import run_sandboxed
+        ro = self._ro_dir()
+        with self._failing_remount(ro):
+            r = run_sandboxed(
+                ["/usr/bin/python3", "-c", "print('ALIVE')"],
+                target=self.tgt, output=None,
+                readable_paths=[ro],
+                writable_paths=[], allowed_tcp_ports=None,
+                block_network=True, nproc_limit=1024,
+                limits={"memory_mb": 0, "max_file_mb": 10240,
+                        "cpu_seconds": 300},
+                seccomp_profile="full", seccomp_block_udp=False,
+                env=None, cwd=None, timeout=30,
+                capture_output=True, text=True,
+            )
+        self.assertNotEqual(r.returncode, 0, (
+            f"spawn must fail closed when a caller-named readable path "
+            f"lost its only read-only enforcement: stdout={r.stdout!r}"
+        ))
+        self.assertNotIn("ALIVE", r.stdout)
+
+    @requires_landlock
+    def test_remount_failure_with_landlock_backstop_warns_and_runs(self):
+        """With writable grants and Landlock available the write mask
+        engages: the documented warn-and-continue degrade stays."""
+        from core.sandbox._spawn import run_sandboxed
+        ro = self._ro_dir()
+        with self._failing_remount(ro):
+            r = run_sandboxed(
+                ["/usr/bin/python3", "-c", "print('ALIVE')"],
+                target=self.tgt, output=self.out,
+                readable_paths=[ro],
+                writable_paths=[self.out, "/tmp"],
+                allowed_tcp_ports=None,
+                block_network=True, nproc_limit=1024,
+                limits={"memory_mb": 0, "max_file_mb": 10240,
+                        "cpu_seconds": 300},
+                seccomp_profile="full", seccomp_block_udp=False,
+                env=None, cwd=None, timeout=30,
+                capture_output=True, text=True,
+            )
+        self.assertEqual(r.returncode, 0, r.stderr[-400:])
+        self.assertIn("ALIVE", r.stdout)
+        self.assertIn("relying on Landlock", r.stderr)
+
+
 class TestDemotionLandlockRecheck(_Base):
     """A per-call mount-ns demotion on a Landlock-less kernel must
     refuse, not run unconfined.
