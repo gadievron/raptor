@@ -543,6 +543,28 @@ def _charset_body_is_safe(body: str) -> bool:
     return True
 
 
+def _charset_alphabet_is_modeled(body: str) -> bool:
+    """ALLOWLIST alphabets must be ASCII for a disjointness proof.
+
+    The danger models are ASCII-only, so every non-ASCII char an
+    allowlist admits sits outside the modeled alphabet and the
+    "allowed ∩ danger = ∅" proof cannot speak for it. Concretely
+    unsound otherwise: an allowlist admitting fullwidth ``．``/``／``
+    proves "excludes ``../``" while the admitted payload
+    NFKC-normalises to exactly ``../`` in any downstream normalising
+    consumer. The Java lane refuses the analogous
+    unverified-translation family
+    (``test_java_unicode_proof_refusal.py``); this is the Python
+    lane's mirror.
+
+    Deliberately NOT applied to strip-style forbidden sets
+    (``charset_sub``): stripping extra non-ASCII chars only shrinks
+    the admitted language, and the inclusion proof still demands the
+    ASCII danger chars themselves be stripped.
+    """
+    return body.isascii()
+
+
 def _code_view_line(line: str, language: str) -> str:
     """Comment/string-blanked view of ONE line (no file context).
 
@@ -3607,6 +3629,13 @@ def prove_neutralizes(
         if not isinstance(body, str) or not _charset_body_is_safe(body):
             return _ProofVerdict(
                 False, None, "unsupported character class in proof model",
+            )
+        if spec.kind == "charset" and not _charset_alphabet_is_modeled(body):
+            return _ProofVerdict(
+                False, None,
+                "non-ASCII allowlist alphabet is outside the ASCII danger "
+                "model (confusables can normalise into it) — refusing the "
+                "disjointness proof",
             )
     if spec.kind == "charset":
         return _prove_charset(spec, sink_class, danger, timeout_ms=timeout_ms)

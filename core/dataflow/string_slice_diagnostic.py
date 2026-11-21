@@ -137,10 +137,16 @@ def diagnose_validator_slice(
 ) -> dict | None:
     """Lower the existing regex frontend's model for shared diagnostics."""
     from core.dataflow.smt_barrier import (
-        _charset_body_is_safe, _iter_charclass_atoms, danger_chars_for,
+        _charset_alphabet_is_modeled, _charset_body_is_safe,
+        _iter_charclass_atoms, danger_chars_for,
     )
 
     if spec.kind != "charset" or not _charset_body_is_safe(spec.charset):
+        return None
+    if not _charset_alphabet_is_modeled(spec.charset):
+        # Same refusal as prove_neutralizes: the forbidden ords below
+        # are ASCII-only, so a non-ASCII allowlist would read as
+        # danger-free while confusables normalise into the danger set.
         return None
     intervals = tuple(
         (ord(atom[1]), ord(atom[2] if atom[0] == "range" else atom[1]))
