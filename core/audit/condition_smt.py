@@ -531,6 +531,89 @@ def constraints_for_guard(
 # Path feasibility — are all guards jointly satisfiable?
 # ---------------------------------------------------------------------------
 
+#: Unsigned re-reading widths for the typeless dead-path check. C's
+#: integer promotions make sub-``int`` unsigned types compare as signed
+#: ``int``, so the literal-reinterpretation flip can only occur at
+#: ``unsigned int`` rank and above.
+_UNSIGNED_REREAD_WIDTHS = (32, 64)
+
+
+def _var_interval_satisfiable(
+    cs: list[BoundsConstraint],
+    domain_hi: int | None,
+) -> bool | None:
+    """Exact satisfiability of ONE variable's constraint set.
+
+    ``domain_hi`` None = the signed reading: literals as written, over
+    the unbounded integers. An integer ``domain_hi`` = the unsigned
+    reading at that width: the domain is ``[0, domain_hi]`` and a
+    negative literal that fits the width converts to
+    ``literal + domain_hi + 1`` (C usual arithmetic conversions); a
+    negative literal of wider rank keeps its value (the variable
+    converts to the literal's wider signed type instead).
+
+    Returns None when an operator is outside the model.
+    """
+    modulus = None if domain_hi is None else domain_hi + 1
+    lower = None if domain_hi is None else 0
+    upper = domain_hi
+    excluded: set[int] = set()
+    for c in cs:
+        bound = c.bound_value
+        if modulus is not None and bound < 0 and bound >= -modulus:
+            bound += modulus
+        if c.operator in ("<", "<="):
+            ub = bound - 1 if c.operator == "<" else bound
+            if upper is None or ub < upper:
+                upper = ub
+        elif c.operator in (">", ">="):
+            lb = bound + 1 if c.operator == ">" else bound
+            if lower is None or lb > lower:
+                lower = lb
+        elif c.operator == "==":
+            lower = bound if lower is None else max(lower, bound)
+            upper = bound if upper is None else min(upper, bound)
+        elif c.operator == "!=":
+            excluded.add(bound)
+        else:
+            return None
+    if lower is None or upper is None:
+        # A half-open integer interval always outruns finitely many
+        # exclusions.
+        return True
+    if lower > upper:
+        return False
+    in_range = sum(1 for value in excluded if lower <= value <= upper)
+    return (upper - lower + 1) > in_range
+
+
+def _refutation_survives_unsigned_reading(
+    constraints: list[BoundsConstraint],
+) -> bool:
+    """True when some variable's constraint set is unsatisfiable under
+    the signed reading AND every unsigned re-reading.
+
+    Constraints relate one variable to one integer literal, so joint
+    feasibility decomposes per variable: the conjunction is dead under
+    EVERY signedness assignment exactly when at least one variable is
+    dead under all of its own readings. Such a variable makes the
+    refutation independent of the (unknown) declared type.
+    """
+    per_var: dict[str, list[BoundsConstraint]] = {}
+    for c in constraints:
+        if not isinstance(c.variable, str) or not c.variable or type(c.bound_value) is not int:
+            continue  # unmodeled — cannot certify a dead variable
+        per_var.setdefault(c.variable, []).append(c)
+    for cs in per_var.values():
+        if _var_interval_satisfiable(cs, None) is not False:
+            continue
+        if all(
+            _var_interval_satisfiable(cs, (1 << width) - 1) is False
+            for width in _UNSIGNED_REREAD_WIDTHS
+        ):
+            return True
+    return False
+
 
 def check_path_feasibility(
     guards: list[GuardCondition],
@@ -586,6 +669,24 @@ def check_path_feasibility(
     if unmodeled and result.feasible is True:
         result.feasible = None
         result.reasoning = "encoded guard subset is satisfiable; unmodeled guards — inconclusive"
+    # The guards are TYPELESS: a dead-path proof that needs the signed
+    # reading of a negative literal (``x > 10 && x < -1`` is unsat over
+    # the integers but live for unsigned ``x``, where ``-1`` converts
+    # to the type maximum) is a guess about declared types this model
+    # cannot see. Keep the refutation only when some variable is dead
+    # under the signed reading and every unsigned re-reading.
+    if result.feasible is False and any(
+        type(c.bound_value) is int and c.bound_value < 0
+        for c in all_constraints
+    ) and not _refutation_survives_unsigned_reading(all_constraints):
+        result.feasible = None
+        result.reasoning = (
+            "signedness-ambiguous: the infeasibility depends on the signed "
+            "reading of negative literal(s) against typeless variables — an "
+            "unsigned reading leaves the path live; refusing the dead-path "
+            "proof"
+        )
+        result.witness = None
     return result
 
 
