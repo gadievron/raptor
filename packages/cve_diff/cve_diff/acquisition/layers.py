@@ -33,10 +33,10 @@ drops it from Phase 1.
 
 from __future__ import annotations
 
-import os
 import subprocess
 from dataclasses import dataclass, field
 
+from core.atomic_fs import rmtree_hardened
 from core.git import clone_repository, fetch_commit, get_safe_git_env
 from core.git.clone import safe_git_command
 
@@ -81,11 +81,10 @@ def _commit_exists(repo_path: Path, sha: str) -> bool:
 def _clean_dest(dest: Path) -> None:
     """Remove ``dest`` if it exists and has content. No-op otherwise.
 
-    Defensive: 60s timeout protects against pathological filesystems;
-    transient subprocess failures are silently ignored — the next acquire
-    attempt will surface a real error if rm-rf actually didn't work.
-    Used by every layer's pre-acquire cleanup and the cascade's
-    between-layer cleanup.
+    Best-effort: removal failures are silently ignored — the next
+    acquire attempt will surface a real error if the tree is actually
+    still there. Used by every layer's pre-acquire cleanup and the
+    cascade's between-layer cleanup.
 
     Safety: refuses filesystem root, short absolute paths (< 3 path
     components), and relative paths. Production callers always pass a
@@ -118,48 +117,21 @@ def _clean_dest(dest: Path) -> None:
         msg = f"_clean_dest refusing non-directory: {dest!r}"
         raise ValueError(msg)
     if any(dest.iterdir()):
-        # ``shutil.rmtree`` rather than spawning ``rm -rf`` via
-        # subprocess. Pre-fix this path was a guarded subprocess
-        # invocation defending against PATH hijack on the ``rm``
-        # binary; that defence is moot once we delegate to the
-        # standard library. shutil.rmtree() is also cheaper (no fork
-        # / exec) and portable.
-        #
-        # On read-only files inside ``dest`` shutil.rmtree raises
-        # ``PermissionError``. ``onerror=`` chmods + retries — same
-        # end-state as ``rm -rf``. Any residual failure is swallowed
-        # by the callback's inner ``except OSError: pass``, so the
-        # rmtree call as a whole stays best-effort and never raises
-        # to the caller — matching the original subprocess(
-        # check=False, capture_output=True) contract that several
-        # callers rely on (e.g. error-path cleanup where the dest
-        # may be in an indeterminate state and raising would mask
-        # the original failure).
-        #
-        # Outer-level guard: a defensive try/except OSError around
-        # the call itself catches the unlikely shape where
-        # ``shutil.rmtree`` raises before reaching the per-entry
-        # walk (e.g. scandir on ``dest`` itself fails after the
-        # lstat guards above pass — racy concurrent-rename
-        # scenario). Best-effort intent preserved end to end.
-        import shutil
-        import stat as _stat_mod
-
-        def _force_remove(func, path, _exc) -> None:
-            try:
-                os.chmod(path, _stat_mod.S_IWRITE | _stat_mod.S_IREAD)
-                func(path)
-            except OSError:
-                pass
-
-        try:
-            shutil.rmtree(dest, onerror=_force_remove)
-        except OSError:
-            # ``onerror`` should have caught per-entry failures; we
-            # only reach here on rmtree's own front-of-walk error
-            # (rare). Swallow to preserve the legacy fire-and-forget
-            # contract of the subprocess-based predecessor.
-            pass
+        # Shared hardened removal instead of a local chmod-and-retry
+        # ``onerror`` callback. ``dest`` holds a freshly fetched
+        # UNTRUSTED repository, which can legitimately contain
+        # symlinks, and ``os.chmod`` follows symlinks (Linux has no
+        # lchmod) — the pre-fix callback chmodded whatever entry
+        # ``shutil.rmtree`` failed on, so an unlinkable symlink (e.g.
+        # inside an unwritable subdirectory) retargeted the permission
+        # fix at the link's TARGET outside ``dest``. ``rmtree_hardened``
+        # restores traversal permissions while skipping links, pins the
+        # root by device/inode identity, and reports residue as a
+        # ``False`` return instead of raising — preserving the
+        # fire-and-forget contract callers rely on (error-path cleanup
+        # where ``dest`` may be in an indeterminate state and raising
+        # would mask the original failure).
+        rmtree_hardened(dest)
 
 
 @dataclass

@@ -12,6 +12,8 @@ check, error reporting) is still exercised in full.
 
 from __future__ import annotations
 
+import os
+import stat
 import subprocess
 from pathlib import Path
 
@@ -346,6 +348,87 @@ def test_clean_dest_accepts_real_tempdir(tmp_path):
     assert target.exists()
     _clean_dest(target)
     assert not target.exists()
+
+
+def _restore_tree_perms(root: Path) -> None:
+    """Best-effort perm restore so pytest's tmp_path retention can clean up
+    whatever a (deliberately) permission-mangled test tree leaves behind."""
+    if not root.exists():
+        return
+    for dirpath, _dirnames, _filenames in os.walk(root):
+        try:
+            os.chmod(dirpath, 0o700)
+        except OSError:
+            pass
+
+
+def _lstat_mode(path: Path) -> int:
+    return stat.S_IMODE(os.lstat(path).st_mode)
+
+
+@pytest.mark.skipif(
+    os.geteuid() == 0,
+    reason="root bypasses permission checks; the scenario needs EACCES",
+)
+def test_clean_dest_never_chmods_through_planted_symlink(tmp_path):
+    """A symlink planted inside an unwritable subdir of ``dest`` must never
+    retarget a permission fix at the link's TARGET outside ``dest``.
+
+    ``dest`` holds a freshly fetched UNTRUSTED repository: a hostile repo
+    can legitimately contain symlinks, and the server controls where they
+    point. The pre-hardening cleanup used a chmod-and-retry ``onerror``
+    callback whose ``os.chmod`` follows symlinks (Linux has no lchmod),
+    so an unlinkable link inside an unwritable subdirectory chmodded
+    whatever the link pointed at — an arbitrary-path permission change
+    driven by remote content (CWE-59).
+    """
+    from cve_diff.acquisition.layers import _clean_dest
+
+    victim = tmp_path / "victim-outside-dest"
+    victim.write_text("precious")
+    os.chmod(victim, 0o644)
+
+    dest = tmp_path / "dest"
+    locked = dest / "locked"
+    locked.mkdir(parents=True)
+    (locked / "hostile-link").symlink_to(victim)
+    # r-x: listable, but entries inside cannot be unlinked.
+    os.chmod(locked, 0o500)
+
+    try:
+        _clean_dest(dest)
+        assert _lstat_mode(victim) == 0o644, (
+            "cleanup followed the planted symlink and chmodded its target"
+        )
+        assert not dest.exists()
+    finally:
+        _restore_tree_perms(dest)
+
+
+@pytest.mark.skipif(
+    os.geteuid() == 0,
+    reason="root bypasses permission checks; the scenario needs EACCES",
+)
+def test_clean_dest_reclaims_untraversable_subdir(tmp_path):
+    """A mode-0 subdirectory (hostile repo content, or a crashed earlier
+    run) must still be fully reclaimed: between-layer cleanup that leaves
+    residue makes the next layer's ``dest not empty`` check fail the whole
+    cascade. The pre-hardening callback restored only rw (no execute bit),
+    so the directory stayed untraversable and the residue survived.
+    """
+    from cve_diff.acquisition.layers import _clean_dest
+
+    dest = tmp_path / "dest"
+    griefed = dest / "griefed"
+    griefed.mkdir(parents=True)
+    (griefed / "payload.bin").write_bytes(b"x")
+    os.chmod(griefed, 0)
+
+    try:
+        _clean_dest(dest)
+        assert not dest.exists(), "cleanup left permission-mangled residue"
+    finally:
+        _restore_tree_perms(dest)
 
 
 # --- clone/fetch timeout falls through the cascade --------------------------
