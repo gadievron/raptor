@@ -83,7 +83,15 @@ def harvest_tree(src_dir: Path, dst_dir: Path) -> None:
         return
     if not _fresh_dir(dst_dir, parents=True):
         return
-    for root, dirs, files in os.walk(src_dir):
+
+    def _walk_error(exc: OSError) -> None:
+        # A subtree the parent cannot enter (a hostile child can chmod
+        # its own dirs 000 before exiting) must not vanish silently —
+        # this is evidence-class data, and a structurally complete-
+        # looking mirror with quiet gaps is worse than a loud one.
+        logger.warning("harvest walk could not enter %s", exc)
+
+    for root, dirs, files in os.walk(src_dir, onerror=_walk_error):
         dirs[:] = [d for d in dirs if not (Path(root) / d).is_symlink()]
         rel = Path(root).relative_to(src_dir)
         for name in dirs:
@@ -105,6 +113,11 @@ def _fresh_dir(path: Path, *, parents: bool = False) -> bool:
         if path.is_symlink():
             path.unlink()
         path.mkdir(mode=0o700, parents=parents, exist_ok=True)
+        # mkdir(exist_ok=True) does not re-mode a pre-existing dir —
+        # a legacy 0755 store from a pre-conversion run would keep its
+        # loose mode under reveal_secrets (the scrub pass otherwise
+        # tightens it later).
+        path.chmod(0o700)
         return True
     except OSError as exc:
         logger.warning("could not create harvest dir %s: %s", path, exc)

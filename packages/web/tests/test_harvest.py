@@ -115,3 +115,46 @@ def test_tree_missing_source_is_a_quiet_noop(tmp_path: Path):
     dst = tmp_path / "run" / "responses"
     harvest_tree(tmp_path / "absent", dst)
     assert not dst.exists()
+
+
+def test_tree_warns_on_unenterable_subtree(tmp_path: Path, caplog):
+    """A hostile child can chmod its own subdirs 000 before exiting;
+    os.walk's default is to skip them SILENTLY, leaving a structurally
+    complete-looking mirror with quiet gaps in evidence-class data."""
+    if os.geteuid() == 0:
+        pytest.skip("root ignores directory modes")
+    src = tmp_path / "ws" / "responses"
+    locked = src / "example.test"
+    locked.mkdir(parents=True)
+    (locked / "req1.txt").write_text("GET /", encoding="utf-8")
+    dst = tmp_path / "run" / "responses"
+
+    locked.chmod(0o000)
+    try:
+        with caplog.at_level("WARNING"):
+            harvest_tree(src, dst)
+    finally:
+        locked.chmod(0o700)
+
+    assert any("harvest walk could not enter" in r.message
+               for r in caplog.records)
+    # The mirror dir exists (made before the descent failed) but holds
+    # no files — the warning is what keeps the gap from being quiet.
+    assert not (dst / "example.test" / "req1.txt").exists()
+
+
+def test_tree_remodes_preexisting_loose_destination_dir(tmp_path: Path):
+    """mkdir(exist_ok=True) does not re-mode a pre-existing dir — a
+    legacy 0755 store from a pre-conversion run must be tightened to
+    0700, not silently kept world-listable."""
+    src = tmp_path / "ws" / "responses"
+    src.mkdir(parents=True)
+    (src / "req1.txt").write_text("GET /", encoding="utf-8")
+    dst = tmp_path / "run" / "responses"
+    dst.mkdir(parents=True)
+    dst.chmod(0o755)
+
+    harvest_tree(src, dst)
+
+    assert dst.stat().st_mode & 0o777 == 0o700
+    assert (dst / "req1.txt").read_text(encoding="utf-8") == "GET /"
