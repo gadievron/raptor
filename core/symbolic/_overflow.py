@@ -600,6 +600,11 @@ def _register_snapshot(state) -> dict:
     return snap
 
 
+# Bounds the stripped-build fallback scan; glibc keeps the failure
+# message in rodata, well inside this window for real binaries.
+_CANARY_SCAN_BYTES = 64 * 1024 * 1024
+
+
 def _has_canary(project) -> bool:
     """Stack-protector present in the target.
 
@@ -608,8 +613,25 @@ def _has_canary(project) -> bool:
     hijack witness on a canary'd binary is therefore model-optimistic
     and consumers must weight it accordingly; the flag makes that
     judgement mechanical.
+
+    A ``-static`` protector build stripped of symbols has no
+    ``__stack_chk_fail`` symbol, but strip removes symbols, not data:
+    glibc's failure message survives in rodata. Missing it would store
+    an uncaveated confirmed hijack that the real binary's guard kills,
+    so the lookup falls back to a bounded image scan — a spurious
+    match only adds a caveat, never removes one.
     """
     try:
-        return project.loader.find_symbol("__stack_chk_fail") is not None
+        if project.loader.find_symbol("__stack_chk_fail") is not None:
+            return True
     except Exception:  # noqa: BLE001 — unknown loader state: no claim
+        return False
+    try:
+        binary = getattr(project.loader.main_object, "binary", None)
+        if not isinstance(binary, str) or not binary:
+            return False
+        with open(binary, "rb") as handle:
+            data = handle.read(_CANARY_SCAN_BYTES)
+        return b"stack smashing detected" in data
+    except Exception:  # noqa: BLE001 — unreadable image: no claim
         return False

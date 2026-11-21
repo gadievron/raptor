@@ -559,6 +559,47 @@ def test_canary_presence_flagged(tmp_path: Path):
     assert solve.metadata["canary_present"] is True
 
 
+def _stub_project(image: Path | None, symbol_present: bool):
+    class _Loader:
+        class main_object:  # noqa: N801 — mirrors the angr attribute
+            binary = str(image) if image is not None else None
+
+        @staticmethod
+        def find_symbol(_name):
+            return object() if symbol_present else None
+
+    class _Project:
+        loader = _Loader()
+
+    return _Project()
+
+
+def test_has_canary_falls_back_to_image_scan(tmp_path: Path):
+    """A '-static' protector build stripped of symbols keeps glibc's
+    failure message in rodata — the caveat must not be lost with the
+    symbol table."""
+    from core.symbolic._overflow import _has_canary
+
+    stripped = tmp_path / "stripped"
+    stripped.write_bytes(
+        b"\x7fELF" + b"\x00" * 64 + b"stack smashing detected" + b"\x00")
+    assert _has_canary(_stub_project(stripped, symbol_present=False)) is True
+
+
+def test_has_canary_absent_without_symbol_or_message(tmp_path: Path):
+    from core.symbolic._overflow import _has_canary
+
+    plain = tmp_path / "plain"
+    plain.write_bytes(b"\x7fELF" + b"\x00" * 64)
+    assert _has_canary(_stub_project(plain, symbol_present=False)) is False
+
+
+def test_has_canary_symbol_short_circuits(tmp_path: Path):
+    from core.symbolic._overflow import _has_canary
+
+    assert _has_canary(_stub_project(None, symbol_present=True)) is True
+
+
 @pytest.mark.slow
 def test_no_canary_not_flagged(tmp_path: Path):
     from core.symbolic import find_overflow_reaching_input, load_binary
