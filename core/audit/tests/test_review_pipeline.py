@@ -2529,11 +2529,33 @@ class TestConfirmedTier:
         )
         assert o.compute_tier() == "confirmed"
 
-    def test_frida_runtime(self):
+    def test_frida_attributed_execution_fact(self):
+        from core.audit.orchestrator import ReviewOutcome
+        o = ReviewOutcome(
+            file="f.c", function="fn", status="finding",
+            body="token at sink", evidence_tool="frida:token-at-sink",
+        )
+        assert o.compute_tier() == "confirmed"
+
+    def test_frida_runtime_observation_is_detection_grade(self):
+        # Bare runtime observation (the function executed) is
+        # guard-blind presence evidence — detection role in the
+        # exact-spelling registry, so it neither confirms nor counts
+        # as tool evidence on its own.
         from core.audit.orchestrator import ReviewOutcome
         o = ReviewOutcome(
             file="f.c", function="fn", status="finding",
             body="runtime", evidence_tool="frida:runtime",
+        )
+        assert o.compute_tier() == "llm_only"
+
+    def test_frida_runtime_rides_composite_without_downgrading(self):
+        # Appended as a second opinion next to a confirming stamp, the
+        # detection-role part must not clobber the confirmed tier.
+        from core.audit.orchestrator import ReviewOutcome
+        o = ReviewOutcome(
+            file="f.c", function="fn", status="finding",
+            body="crash", evidence_tool="dynamic:crash+frida:runtime",
         )
         assert o.compute_tier() == "confirmed"
 

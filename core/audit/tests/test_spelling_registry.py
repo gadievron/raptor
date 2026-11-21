@@ -322,6 +322,104 @@ class TestDifferentialEntry:
         )
 
 
+class TestFridaEntry:
+    """The LIVE ``frida`` registry entry — one taxonomy for every
+    consumer. Two directions per the receipt discipline:
+
+    * verification role is reserved for ATTRIBUTED execution facts
+      (token-at-sink io-correlation, sanitizer crash under
+      instrumentation, exec-and-load of a planted payload) — these
+      grade, convict, and survive composites;
+    * every unattributed presence receipt (bare runtime observation,
+      sink-watch, coverage, jni-trace, call-edge) is detection role —
+      corroborates, never convicts alone — and any UNLISTED spelling,
+      including refuter-grade shapes a producer might invent
+      (``frida:not-observed``, ``frida:refuted``, ``frida:absent``),
+      carries NO role and fails closed: dynamic evidence proves
+      presence, never absence, so a frida proof-refuter is
+      unrepresentable in this vocabulary.
+    """
+
+    _VERIFICATION = ("frida:token-at-sink",
+                     "frida:sanitizer-crash",
+                     "frida:exec-load")
+    _DETECTION = ("frida:runtime",
+                  "frida:sink-observed",
+                  "frida:coverage",
+                  "frida:jni-trace",
+                  "frida:call-edge")
+
+    def test_enumerated_spellings_survive_byte_exact(self) -> None:
+        ns = eg._EXACT_SPELLING_REGISTRY["frida"]
+        assert set(ns) == set(self._VERIFICATION + self._DETECTION)
+
+    def test_attributed_execution_facts_are_verification_grade(
+        self,
+    ) -> None:
+        for spelling in self._VERIFICATION:
+            assert eg.registry_owns(spelling)
+            assert eg.registered_spelling_role(spelling) == (
+                eg._ROLE_VERIFICATION
+            )
+            assert eg.is_tool_evidence(spelling)
+            assert eg.is_verification_evidence(spelling)
+            assert _is_verification_evidence(spelling)
+            assert spelling in eg.VALID_EVIDENCE_TOOLS
+
+    def test_presence_observations_never_convict_alone(self) -> None:
+        for spelling in self._DETECTION:
+            assert eg.registry_owns(spelling)
+            assert eg.registered_spelling_role(spelling) == (
+                eg._ROLE_DETECTION
+            )
+            assert eg._is_detection_variant(spelling), spelling
+            assert not eg.is_tool_evidence(spelling), spelling
+            assert not eg.is_verification_evidence(spelling), spelling
+            assert not _is_verification_evidence(spelling), spelling
+            assert spelling not in eg.VALID_EVIDENCE_TOOLS
+
+    def test_refuter_shaped_spellings_unrepresentable(self) -> None:
+        # Structural direction 2: no frida spelling may serve as a
+        # proof-grade refuter. Absence-claim shapes are not enumerated,
+        # so they carry NO role and fail closed — and the enumerated
+        # roles are presence facts only.
+        for stamp in ("frida:not-observed", "frida:refuted",
+                      "frida:absent", "frida:dead-code",
+                      "frida:cli", "frida"):
+            assert not eg.is_tool_evidence(stamp), stamp
+            assert not eg.is_verification_evidence(stamp), stamp
+            assert not _is_verification_evidence(stamp), stamp
+        roles = set(eg._EXACT_SPELLING_REGISTRY["frida"].values())
+        assert roles <= {eg._ROLE_VERIFICATION, eg._ROLE_DETECTION}
+
+    def test_fail_closed_survives_namespace_root_admission(self) -> None:
+        # "frida" sits in _TOOL_NAMESPACES (dark_verify/differential
+        # precedent): registry ownership must keep overriding so the
+        # bare root and unknown variants never ride prefix admission.
+        assert "frida" in eg._TOOL_NAMESPACES
+        assert not eg.is_tool_evidence("frida")
+        assert not eg.is_tool_evidence("frida:novel-variant")
+        assert not eg.is_verification_evidence("frida:novel-variant")
+        for spelling in self._VERIFICATION:
+            assert eg.is_verification_evidence(spelling)
+
+    def test_detection_receipt_rides_composites_non_poisonously(
+        self,
+    ) -> None:
+        # A detection-role frida receipt next to a verification receipt
+        # neither upgrades itself nor poisons its neighbour: the
+        # composite keeps the verification grade.
+        assert eg.is_tool_evidence("dynamic:crash+frida:runtime")
+        assert eg.is_verification_evidence("dynamic:crash+frida:runtime")
+        assert eg.is_verification_evidence(
+            "frida:token-at-sink+frida:coverage",
+        )
+        # Two detection receipts cannot upgrade each other.
+        assert not eg.is_tool_evidence("frida:runtime+frida:sink-observed")
+        # Unlisted spellings are ignored next to a known receipt.
+        assert eg.is_tool_evidence("semgrep+frida:novel-variant")
+
+
 class TestOrchestratorDetectionOnlyConsult:
     """The promotion surface's role table
     (``core.audit.orchestrator._is_detection_only``) consults the

@@ -356,7 +356,7 @@ class TestGradeReviewResult:
             assert len(items) > 0, f"{cli} should grade"
 
     def test_cli_namespaced_stamps_leave_namespaced_unchanged(self):
-        for ns in ("dynamic:sanitizer", "dark_verify:sanitizer-violation", "frida:runtime"):
+        for ns in ("dynamic:sanitizer", "dark_verify:sanitizer-violation", "frida:token-at-sink"):
             assert ":" in ns
             assert is_tool_evidence(ns)
 
@@ -395,7 +395,7 @@ class TestIsToolEvidence:
         assert not is_tool_evidence("smt:path_feasibility")
         assert is_tool_evidence("sarif_cache:hit")
         assert is_tool_evidence("dynamic:sanitizer")
-        assert is_tool_evidence("frida:runtime")
+        assert is_tool_evidence("frida:token-at-sink")
         assert is_tool_evidence("dark_verify:sanitizer-violation")
 
     def test_llm_hallucinations_rejected(self):

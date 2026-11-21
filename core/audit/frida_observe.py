@@ -77,8 +77,15 @@ def should_run_frida(
         return False
 
     evidence_tool = getattr(outcome, "evidence_tool", "")
-    if evidence_tool and evidence_tool.startswith(("dynamic:sanitizer", "frida:")):
-        return False
+    if evidence_tool:
+        # Stamps are "+"-composites once the second-opinion seam has
+        # appended its receipt: any frida:* part means the observation
+        # already ran, and a sanitizer confirmation needs no second
+        # opinion — a prefix check on the whole string would miss
+        # both behind a leading part like "dynamic:crash".
+        for part in evidence_tool.split("+"):
+            if part.strip().startswith(("dynamic:sanitizer", "frida:")):
+                return False
 
     if not _frida_available():
         return False

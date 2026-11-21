@@ -75,7 +75,7 @@ def test_deepen_claim_withdrawal_requires_current_identity_and_publication(tmp_p
 
     if fault == "mechanical_support":
         # Existing verification-role evidence floor, not a live tool proof.
-        prior.evidence_tool = "frida:runtime"
+        prior.evidence_tool = "frida:sanitizer-crash"
     if fault == "journal_unacknowledged":
         monkeypatch.setattr(collector, "append_journal_for_outcome", lambda **_: None)
     elif fault == "history_ack_stripped":

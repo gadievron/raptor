@@ -43,6 +43,39 @@ class TestShouldRunFrida:
         config = mock.Mock(dynamic_validation=True)
         assert not should_run_frida(outcome, config)
 
+    @mock.patch("core.audit.frida_observe._resolve_target_pid", return_value=1234)
+    @mock.patch("core.audit.frida_observe._frida_available", return_value=True)
+    def test_disabled_when_frida_part_rides_a_composite(self, *_):
+        # The second-opinion seam APPENDS its receipt, so a prior
+        # observation leaves a composite stamp — the gate must see the
+        # frida part behind the leading "dynamic:crash". Availability
+        # is mocked in so the stamp check is the only thing that can
+        # stop the run.
+        outcome = mock.Mock(
+            status="finding", evidence_tool="dynamic:crash+frida:runtime",
+        )
+        config = mock.Mock(dynamic_validation=True)
+        assert not should_run_frida(outcome, config)
+
+    @mock.patch("core.audit.frida_observe._resolve_target_pid", return_value=1234)
+    @mock.patch("core.audit.frida_observe._frida_available", return_value=True)
+    def test_disabled_when_sanitizer_part_rides_a_composite(self, *_):
+        outcome = mock.Mock(
+            status="finding",
+            evidence_tool="semgrep:rule-1+dynamic:sanitizer",
+        )
+        config = mock.Mock(dynamic_validation=True)
+        assert not should_run_frida(outcome, config)
+
+    @mock.patch("core.audit.frida_observe._resolve_target_pid", return_value=1234)
+    @mock.patch("core.audit.frida_observe._frida_available", return_value=True)
+    def test_bare_crash_stamp_still_gets_second_opinion(self, *_):
+        # Discriminating control for the composite check: a plain
+        # dynamic:crash stamp (no frida part) keeps triggering the run.
+        outcome = mock.Mock(status="finding", evidence_tool="dynamic:crash")
+        config = mock.Mock(dynamic_validation=True)
+        assert should_run_frida(outcome, config)
+
     @mock.patch("core.audit.frida_observe._frida_available", return_value=False)
     def test_disabled_when_frida_unavailable(self, _):
         outcome = mock.Mock(status="finding", evidence_tool="")

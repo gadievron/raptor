@@ -133,7 +133,7 @@ def test_model_judgment_admission_never_reconstructs_a_refutation(tmp_path, monk
     fresh = runtime.wrap_review(make_review_fn(Client(), escalate_clean=False))(ctx, config)
     fresh.line = 1
     if fault == "mechanical_support":
-        prior.evidence_tool = "frida:runtime"
+        prior.evidence_tool = "frida:sanitizer-crash"
     elif fault == "source_drift":
         (tmp_path / "owned.c").write_text("unsigned f(unsigned n) { return n + 1; }\n")
     elif fault == "missing_secondary":

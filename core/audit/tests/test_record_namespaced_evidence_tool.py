@@ -1,7 +1,8 @@
 """`record` G2 gate accepts namespaced evidence tools.
 
 VALID_EVIDENCE_TOOLS stores namespaced tools (dynamic:crash,
-frida:runtime, dark_verify:*) under their full colon-qualified names.
+frida:token-at-sink, dark_verify:*) under their full colon-qualified
+names.
 The G2 validity check must therefore test the full normalized string
 as well as the stripped base name — checking only the base rejected
 every namespaced choice the argument parser itself offers, so findings

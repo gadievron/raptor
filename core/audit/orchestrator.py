@@ -1404,8 +1404,15 @@ class ReviewOutcome:
     binary_publication_scope: BinaryReviewPublicationScope | None = field(default=None, repr=False, compare=False)
 
     _CONFIRMED_EVIDENCE = frozenset({
-        "dark_verify:sanitizer-violation", "dynamic:crash", "frida:runtime",
+        "dark_verify:sanitizer-violation", "dynamic:crash",
         "validate:observed_runtime", "validate:replayed_crash",
+        # Frida confirming-grade receipts: ATTRIBUTED execution facts
+        # (evidence_grade exact-spelling registry). "frida:runtime" —
+        # bare observation that the function executed — is detection
+        # role there and never reaches this set: membership is
+        # consulted only on parts that pass _is_single_tool_evidence.
+        "frida:token-at-sink", "frida:sanitizer-crash",
+        "frida:exec-load",
         # Differential family execution: sandboxed member runs
         # compared under an explicit contract — executed evidence.
         "differential:confirmed", "differential:relation-violation",
@@ -4702,17 +4709,29 @@ def _review_one_function_impl(
             )
 
         # Frida runs as a second opinion when the dynamic sweep produced only
-        # a bare crash ("dynamic:crash") — that's weak evidence and Frida may
-        # upgrade it to runtime-confirmed. Skip only when the sanitiser already
-        # confirmed ("dynamic:sanitizer").
+        # a bare crash ("dynamic:crash"). The observation — the target
+        # function was seen executing — is a detection-role corroboration
+        # receipt (evidence_grade exact-spelling registry), so it APPENDS
+        # "frida:runtime" to the stamp and never replaces it: replacing
+        # would clobber a confirming receipt down to detection grade, and
+        # bare runtime observation can never back a finding by itself.
+        # Skip only when the sanitiser already confirmed
+        # ("dynamic:sanitizer").
         if outcome.status == "finding" and outcome.evidence_tool != "dynamic:sanitizer":
             try:
                 from .frida_observe import run_frida_observation, should_run_frida
 
                 if should_run_frida(outcome, config):
                     frida_result = run_frida_observation(outcome, ctx, config)
-                    if frida_result and frida_result.evidence_strength == "confirmed":
-                        outcome.evidence_tool = "frida:runtime"
+                    if (
+                        frida_result
+                        and frida_result.evidence_strength == "confirmed"
+                        and "frida:runtime" not in (outcome.evidence_tool or "")
+                    ):
+                        outcome.evidence_tool = (
+                            f"{outcome.evidence_tool}+frida:runtime"
+                            if outcome.evidence_tool else "frida:runtime"
+                        )
             except Exception:
                 logger.debug(
                     "Frida observation failed for %s:%s",

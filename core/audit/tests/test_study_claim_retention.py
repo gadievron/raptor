@@ -129,7 +129,7 @@ def _assert_prior_assessment_history_snapshot(case, selected):
 def test_model_clean_after_study_cannot_erase_prior_claims(study_case):
     case = study_case
     case["prior"].status = "finding"
-    case["prior"].evidence_tool = "frida:runtime"
+    case["prior"].evidence_tool = "frida:sanitizer-crash"
     case["result"].suspicious = 0
     case["result"].findings = 1
     _reassess(case, _candidate())
@@ -176,13 +176,13 @@ def test_complete_current_refutations_can_withdraw_unconfirmed_concerns(study_ca
 
 def test_negative_checks_do_not_erase_conflicting_confirmation(study_case):
     case = study_case
-    case["prior"].evidence_tool = "frida:runtime"
+    case["prior"].evidence_tool = "frida:sanitizer-crash"
     _reassess(case, _candidate(claim_refutations=_refutations(case)))
     _retained(case)
     event = _diagnostic(case)
     assert event["reason"] == "conflicting_verification_evidence"
     assert len(event["claim_refutations"]) == 2
-    assert event["prior_evidence_tool"] == "frida:runtime"
+    assert event["prior_evidence_tool"] == "frida:sanitizer-crash"
 
 
 def test_assessment_write_failure_preserves_prior_and_spend(study_case, monkeypatch, caplog):
@@ -318,13 +318,13 @@ def test_same_status_unsafe_candidate_merge_is_refused(study_case, monkeypatch, 
     fresh = _new_suspicion()
     callback = None
     if fault == "prior_verified":
-        case["prior"].evidence_tool = "frida:runtime"
+        case["prior"].evidence_tool = "frida:sanitizer-crash"
     elif fault in ("fresh_verified", "wrong_occurrence"):
         # Inject at the checker-result boundary, after model sanitisation
         # and pipeline-owned line stamping; no native checker is exercised.
         def checker_result(outcome, *args, **kwargs):
             if fault == "fresh_verified":
-                outcome.evidence_tool = "frida:runtime"
+                outcome.evidence_tool = "frida:sanitizer-crash"
             else:
                 outcome.line = 2
             return outcome
@@ -662,7 +662,7 @@ def test_explicit_source_grounded_model_withdrawal_uses_owned_journal_publicatio
             return replace(actual, review_claims=None)
         monkeypatch.setattr(collector, "append_journal_for_outcome", stripped)
     elif fault == "mechanical_support":
-        prior.evidence_tool = "frida:runtime"
+        prior.evidence_tool = "frida:sanitizer-crash"
     if fault == "validation_cancelled":
         def cancel_validation(*args):
             raise KeyboardInterrupt("cancelled during local judgment validation")
@@ -700,8 +700,8 @@ def test_explicit_source_grounded_model_withdrawal_uses_owned_journal_publicatio
         assert decision["admissible"] is False
         if fault == "mechanical_support":
             assert decision["reason"] == "prior_mechanical_support"
-            assert canonical.evidence_tool == prior.evidence_tool == "frida:runtime"
-            assert entry.evidence_tools == ["frida:runtime"]
+            assert canonical.evidence_tool == prior.evidence_tool == "frida:sanitizer-crash"
+            assert entry.evidence_tools == ["frida:sanitizer-crash"]
         else:
             reason = "remaining_unknowns" if fault == "unknown_caller" else "claim_definition_unavailable"
             assert reason in {row["reason"] for row in decision["rejected"]}

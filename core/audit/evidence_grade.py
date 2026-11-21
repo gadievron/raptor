@@ -81,6 +81,9 @@ _SOURCE_CONFIDENCE: dict[EvidenceSource, Confidence] = {
     EvidenceSource.LLM_SPEC: Confidence.LOW,
     EvidenceSource.LLM_CORROBORATED: Confidence.MEDIUM,
     EvidenceSource.DYNAMIC_SANITIZER: Confidence.HIGH,
+    # Reached only by verification-role frida spellings (attributed
+    # execution facts — see the exact-spelling registry): detection-
+    # role frida receipts are filtered out before chain grading.
     EvidenceSource.DYNAMIC_FRIDA: Confidence.HIGH,
     EvidenceSource.DYNAMIC_CRASH: Confidence.MEDIUM,
     EvidenceSource.DARK_VERIFY: Confidence.HIGH,
@@ -108,7 +111,15 @@ _SOURCE_CONFIDENCE: dict[EvidenceSource, Confidence] = {
 VALID_EVIDENCE_TOOLS: frozenset = frozenset({
     "semgrep", "coccinelle", "codeql", "joern",
     "compiler",
-    "compilation", "dynamic:sanitizer", "dynamic:crash", "frida:runtime",
+    "compilation", "dynamic:sanitizer", "dynamic:crash",
+    # Frida confirming-grade receipts: ATTRIBUTED execution facts only
+    # (an ingest token observed at a sink/exec argument, a sanitizer
+    # crash under instrumentation, exec-and-load of a planted
+    # payload). Bare runtime observation ("frida:runtime") is
+    # detection-role in the exact-spelling registry below and may not
+    # back a recorded finding — observing a function execute is
+    # guard-blind presence evidence, not a defect witness.
+    "frida:token-at-sink", "frida:sanitizer-crash", "frida:exec-load",
     "dark_verify:sanitizer-violation",
     # Differential family execution: the deviant accepted an input
     # every executed conforming peer rejected (directional divergence
@@ -315,6 +326,43 @@ _EXACT_SPELLING_REGISTRY: dict[str, dict[str, str]] = {
     "differential": {
         "differential:confirmed": _ROLE_VERIFICATION,
         "differential:relation-violation": _ROLE_VERIFICATION,
+    },
+    # Frida receipt family — ONE taxonomy for every consumer
+    # (/audit compute_tier, /validate Stage B corroboration,
+    # dark_verify cross-run reuse) instead of the frida surfaces'
+    # historical informal tiers. Dynamic evidence PROVES presence,
+    # never absence: the namespace enumerates presence facts only,
+    # so a refuter-grade frida receipt is unrepresentable here — an
+    # unlisted spelling (including any "not-observed" / "refuted" /
+    # "absent" shape a producer might invent) carries NO role and
+    # fails closed. The only frida facts allowed to refute anything
+    # are the positive-reachability promote witnesses refuting
+    # dead-code dismissals (core.analysis.reach_witness
+    # frida_runtime_trace / frida_call_edge, the binary_call_edge
+    # family) — a different seam, structurally pinned to REACHABLE
+    # with earns_suppression=False.
+    #
+    # Verification role is reserved for ATTRIBUTED execution facts:
+    # ingest bytes reappearing in a later sink/exec argument of the
+    # same instrumented run (packages.frida.correlate io-correlation
+    # receipt), a sanitizer crash under instrumentation, and
+    # exec-and-load of a planted payload. Bare runtime observation of
+    # a function executing ("frida:runtime") is detection role — it
+    # corroborates and aggregates but never convicts alone
+    # (guard-blind presence, the joern:live precedent) — as are
+    # unattributed sink-watch observations and coverage / jni-trace /
+    # call-edge presence. Registry ownership replaces the
+    # namespace-root admission "frida" historically got from
+    # ``_TOOL_NAMESPACES``.
+    "frida": {
+        "frida:token-at-sink": _ROLE_VERIFICATION,
+        "frida:sanitizer-crash": _ROLE_VERIFICATION,
+        "frida:exec-load": _ROLE_VERIFICATION,
+        "frida:runtime": _ROLE_DETECTION,
+        "frida:sink-observed": _ROLE_DETECTION,
+        "frida:coverage": _ROLE_DETECTION,
+        "frida:jni-trace": _ROLE_DETECTION,
+        "frida:call-edge": _ROLE_DETECTION,
     },
 }
 
@@ -943,7 +991,31 @@ _RECEIPT_MAP: dict[str, tuple] = {
             "exception-grade hint, not a confirmed crash"
         ),
     ),
-    "frida": (EvidenceSource.DYNAMIC_FRIDA, "confirmed by Frida runtime observation"),
+    # Frida rows render only for verification-role spellings: the
+    # chain seam below filters parts through is_tool_evidence, and the
+    # exact-spelling registry demotes every unattributed frida
+    # presence receipt (frida:runtime, sink-watch, coverage,
+    # jni-trace, call-edge) to detection role before it can reach
+    # this map.
+    "frida:token-at-sink": (
+        EvidenceSource.DYNAMIC_FRIDA,
+        (
+            "ingest bytes reappeared in a later sink/exec argument of "
+            "the same instrumented run (io-correlation receipt)"
+        ),
+    ),
+    "frida:sanitizer-crash": (
+        EvidenceSource.DYNAMIC_FRIDA,
+        "sanitizer crash observed under frida instrumentation",
+    ),
+    "frida:exec-load": (
+        EvidenceSource.DYNAMIC_FRIDA,
+        "exec-and-load of a planted payload observed at runtime",
+    ),
+    "frida": (
+        EvidenceSource.DYNAMIC_FRIDA,
+        "attributed frida runtime execution witness",
+    ),
     "joern": (EvidenceSource.JOERN, "confirmed by Joern CPG analysis"),
     "joern:guard-dominance": (
         EvidenceSource.JOERN,
