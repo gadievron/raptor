@@ -5786,14 +5786,25 @@ def run_symbolic_sweep(
     if stored:
         details.update(stored)
         if stored.get("replay_outcome") == "exit_signal":
-            message += (
-                f" — replay crashed with signal "
-                f"{stored.get('replay_signal')}"
-            )
-            if not hijack:
-                # A replayed crash upgrades bare reachability to
-                # execution evidence (verification role).
-                rule_id = "symbolic-reach-crash"
+            if stored.get("signal_provenance") == "waitstatus":
+                message += (
+                    f" — replay crashed with signal "
+                    f"{stored.get('replay_signal')}"
+                )
+                if not hijack:
+                    # A kernel-reported crash (mechanical wait status)
+                    # upgrades bare reachability to execution evidence
+                    # (verification role).
+                    rule_id = "symbolic-reach-crash"
+            else:
+                # Signal number decoded from a 128+N exit code: the
+                # target can mint it with exit(139). Heuristic
+                # evidence never earns the crash-grade rule id.
+                message += (
+                    f" — replay exit code decodes to signal "
+                    f"{stored.get('replay_signal')} (exit-code "
+                    f"inference, target-forgeable; not crash-grade)"
+                )
 
     return SweepResult(
         tool="symbolic", file_path=file_path,
@@ -5881,6 +5892,13 @@ def _store_sweep_witness(
         }
         if record.get("replay_signal") is not None:
             out["replay_signal"] = record["replay_signal"]
+        # The replay stamps discriminate a kernel-reported wait status
+        # from a signal number decoded out of a 128+N exit code, which
+        # the target can forge with exit(). Consumers grading the
+        # replay need them verbatim.
+        for stamp in ("signal_provenance", "evidence_grade"):
+            if record.get(stamp) is not None:
+                out[stamp] = record[stamp]
         return out
     except Exception:  # noqa: BLE001 — storage is best-effort
         logger.debug("sweep witness store failed", exc_info=True)
