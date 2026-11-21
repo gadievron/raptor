@@ -16,12 +16,14 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from core.audit.evidence_grade import registered_spelling_role
 from core.logging import get_logger
 
 log = get_logger("orchestration.frida_validation_bridge")
 
 __all__ = [
     "PROXIMITY_FLOOR",
+    "RUNTIME_OBSERVATION_STAMP",
     "RuntimeEvidence",
     "annotate_attack_paths",
     "collect_runtime_evidence",
@@ -29,6 +31,15 @@ __all__ = [
 ]
 
 PROXIMITY_FLOOR = 6
+
+# Receipt stamp for bridge-discovered observations, in the
+# evidence_grade exact-spelling vocabulary (ONE taxonomy for /audit,
+# /validate and dark_verify). Sink-watch / trace presence without
+# ingest-token attribution is DETECTION role there: it corroborates —
+# proximity floor here, Stage D corroboration downstream — but never
+# convicts alone, and a step WITHOUT an observation gets no stamp at
+# all (dynamic evidence proves presence, never absence).
+RUNTIME_OBSERVATION_STAMP = "frida:runtime"
 
 
 @dataclass
@@ -268,6 +279,12 @@ def annotate_attack_paths(
                 "call_count": ev.call_count,
                 "observed_args": ev.observed_args,
                 "trace_id": ev.trace_id,
+                # The grade rides the annotation so consumers read the
+                # shared vocabulary instead of re-deriving a tier.
+                "receipt_stamp": RUNTIME_OBSERVATION_STAMP,
+                "evidence_role": registered_spelling_role(
+                    RUNTIME_OBSERVATION_STAMP,
+                ),
             }
             match = None
             if ev.observed_callsites:

@@ -124,7 +124,7 @@ Frida output is automatically consumed by downstream pipelines when evidence exi
 | Consumer | What it reads | What it produces |
 |----------|--------------|-----------------|
 | `/agentic` reachability prepass | `events.jsonl` function names | `metadata.frida_runtime_trace` on inventory items; promotes `FRIDA_RUNTIME_TRACE` witness (SOUND) |
-| `/validate` Stage B | `events.jsonl` function names | `runtime_evidence` annotations on attack path steps; proximity floor at 6 |
+| `/validate` Stage B | `events.jsonl` function names | `runtime_evidence` annotations on attack path steps (graded `receipt_stamp: "frida:runtime"` / `evidence_role: "detection"` in the shared evidence_grade vocabulary); proximity floor at 6 |
 | `/understand --map` context bridge | `events.jsonl` file operations | `ObserveProfile` merged into context map (read/write/stat/connect paths) |
 | Coverage store | `coverage.drcov` (bb-coverage template) | Function-level coverage marks via existing `import_drcov` pipeline |
 
@@ -134,6 +134,18 @@ and `jni-trace` runs feed NO runtime evidence — their outputs are the
 seed corpus and the JNI mapping. A collection pass that yields zero
 evidence reports its unattributable events (with caller modules) as a
 warning; routine startup drops on evidence-bearing runs log at debug.
+
+Evidence grade: frida receipts speak the evidence_grade exact-spelling
+vocabulary (`core/audit/evidence_grade.py`) — ONE taxonomy across
+`/audit`, `/validate` and dark_verify. Attributed execution facts
+(`frida:token-at-sink` io-correlation, `frida:sanitizer-crash`,
+`frida:exec-load`) are verification role; unattributed presence
+(`frida:runtime`, `frida:sink-observed`, `frida:coverage`,
+`frida:jni-trace`, `frida:call-edge`) is detection role —
+corroboration that never convicts alone. Dynamic evidence proves
+presence, never absence: no frida receipt refutes a finding, except
+that a positive runtime observation refutes a dead-code/unreachable
+dismissal (the reach-witness promote family).
 
 No flags needed — consumers discover evidence via `packages.frida.evidence.discover_evidence()` and gate on `packages.frida.available()`.
 

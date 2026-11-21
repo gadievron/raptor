@@ -298,6 +298,31 @@ class TestAnnotateAttackPaths:
         assert step0["runtime_evidence"]["call_count"] == 5
         assert step0["runtime_evidence"]["observed_args"] == ["/etc/passwd", 0]
 
+    def test_annotation_carries_registry_grade(self):
+        """Annotations speak the shared evidence_grade vocabulary:
+        the detection-role runtime-observation stamp rides every
+        annotated step, and a step WITHOUT an observation carries no
+        grade fields at all — presence is stamped, absence is
+        unrepresentable."""
+        from core.audit import evidence_grade as eg
+
+        paths = [_make_attack_path("P1", [
+            {"step": 1, "action": "call open(path)", "function": "open"},
+            {"step": 2, "action": "parse input", "function": "parse_input"},
+        ])]
+        result = annotate_attack_paths(paths, self._evidence_map())
+
+        annotated = result[0]["steps"][0]["runtime_evidence"]
+        assert annotated["receipt_stamp"] == "frida:runtime"
+        assert annotated["evidence_role"] == "detection"
+        # The role is READ from the registry, not duplicated here.
+        assert annotated["evidence_role"] == (
+            eg.registered_spelling_role(annotated["receipt_stamp"])
+        )
+        # Unobserved step: no runtime_evidence, hence no grade fields —
+        # there is no stamp spelling for "not observed".
+        assert "runtime_evidence" not in result[0]["steps"][1]
+
     def test_floors_proximity(self):
         """Path with runtime evidence gets proximity >= PROXIMITY_FLOOR."""
         paths = [_make_attack_path("P1", [
