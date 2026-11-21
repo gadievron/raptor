@@ -13,7 +13,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -22,7 +21,7 @@ from urllib.parse import urljoin, urlparse
 from core.json import save_json
 from core.json.bounded import load_json_bounded
 from core.logging import get_logger
-from core.run.workdir import exec_workdir
+from core.run.workdir import anonymous_workspace
 from core.sandbox import run_untrusted_networked
 from core.security.redaction import is_secret_field_name, redact_secrets
 
@@ -1158,13 +1157,13 @@ class FfufRunner:
         # child's environment re-leak the bind source path — ffuf runs
         # against a live, possibly hostile web target, and a
         # fingerprinting target could attribute the analysis run from
-        # either. The config TOML is STAGED into the workspace, the
-        # report is HARVESTED out of it afterwards, and the egress
-        # audit stream goes straight to work_dir parent-side via
-        # events_output=.
-        with tempfile.TemporaryDirectory(
-                prefix="ws-", dir=exec_workdir()) as _ws:
-            workspace = Path(_ws)
+        # either. The workspace itself is minted outside the branded
+        # raptor-<euid> temp family under a neutral `.ws-` name, so the
+        # same channels cannot even fingerprint the framework. The
+        # config TOML is STAGED into the workspace, the report is
+        # HARVESTED out of it afterwards, and the egress audit stream
+        # goes straight to work_dir parent-side via events_output=.
+        with anonymous_workspace() as workspace:
             child_output = workspace / "ffuf_results.json"
             config_file = (
                 workspace / "ffuf_config.toml"

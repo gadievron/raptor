@@ -7,6 +7,7 @@ from core.testing.module_bindings import patch_module_attribute
 
 
 import json
+import os
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -180,6 +181,13 @@ def test_batch_binds_anonymous_workspace_and_harvests_transcripts(
     # the run-marker name.
     assert not bound.is_relative_to(out_dir)
     assert "scan-acme-webapp-20260101" not in str(bound)
+    # ...and no framework or session marker either: the workspace is
+    # minted outside the branded raptor-<euid> temp family under the
+    # neutral `.ws-` name, so the mountinfo root field cannot even
+    # fingerprint RAPTOR.
+    assert bound.name.startswith(".ws-")
+    assert not any(p == f"raptor-{os.geteuid()}" or p.startswith("session-")
+                   for p in bound.parts)
     # The egress audit stream routes parent-side to the durable home,
     # and --audit evidence (audit JSONL, degraded marker, floor-refusal
     # records — default home `audit_run_dir or output`) must not die

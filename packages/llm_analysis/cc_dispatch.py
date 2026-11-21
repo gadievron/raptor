@@ -12,7 +12,6 @@ import copy
 import logging
 import re
 import subprocess
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -163,16 +162,18 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
         # run dir name carries run/project markers and the mountinfo
         # root field re-leaks any bind source path to the child, so
         # binding out_dir let a prompt-injected child attribute the
-        # analysis run. Nothing is staged into or harvested from the
+        # analysis run. The workspace itself is minted outside the
+        # branded raptor-<euid> temp family under a neutral `.ws-`
+        # name, so the same channel cannot even fingerprint the
+        # framework. Nothing is staged into or harvested from the
         # workspace — the prompt rides stdin and the result rides
         # stdout; out_dir stays a parent-side location (write_debug,
         # and events_output= below: the egress audit stream must
         # outlive the workspace, and the sandbox persists it
         # parent-side so the run dir path never reaches the child).
-        from core.run.workdir import exec_workdir
+        from core.run.workdir import anonymous_workspace
         with system_prompt_file_for(config) as _sys_prompt_path, \
-                tempfile.TemporaryDirectory(
-                    prefix="ws-", dir=exec_workdir()) as _workspace:
+                anonymous_workspace() as _workspace:
             cmd = build_cc_command(
                 config, system_prompt_file=_sys_prompt_path,
             )
@@ -181,7 +182,8 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
                 readable_paths = [*readable_paths, str(_sys_prompt_path)]
             proc = run_untrusted_networked(
                 cmd, input=prompt, capture_output=True, text=True,
-                timeout=timeout, target=str(repo_path), output=_workspace,
+                timeout=timeout, target=str(repo_path),
+                output=str(_workspace),
                 # mint_aws_credentials: sandboxed child — Landlock denies
                 # ~/.aws, egress denies IMDS; on IAM-role Bedrock hosts its
                 # own AWS chain is dead. The parent attaches frozen session

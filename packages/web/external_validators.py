@@ -21,7 +21,6 @@ import json
 import os
 import shutil
 import subprocess
-import tempfile
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,7 +29,7 @@ from urllib.parse import urlparse
 
 from core.atomic_fs import write_text_atomically
 from core.logging import get_logger
-from core.run.workdir import exec_workdir
+from core.run.workdir import anonymous_workspace
 from core.sandbox import run_untrusted_networked
 from core.security.redaction import redact_secrets
 from packages.web.execution_policy import WebExecutionPolicy, WebPolicyError
@@ -235,10 +234,11 @@ class ExternalValidatorRunner:
         # locations would re-leak the path through the same mountinfo
         # channel), the response store is HARVESTED out afterwards,
         # and the egress audit stream goes straight to run_dir
-        # parent-side via events_output=.
-        with tempfile.TemporaryDirectory(
-                prefix="ws-", dir=exec_workdir()) as _ws:
-            workspace = Path(_ws)
+        # parent-side via events_output=. The workspace itself is
+        # minted outside the branded raptor-<euid> temp family under a
+        # neutral `.ws-` name, so the same channels cannot even
+        # fingerprint the framework.
+        with anonymous_workspace() as workspace:
             # Targets and credential headers ride 0600 files, never
             # argv (same /proc-cmdline channel the ffuf -config TOML
             # closes).

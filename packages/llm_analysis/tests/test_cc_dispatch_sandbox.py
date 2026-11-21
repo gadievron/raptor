@@ -242,6 +242,16 @@ def test_invoke_cc_simple_binds_anonymous_workspace_not_out_dir(tmp_path):
     assert not workspace.is_relative_to(out_dir)
     assert "run-marker-out" not in str(workspace)
 
+    # ...and no framework or session marker either: the workspace is
+    # minted outside the branded raptor-<euid> temp family under the
+    # neutral `.ws-` name, so the mountinfo root field cannot even
+    # fingerprint RAPTOR to a prompt-injected child.
+    assert workspace.name.startswith(".ws-")
+    assert not any(
+        p == f"raptor-{os.geteuid()}" or p.startswith("session-")
+        for p in workspace.parts
+    )
+
     # The scanned repo stays the read-only target.
     assert kwargs["target"] == str(repo)
 
