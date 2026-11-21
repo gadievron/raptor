@@ -42,6 +42,64 @@ def test_may_suppress_is_safe_by_default_for_everything():
         assert verdict_from_classification(v).may_suppress() is False, v
 
 
+class TestFridaWitnessStructuralPin:
+    """Dynamic evidence proves presence, never absence: a frida witness
+    may promote (refute a dead-code dismissal) but never suppress.
+    Two directions, plus the import-time pin that keeps the rule true
+    for any future VERDICTS entry."""
+
+    def test_frida_witnesses_are_reachable_promote_witnesses(self):
+        for v in ("frida_runtime_trace", "frida_call_edge"):
+            verdict = verdict_from_classification(v)
+            assert verdict.status is Reachability.REACHABLE, v
+            assert verdict.witness.soundness is Soundness.SOUND, v
+
+    def test_frida_witnesses_never_suppress_even_if_corpus_earned(self):
+        # Direction two: even handed the full corpus-earned set — and
+        # even a hostile set naming the frida kinds themselves — the
+        # chokepoint refuses: may_suppress requires UNREACHABLE, and
+        # no frida witness can carry that status.
+        hostile_earned = _EARNED | {
+            WitnessKind.FRIDA_RUNTIME_TRACE, WitnessKind.FRIDA_CALL_EDGE,
+        }
+        for v in ("frida_runtime_trace", "frida_call_edge"):
+            verdict = verdict_from_classification(v)
+            assert verdict.may_suppress(frozenset(hostile_earned)) is False, v
+
+    def test_frida_kinds_excluded_from_suppressible_set(self):
+        assert WitnessKind.FRIDA_RUNTIME_TRACE not in (
+            STRUCTURALLY_SUPPRESSIBLE_KINDS)
+        assert WitnessKind.FRIDA_CALL_EDGE not in (
+            STRUCTURALLY_SUPPRESSIBLE_KINDS)
+
+    @pytest.mark.parametrize(
+        ("status", "earns", "match"),
+        [(Reachability.UNREACHABLE, False, "never absence"),
+         (Reachability.UNCERTAIN, False, "never absence"),
+         (Reachability.REACHABLE, True, "must not earn")],
+    )
+    def test_import_pin_rejects_refuter_shaped_frida_entries(
+            self, status, earns, match):
+        # Run the module's import-time pin over a VERDICTS table
+        # carrying a rule-violating frida entry: a non-REACHABLE
+        # status or a suppression-earning flag must raise. (REACHABLE
+        # + earns_suppression=True is included: "reachable yet
+        # suppressing" is exactly the shape the pin must refuse.)
+        import core.analysis.reach_witness as rw
+
+        bad = dict(rw.VERDICTS)
+        bad["frida_bogus"] = rw.VerdictSpec(
+            status, WitnessKind.FRIDA_RUNTIME_TRACE, Soundness.SOUND,
+            earns_suppression=earns, summary="rule-violating test entry")
+        with pytest.raises(AssertionError, match=match):
+            rw._pin_frida_witness_invariants(bad)
+
+    def test_import_pin_accepts_the_shipped_table(self):
+        import core.analysis.reach_witness as rw
+
+        rw._pin_frida_witness_invariants(rw.VERDICTS)
+
+
 def test_binary_oracle_absent_witness_resolves_end_to_end():
     """Full-tier absence remains visible without proving source deadness.
 

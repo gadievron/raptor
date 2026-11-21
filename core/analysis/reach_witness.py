@@ -313,6 +313,34 @@ VERDICTS: dict[str, VerdictSpec] = {
 
 _UNCERTAIN_SPEC = VERDICTS["uncertain"]
 
+def _pin_frida_witness_invariants(verdicts: dict[str, VerdictSpec]) -> None:
+    """Structural pin — dynamic evidence proves presence, never absence.
+
+    A frida witness is an executed-at-runtime observation, so the only
+    verdicts it can ever carry are positive-reachability promote
+    witnesses: REACHABLE (refuting a dead-code dismissal is their one
+    refuting use), and never suppression-earning (a reachable function
+    may still be vulnerable — and an UNOBSERVED function proves nothing
+    under observation-window bias, so no frida kind may back an
+    UNREACHABLE/suppressing verdict). Called at import time, so a
+    future VERDICTS edit violating the rule fails the whole module,
+    not one consumer.
+    """
+    for verdict, spec in verdicts.items():
+        if spec.kind.value.startswith("frida"):
+            if spec.status is not Reachability.REACHABLE:
+                msg = (f"frida witness {verdict!r} must be REACHABLE: "
+                       "dynamic evidence proves presence, never absence")
+                raise AssertionError(msg)
+            if spec.earns_suppression:
+                msg = (f"frida witness {verdict!r} must not earn "
+                       "suppression: a runtime observation can refute a "
+                       "dead-code dismissal, never suppress a finding")
+                raise AssertionError(msg)
+
+
+_pin_frida_witness_invariants(VERDICTS)
+
 # Derived: the witness kinds that CAN earn suppression (membership necessary,
 # not sufficient — ``may_suppress`` still requires the corpus-earned set).
 STRUCTURALLY_SUPPRESSIBLE_KINDS = frozenset(
