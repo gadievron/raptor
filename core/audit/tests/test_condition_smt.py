@@ -2132,6 +2132,40 @@ class TestSizeExpressionParser:
         assert _parse_size_expr(str(1 << 64)) is None
         assert _parse_size_expr(str((1 << 64) - 1)) is not None
 
+    def test_deep_nesting_declines_without_recursion_error(self):
+        # The parser runs in the audit process itself; a hostile repo's
+        # "((((…n…))))" must be declined by the token budget BEFORE the
+        # recursive descent, never crash the audit with RecursionError.
+        from core.audit.condition_smt import _parse_size_expr
+        deep = "(" * 5000 + "n" + ")" * 5000
+        assert _parse_size_expr(deep) is None
+
+    def test_token_budget_boundary(self):
+        from core.audit.condition_smt import (
+            _SIZE_EXPR_MAX_TOKENS,
+            _parse_size_expr,
+        )
+        depth_in = (_SIZE_EXPR_MAX_TOKENS - 1) // 2
+        within = "(" * depth_in + "n" + ")" * depth_in
+        over = "(" * (depth_in + 1) + "n" + ")" * (depth_in + 1)
+        assert _parse_size_expr(within) == ("var", "n")
+        assert _parse_size_expr(over) is None
+
+    def test_hostile_sizeof_interior_declines(self):
+        # The normalised sizeof text becomes witness keys and verdict
+        # reasoning — control bytes and shell metacharacters from a
+        # hostile repo must decline the whole expression.
+        from core.audit.condition_smt import _parse_size_expr
+        assert _parse_size_expr("n * sizeof(\x1b]0;x\x07struct t)") is None
+        assert _parse_size_expr("n * sizeof($(id))") is None
+        assert _parse_size_expr("n * sizeof(a\nb)") is None
+
+    def test_benign_sizeof_interiors_still_parse(self):
+        from core.audit.condition_smt import _parse_size_expr
+        assert _parse_size_expr("n * sizeof(struct foo *)") is not None
+        assert _parse_size_expr("n * sizeof(uint64_t[4])") is not None
+        assert _parse_size_expr("n * sizeof(unsigned long long)") is not None
+
 
 class TestSinkSizeExpressions:
     """Unit contract for the raw size-expression extractor."""
@@ -2270,6 +2304,31 @@ class TestAllocWrapSourceBound:
         )
         sg = _sg("malloc", [g], sink_args=["len + hdr"])
         results = check_guard_sufficiency(sg)
+        assert results[0].feasible is False
+        assert results[0].oracle == "alloc-wrap/source-bound"
+
+    def test_exact_wrap_boundary_is_two_sided(self):
+        # The wrap question is "can the product reach 2**64": a bound
+        # admitting exactly 2**64 is a wrap (the sink receives 0), one
+        # stopping at 2**64 - 16 is a proof.  Pins the Extract-based
+        # query at its exact boundary.
+        pytest.importorskip("z3")
+        at = _guard(
+            "n >= 0 && n <= B",
+            resolvable=True, concrete_values={"B": str(1 << 60)},
+        )
+        results = check_guard_sufficiency(_sg(
+            "malloc", [at], sink_args=["n * 16"]))
+        assert results[0].feasible is True
+        assert results[0].witness is not None
+        assert (results[0].witness["n"] % (1 << 64)) * 16 >= (1 << 64)
+
+        under = _guard(
+            "n >= 0 && n <= B",
+            resolvable=True, concrete_values={"B": str((1 << 60) - 1)},
+        )
+        results = check_guard_sufficiency(_sg(
+            "malloc", [under], sink_args=["n * 16"]))
         assert results[0].feasible is False
         assert results[0].oracle == "alloc-wrap/source-bound"
 
@@ -2528,3 +2587,36 @@ class TestCopyBoundSourceBound:
             constraints[:2], g, 128, "memcpy", ["len"], ["len"],
         )
         assert bare.feasible is False
+
+
+class TestVerdictTupleFromChild:
+    """Child-JSON protocol: the optional 4th element is the oracle tag.
+
+    A malformed tag must degrade to the untagged 3-tuple with the SAME
+    verdict — never flip a verdict, never reject the whole result.
+    """
+
+    def test_tagged_tuple_round_trips(self):
+        from core.audit.condition_smt import _verdict_tuple_from_child
+        out = _verdict_tuple_from_child(
+            [True, "wrap witness", {"n": 1}, "alloc-wrap/source-bound"])
+        assert out == (
+            True, "wrap witness", {"n": 1}, "alloc-wrap/source-bound")
+
+    def test_malformed_tag_degrades_to_untagged_same_verdict(self):
+        from core.audit.condition_smt import _verdict_tuple_from_child
+        for bad_tag in (7, None, "", ["x"], {"t": 1}):
+            out = _verdict_tuple_from_child(
+                [False, "proof", None, bad_tag])
+            assert out == (False, "proof", None)
+
+    def test_wrong_arity_rejected(self):
+        from core.audit.condition_smt import _verdict_tuple_from_child
+        assert _verdict_tuple_from_child([True, "r"]) is None
+        assert _verdict_tuple_from_child(
+            [True, "r", None, "tag", "extra"]) is None
+
+    def test_non_bool_verdict_rejected_even_with_tag(self):
+        from core.audit.condition_smt import _verdict_tuple_from_child
+        assert _verdict_tuple_from_child(
+            ["yes", "r", None, "alloc-wrap/source-bound"]) is None

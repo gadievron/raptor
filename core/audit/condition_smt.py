@@ -1237,9 +1237,16 @@ _SIZE_EXPR_MAX_ATOMS = 6
 #: reasoning whenever a sizeof atom participates.
 _SIZEOF_ATOM_MAX = 1 << 32
 
+#: Token budget for the size-expression parser.  The recursive-descent
+#: parser runs in the audit process itself, so unbounded nesting from a
+#: hostile repo (``((((…n…))))``) must be declined BEFORE descent — a
+#: RecursionError here would crash the audit, not a sandboxed child.
+#: 64 tokens is far beyond any expression the atom budget could accept.
+_SIZE_EXPR_MAX_TOKENS = 64
+
 _SIZE_EXPR_TOKEN_RE = re.compile(
     r"\s*(?:"
-    r"(?P<sizeof>sizeof\s*\(\s*[^()]*?\s*\))"
+    r"(?P<sizeof>sizeof\s*\(\s*[\w \t*\[\]]*?\s*\))"
     r"|(?P<num>0[xX][0-9a-fA-F]+[uUlL]*|\d+[uUlL]*)"
     r"|(?P<ident>[A-Za-z_]\w*)"
     r"|(?P<op>[+*()])"
@@ -1255,7 +1262,10 @@ def _tokenize_size_expr(text: str) -> list[tuple[str, Any]] | None:
     and parentheses.  Anything else — casts, shifts, subtraction,
     division, calls, type words outside a sizeof — declines the whole
     expression: the wrap model must not guess at arithmetic it cannot
-    represent exactly.
+    represent exactly.  The sizeof interior admits only word characters,
+    spaces/tabs, ``*`` and ``[]`` — the normalised text becomes witness
+    keys and verdict reasoning, so control bytes from a hostile repo
+    must never pass.
     """
     tokens: list[tuple[str, Any]] = []
     pos = 0
@@ -1294,12 +1304,15 @@ def _parse_size_expr(text: str) -> tuple | None:
     AST nodes: ``("const", int)``, ``("var", name)``,
     ``("sizeof", text)``, ``("add", [nodes])``, ``("mul", [nodes])``.
     Declines (returns ``None``) on unsupported tokens, trailing input,
-    or more than ``_SIZE_EXPR_MAX_ATOMS`` atoms.
+    more than ``_SIZE_EXPR_MAX_TOKENS`` tokens (bounds parser
+    recursion), or more than ``_SIZE_EXPR_MAX_ATOMS`` atoms.
     """
     if not isinstance(text, str):
         return None
     tokens = _tokenize_size_expr(text)
     if tokens is None:
+        return None
+    if len(tokens) > _SIZE_EXPR_MAX_TOKENS:
         return None
     node, rest = _parse_size_sum(tokens)
     if node is None or rest:
