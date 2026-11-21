@@ -138,6 +138,66 @@ def test_batch_invocation_shape_and_scope(tmp_path, templates_dir, monkeypatch):
     assert all("not a refutation" in r["note"] for r in results)
 
 
+def test_batch_binds_anonymous_workspace_and_harvests_transcripts(
+    tmp_path, templates_dir, monkeypatch
+):
+    """The child's OS-level write grant must be a throwaway scratch dir
+    whose path carries no run/project marker — the mountinfo root field
+    of the writable bind, the fake-HOME path, and any run_dir-pathed
+    readable_paths file grant all re-leak their source path to the
+    sandboxed child, which talks to live, possibly hostile targets. The
+    transcript store is harvested into the durable run dir (scrubbed at
+    rest) and the workspace is gone when the batch returns."""
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _b: '/usr/bin/nuclei')
+    out_dir = tmp_path / "scan-acme-webapp-20260101"
+    out_dir.mkdir()
+    token = "tok-" + "a" * 32
+    seen: dict = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["kwargs"] = kwargs
+        seen["targets_path"] = Path(cmd[cmd.index("-l") + 1])
+        store = Path(cmd[cmd.index("-srd") + 1])
+        host_dir = store / "example.test"
+        host_dir.mkdir(parents=True)
+        (host_dir / "req1.txt").write_text(
+            f"GET /a HTTP/1.1\nAuthorization: Bearer {token}\n\n",
+            encoding="utf-8",
+        )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        "packages.web.external_validators.run_untrusted_networked", fake_run
+    )
+
+    _runner(out_dir, templates_dir).run(
+        [_finding("https://example.test/a")], ["nuclei"]
+    )
+
+    run_dir = out_dir / "external-validators"
+    bound = Path(seen["kwargs"]["output"])
+    # The write grant lies outside the run dir and carries no trace of
+    # the run-marker name.
+    assert not bound.is_relative_to(out_dir)
+    assert "scan-acme-webapp-20260101" not in str(bound)
+    # The egress audit stream routes parent-side to the durable home.
+    assert seen["kwargs"]["events_output"] == str(run_dir)
+    # Staged child inputs live inside the workspace, not behind a
+    # run_dir-pathed readable_paths grant.
+    assert seen["targets_path"].is_relative_to(bound)
+    assert seen["kwargs"]["readable_paths"] == [str(templates_dir.resolve())]
+    # The workspace was torn down with the run...
+    assert not bound.exists()
+    # ...after the transcript store was harvested to its stable home,
+    # scrubbed at rest.
+    harvested = run_dir / "nuclei-responses" / "example.test" / "req1.txt"
+    assert harvested.is_file()
+    assert harvested.stat().st_mode & 0o777 == 0o600
+    text = harvested.read_text(encoding="utf-8")
+    assert token not in text
+    assert "Bearer [REDACTED]" in text
+
+
 def test_loopback_target_skips_lna(tmp_path, templates_dir, monkeypatch):
     patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _b: '/usr/bin/nuclei')
     seen: dict = {}

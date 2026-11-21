@@ -21,6 +21,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,9 +30,11 @@ from urllib.parse import urlparse
 
 from core.atomic_fs import write_text_atomically
 from core.logging import get_logger
+from core.run.workdir import exec_workdir
 from core.sandbox import run_untrusted_networked
 from core.security.redaction import redact_secrets
 from packages.web.execution_policy import WebExecutionPolicy, WebPolicyError
+from packages.web.harvest import harvest_regular_file, harvest_tree
 from packages.web.models import WebFinding
 from packages.web.tool_adapters import web_tool_adapter
 
@@ -216,103 +219,143 @@ class ExternalValidatorRunner:
         run_dir.mkdir(parents=True, exist_ok=True)
         suffix = f"-{label}" if label else ""
 
-        # Targets and credential headers ride 0600 files, never argv
-        # (same /proc-cmdline channel the ffuf -config TOML closes).
-        targets_file = self._write_private(
-            run_dir / f"nuclei-targets{suffix}.txt", "\n".join(targets) + "\n"
-        )
-        headers_file: Path | None = None
-        if config.headers:
-            headers_file = self._write_private(
-                run_dir / f"nuclei-headers{suffix}.txt",
-                "\n".join(config.headers) + "\n",
-            )
-
-        tags = sorted({tag for tagset in targets.values() for tag in tagset if tag})
-        cmd = [
-            binary_path,
-            "-l", str(targets_file),
-            "-t", str(templates_dir),
-            # Supply-chain / posture hard defaults. -dut (disallow
-            # unsigned) is deliberately NOT passed: the pinned dir is
-            # the operator's provenance gate, and RAPTOR-authored
-            # replay templates are unsigned by construction.
-            "-duc",
-            "-ni",
-            "-silent",
-            "-jsonl",
-            "-no-color",
-            "-severity", config.severity,
-            "-rl", str(config.rate_limit),
-            "-c", str(config.concurrency),
-            "-bs", str(config.bulk_size),
-            "-timeout", str(config.timeout),
-            "-retries", str(config.retries),
-        ]
-        if tags:
-            cmd.extend(["-tags", ",".join(tags)])
-        if headers_file is not None:
-            cmd.extend(["-H", str(headers_file)])
-        responses_dir: Path | None = None
-        if config.store_responses:
-            # Full request/response transcripts: the
-            # evidence-or-it-didn't-happen artifact class.
-            responses_dir = run_dir / f"nuclei-responses{suffix}"
-            cmd.extend(["-sresp", "-srd", str(responses_dir)])
-        if restrict_local:
-            # Keep templates from pivoting into RFC1918 space — only
-            # for batches whose targets are not themselves private
-            # (lab scans run in the no-restriction batch).
-            cmd.append("-lna")
-
-        proxy_hosts = sorted({
-            (urlparse(url).hostname or "").lower() for url in targets
-        } - {""})
-        logger.info(
-            "Running external validator nuclei against %d target(s), tags=%s",
-            len(targets), ",".join(tags) or "-",
-        )
-
         stdout = ""
         stderr = ""
         returncode: int | None = None
         timed_out = False
-        try:
-            completed = run_untrusted_networked(
-                cmd,
-                output=str(run_dir),
-                readable_paths=[str(templates_dir), str(targets_file)]
-                + ([str(headers_file)] if headers_file else []),
-                proxy_hosts=proxy_hosts,
-                fake_home=True,
-                tool_paths=[str(Path(binary_path).parent)],
-                caller_label="web-validator-nuclei",
-                timeout=config.max_runtime,
-                capture_output=True,
-                text=True,
+        # Anonymous workspace: the child's OS-level write grant is a
+        # fresh throwaway scratch dir, never run_dir. run_dir's path
+        # carries the run/project marker name, and both the mountinfo
+        # root field of the writable bind and the fake-HOME path in
+        # the child's environment re-leak the bind source path —
+        # nuclei talks to live, possibly hostile targets, and a
+        # fingerprinting target could attribute the analysis run from
+        # either. The targets/headers files are STAGED into the
+        # workspace (a readable_paths grant on their old run_dir
+        # locations would re-leak the path through the same mountinfo
+        # channel), the response store is HARVESTED out afterwards,
+        # and the egress audit stream goes straight to run_dir
+        # parent-side via events_output=.
+        with tempfile.TemporaryDirectory(
+                prefix="ws-", dir=exec_workdir()) as _ws:
+            workspace = Path(_ws)
+            # Targets and credential headers ride 0600 files, never
+            # argv (same /proc-cmdline channel the ffuf -config TOML
+            # closes).
+            targets_file = self._write_private(
+                workspace / f"nuclei-targets{suffix}.txt",
+                "\n".join(targets) + "\n",
             )
-            returncode = completed.returncode
-            stdout = completed.stdout or ""
-            stderr = completed.stderr or ""
-        except subprocess.TimeoutExpired as exc:
-            timed_out = True
-            stdout = self._as_text(exc.stdout)
-            stderr = self._as_text(exc.stderr)
-            logger.warning(
-                "nuclei exceeded max runtime %ds; keeping partial output",
-                config.max_runtime,
+            headers_file: Path | None = None
+            if config.headers:
+                headers_file = self._write_private(
+                    workspace / f"nuclei-headers{suffix}.txt",
+                    "\n".join(config.headers) + "\n",
+                )
+
+            tags = sorted({
+                tag for tagset in targets.values() for tag in tagset if tag
+            })
+            cmd = [
+                binary_path,
+                "-l", str(targets_file),
+                "-t", str(templates_dir),
+                # Supply-chain / posture hard defaults. -dut (disallow
+                # unsigned) is deliberately NOT passed: the pinned dir is
+                # the operator's provenance gate, and RAPTOR-authored
+                # replay templates are unsigned by construction.
+                "-duc",
+                "-ni",
+                "-silent",
+                "-jsonl",
+                "-no-color",
+                "-severity", config.severity,
+                "-rl", str(config.rate_limit),
+                "-c", str(config.concurrency),
+                "-bs", str(config.bulk_size),
+                "-timeout", str(config.timeout),
+                "-retries", str(config.retries),
+            ]
+            if tags:
+                cmd.extend(["-tags", ",".join(tags)])
+            if headers_file is not None:
+                cmd.extend(["-H", str(headers_file)])
+            responses_dir: Path | None = None
+            if config.store_responses:
+                # Full request/response transcripts: the
+                # evidence-or-it-didn't-happen artifact class.
+                responses_dir = workspace / f"nuclei-responses{suffix}"
+                cmd.extend(["-sresp", "-srd", str(responses_dir)])
+            if restrict_local:
+                # Keep templates from pivoting into RFC1918 space — only
+                # for batches whose targets are not themselves private
+                # (lab scans run in the no-restriction batch).
+                cmd.append("-lna")
+
+            proxy_hosts = sorted({
+                (urlparse(url).hostname or "").lower() for url in targets
+            } - {""})
+            logger.info(
+                "Running external validator nuclei against %d target(s), "
+                "tags=%s",
+                len(targets), ",".join(tags) or "-",
             )
-        finally:
-            if headers_file is not None and not self.reveal_secrets:
-                headers_file.unlink(missing_ok=True)
-            # The stored transcripts dump the FULL sent request — the
-            # -H credential headers included — at default permissions.
-            # Every other channel is redacted under reveal_secrets=False
-            # (headers file 0600+unlinked, stdout/stderr redacted);
-            # leaving the operator's bearer token cleartext in shared
-            # scan artifacts would make that guarantee theater.
-            if responses_dir is not None and not self.reveal_secrets:
-                self._scrub_response_store(responses_dir)
+
+            try:
+                completed = run_untrusted_networked(
+                    cmd,
+                    # Throwaway write grant (see the workspace comment
+                    # above) — never run_dir.
+                    output=str(workspace),
+                    # Durable home for proxy-events.jsonl + its MAC'd
+                    # count sidecar. Parent-side only; left defaulting
+                    # to output=, the egress audit record would be
+                    # destroyed with the workspace.
+                    events_output=str(run_dir),
+                    readable_paths=[str(templates_dir)],
+                    proxy_hosts=proxy_hosts,
+                    fake_home=True,
+                    tool_paths=[str(Path(binary_path).parent)],
+                    caller_label="web-validator-nuclei",
+                    timeout=config.max_runtime,
+                    capture_output=True,
+                    text=True,
+                )
+                returncode = completed.returncode
+                stdout = completed.stdout or ""
+                stderr = completed.stderr or ""
+            except subprocess.TimeoutExpired as exc:
+                timed_out = True
+                stdout = self._as_text(exc.stdout)
+                stderr = self._as_text(exc.stderr)
+                logger.warning(
+                    "nuclei exceeded max runtime %ds; keeping partial output",
+                    config.max_runtime,
+                )
+            finally:
+                # Credentials do not persist at rest beyond the run —
+                # the workspace teardown destroys the headers file on
+                # every exit path. reveal_secrets keeps a debugging
+                # copy, which must survive the teardown.
+                if headers_file is not None and self.reveal_secrets:
+                    harvest_regular_file(
+                        headers_file, run_dir / headers_file.name,
+                    )
+                # Carry the transcripts out of the workspace on every
+                # exit path — evidence-or-it-didn't-happen — then
+                # scrub the kept copies. The stored transcripts dump
+                # the FULL sent request — the -H credential headers
+                # included — and every other channel is redacted
+                # under reveal_secrets=False (headers file destroyed
+                # with the workspace, stdout/stderr redacted);
+                # leaving the operator's bearer token cleartext in
+                # shared scan artifacts would make that guarantee
+                # theater.
+                if responses_dir is not None:
+                    kept_responses = run_dir / responses_dir.name
+                    harvest_tree(responses_dir, kept_responses)
+                    if not self.reveal_secrets:
+                        self._scrub_response_store(kept_responses)
 
         output_file = run_dir / f"nuclei-results{suffix}.jsonl"
         # Atomic write (planted-symlink defence at the predictable
