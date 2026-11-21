@@ -782,7 +782,18 @@ class DatabaseManager:
         return self.db_root / repo_hash / f"{language}-metadata.json"
 
     def load_metadata(self, repo_hash: str, language: str) -> DatabaseMetadata | None:
-        """Load database metadata from disk."""
+        """Load database metadata from disk.
+
+        Authentication: the sidecar steers the serve decision, the
+        extraction-mode contract and both eviction legs, so it must
+        verify against this install's MAC key before any field is
+        trusted (``packages.codeql.cache_integrity``). The slot name
+        is derived from THIS lookup's arguments — a validly-stamped
+        sidecar copied over another slot's filename fails here.
+        Verification failure is the miss path (None): consumers demote
+        exactly as they do for missing metadata, and legacy unstamped
+        sidecars rebuild once and re-stamp.
+        """
         metadata_path = self.get_metadata_path(repo_hash, language)
         if not metadata_path.exists():
             return None
@@ -790,6 +801,16 @@ class DatabaseManager:
         data = load_json(metadata_path)
         if data is None:
             return None
+        from packages.codeql import cache_integrity
+        if not cache_integrity.verify_entry(f"{repo_hash}/{language}", data):
+            logger.warning(
+                "Cached %s metadata for %s failed integrity verification "
+                "(unstamped, tampered, or copied from another slot) — "
+                "treating as a cache miss; the database will be rebuilt "
+                "and re-stamped", language, repo_hash,
+            )
+            return None
+        data.pop(cache_integrity.TOKEN_KEY, None)
         try:
             if not isinstance(data, dict) or type(data.get("success")) is not bool:
                 raise ValueError("database success metadata must be Boolean")
@@ -799,12 +820,19 @@ class DatabaseManager:
             return None
 
     def save_metadata(self, metadata: DatabaseMetadata) -> None:
-        """Save database metadata to disk."""
+        """Save database metadata to disk, stamped with the cache
+        integrity token (``packages.codeql.cache_integrity``) so
+        readers can verify it before trusting it. With an unusable
+        key the sidecar persists unstamped — readers then miss and
+        rebuild, the honest degradation."""
         metadata_path = Path(metadata.database_path).parent / f"{metadata.language}-metadata.json"
         metadata_path.parent.mkdir(parents=True, exist_ok=True)
 
+        from packages.codeql import cache_integrity
+        entry = cache_integrity.stamp(
+            f"{metadata.repo_hash}/{metadata.language}", metadata.to_dict())
         try:
-            save_json(metadata_path, metadata.to_dict())
+            save_json(metadata_path, entry)
         except Exception as e:  # noqa: BLE001 — best-effort; never fail the run
             logger.error("Failed to save metadata: %s", e)
 

@@ -822,8 +822,11 @@ def _plant_cached_db(db_manager, repo, language, build_system_value):
         "file_count": 1, "duration_seconds": 1.0,
         "database_path": str(db),
     }
+    # Planted sidecars must carry the writer's integrity stamp or the
+    # reader (load_metadata) treats them as forged and misses.
+    from packages.codeql import cache_integrity
     db_manager.get_metadata_path(repo_hash, language).write_text(
-        json.dumps(meta),
+        json.dumps(cache_integrity.stamp(f"{repo_hash}/{language}", meta)),
     )
     return db
 

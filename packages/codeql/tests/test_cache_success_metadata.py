@@ -38,7 +38,11 @@ def test_cache_reuse_requires_boolean_success_sidecar(tmp_path, success, accepte
         'success': success, 'duration_seconds': 0.1, 'errors': [],
         'database_path': str(database),
     }
-    sidecar.write_text(json.dumps(data))
+    # Stamp every variant: the Boolean-success gate under test must be
+    # the discriminator, not the (separate) integrity-verification gate.
+    from packages.codeql import cache_integrity
+    sidecar.write_text(
+        json.dumps(cache_integrity.stamp(f'{repo_hash}/python', data)))
     original = sidecar.read_bytes()
     assert manager.validate_database(database)
 
