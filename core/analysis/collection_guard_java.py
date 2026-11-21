@@ -629,6 +629,17 @@ def _literals_clear_danger(elems: list[str], cwe: str) -> str | None:
     classes = sink_classes_for_cwe(cwe)
     if not classes:
         return None
+    for lit in elems:
+        if not lit.isascii():
+            # The danger models are ASCII-only, so clearance can only
+            # speak for ASCII literals: fullwidth ．．／ carries no
+            # ASCII danger char yet NFKC-folds to ../ in a downstream
+            # normalising consumer (the smt_barrier charset lane
+            # refuses the same family).
+            logger.debug(
+                "collection guard: literal %r is outside the ASCII "
+                "danger model — guard unproven", lit)
+            return None
     for sink_class in classes:
         danger = danger_chars_for(sink_class)
         if danger is None:

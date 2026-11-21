@@ -350,6 +350,26 @@ class TestDangerModels:
                    + "        open(x);\n")
         assert collection_guard_reason(src, 5, "x", "CWE-22") is None
 
+    def test_confusable_nonascii_literal_refuses_pathtrav(self):
+        # Fullwidth ．．／ carries no ASCII danger char but NFKC-folds
+        # to ../ in a normalising consumer; the ASCII-only danger
+        # model cannot clear it (same family the smt_barrier charset
+        # lane refuses).
+        src = _src("        java.util.List<String> allowed = "
+                   'java.util.Arrays.asList("．．／", "c");\n'
+                   + "        if (!allowed.contains(x)) { return; }\n"
+                   + "        open(x);\n")
+        assert collection_guard_reason(src, 5, "x", "CWE-22") is None
+
+    def test_any_nonascii_literal_refuses(self):
+        # The refusal is per-alphabet, not per-known-confusable: the
+        # danger model only speaks for ASCII.
+        src = _src("        java.util.List<String> allowed = "
+                   'java.util.Arrays.asList("café", "c");\n'
+                   + "        if (!allowed.contains(x)) { return; }\n"
+                   + "        open(x);\n")
+        assert collection_guard_reason(src, 5, "x", "CWE-22") is None
+
     def test_unknown_cwe_refuses(self):
         src = _src(_ALLOWED
                    + "        if (!allowed.contains(x)) { return; }\n"
