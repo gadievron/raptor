@@ -185,6 +185,23 @@ def test_negative_checks_do_not_erase_conflicting_confirmation(study_case):
     assert event["prior_evidence_tool"] == "frida:sanitizer-crash"
 
 
+def test_detection_grade_frida_prior_cannot_hold_claims(study_case):
+    # Negative twin of the conflicting-confirmation test above: a bare
+    # frida:runtime receipt is a detection-role presence observation,
+    # not an attributed execution fact, so it carries no verification
+    # weight — complete scoped refutations withdraw the concern exactly
+    # as if no dynamic evidence existed.
+    case = study_case
+    case["prior"].evidence_tool = "frida:runtime"
+    candidate = _candidate(claim_refutations=_refutations(case))
+    _reassess(case, candidate)
+    result = case["result"]
+    assert result.outcomes == [candidate]
+    assert result.clean == 1 and result.suspicious == 0
+    assert not [e for e in load_audit_log(case["config"].out_dir)
+                if e.get("action") == "study_reassessment"]
+
+
 def test_assessment_write_failure_preserves_prior_and_spend(study_case, monkeypatch, caplog):
     def fail_write(*args, **kwargs):
         raise OSError("scripted assessment write failure")

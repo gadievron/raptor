@@ -269,22 +269,22 @@ def verify_patch(
                      if confidence == "site" else "")
                   + " and did not fire post-patch with the same input")
 
+    # Evidence grade in the shared evidence_grade vocabulary.
+    # "still_fires" is an unattributed sink-watch presence fact —
+    # exactly the registered frida:sink-observed detection spelling,
+    # so the stamp is minted and its role read live from the registry.
+    # "closed" rests on an ABSENCE observation (the sink did not fire
+    # post-patch): there is no spelling for absence, so it carries the
+    # detection role with no receipt stamp. Either way the report is
+    # corroboration for a patch review, never a proof-grade verdict —
+    # dynamic evidence proves presence, never absence, so no
+    # patch-oracle report may refute (or confirm the fix of) a finding
+    # on its own. "inconclusive" carries no role at all: nothing was
+    # demonstrated.
     report = {
         "verdict": verdict,
         "confidence": confidence,
         "reason": reason,
-        # Evidence role in the shared evidence_grade vocabulary.
-        # "closed" rests on an ABSENCE observation (the sink did not
-        # fire post-patch) and "still_fires" is an unattributed
-        # sink-watch presence fact, so both are detection role:
-        # corroboration for a patch review, never a proof-grade
-        # verdict — dynamic evidence proves presence, never absence,
-        # so no patch-oracle report may refute (or confirm the fix
-        # of) a finding on its own. "inconclusive" carries no role
-        # at all: nothing was demonstrated.
-        "evidence_role": ("detection"
-                          if verdict in ("closed", "still_fires")
-                          else None),
         "sinks": list(sinks),
         "poc": str(poc) if poc is not None else None,
         "finding_location": (
@@ -293,6 +293,15 @@ def verify_patch(
         "before": sides["before"],
         "after": sides["after"],
     }
+    if verdict == "still_fires":
+        from core.audit.evidence_grade import registered_spelling_role
+        report["receipt_stamp"] = "frida:sink-observed"
+        report["evidence_role"] = registered_spelling_role(
+            report["receipt_stamp"])
+    else:
+        report["receipt_stamp"] = None
+        report["evidence_role"] = ("detection" if verdict == "closed"
+                                   else None)
     report_path = out_dir / "patch-verify.json"
     report_path.write_text(json.dumps(report, indent=2) + "\n",
                            encoding="utf-8")

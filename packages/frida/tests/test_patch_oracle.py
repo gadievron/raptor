@@ -104,11 +104,16 @@ class TestVerdicts:
     def test_report_evidence_role_is_detection_or_none(
             self, tmp_path, binaries, monkeypatch):
         """Grade discipline (shared evidence_grade vocabulary):
-        "closed" rests on an absence observation and "still_fires" on
-        unattributed sink-watch presence — both detection role, never
-        a proof-grade verdict a consumer could convict or refute on
-        alone. "inconclusive" demonstrated nothing and carries no
-        role at all."""
+        "still_fires" is unattributed sink-watch presence — the
+        registered frida:sink-observed detection spelling, role read
+        live from the registry. "closed" rests on an absence
+        observation: detection role, no receipt stamp (absence is
+        unrepresentable). "inconclusive" demonstrated nothing and
+        carries no role at all. None may ever claim verification
+        grade — a patch-oracle report must never serve as a
+        proof-grade refuter (or confirmer) of a finding."""
+        from core.audit import evidence_grade as eg
+
         before, after = binaries
         cases = {
             "closed": {"before": [_sink_event("system", before.name)],
@@ -123,9 +128,17 @@ class TestVerdicts:
             report = verify_patch(before, after, ["system"],
                                   tmp_path / f"out{i}")
             assert report["verdict"] == verdict
-            expected = ("detection"
-                        if verdict in ("closed", "still_fires") else None)
-            assert report["evidence_role"] == expected, verdict
+            if verdict == "still_fires":
+                assert report["receipt_stamp"] == "frida:sink-observed"
+                assert report["evidence_role"] == (
+                    eg.registered_spelling_role(report["receipt_stamp"]))
+                assert report["evidence_role"] == "detection"
+            elif verdict == "closed":
+                assert report["receipt_stamp"] is None
+                assert report["evidence_role"] == "detection"
+            else:
+                assert report["receipt_stamp"] is None
+                assert report["evidence_role"] is None
             # Structural: no verdict may ever claim verification grade
             # — a "closed" patch-oracle verdict is an absence claim
             # and must never serve as a proof-grade refuter.

@@ -215,7 +215,7 @@ libexec/raptor-audit record --out "$OUTPUT_DIR" --file <file> --function <name> 
 libexec/raptor-audit record --out "$OUTPUT_DIR" --file <file> --function <name> --status finding --hypothesis "testable claim" --evidence-tool semgrep --vuln-type buffer_overflow --body "what was tested and tool output"
 ```
 
-Line numbers auto-resolve from the checklist. `--evidence-tool`: semgrep|coccinelle|codeql|smt|compilation|compiler|joern|symbolic|dark_verify:confirmed|dark_verify:refuted|dynamic:crash|dynamic:sanitizer|frida:token-at-sink|frida:sanitizer-crash|frida:exec-load (attributed execution facts only — bare `frida:runtime` observation is detection-grade corroboration and cannot back a finding; use `--status suspicious`). `--vuln-type`: sql_injection|buffer_overflow|path_traversal|xss|command_injection|use_after_free|etc.
+Line numbers auto-resolve from the checklist. `--evidence-tool`: semgrep|coccinelle|codeql|compilation|compiler|joern|symbolic|dark_verify:sanitizer-violation|differential:confirmed|differential:relation-violation|dynamic:crash|dynamic:sanitizer|frida:token-at-sink|frida:sanitizer-crash|frida:exec-load (attributed execution facts only — bare `frida:runtime` observation is detection-grade corroboration and cannot back a finding; use `--status suspicious`). `--vuln-type`: sql_injection|buffer_overflow|path_traversal|xss|command_injection|use_after_free|etc.
 
 ## Automatic /validate post-pass
 

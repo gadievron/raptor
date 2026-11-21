@@ -89,6 +89,23 @@ class TestCorrelateRun:
         assert "receipt_stamp" not in manifest
         assert "evidence_role" not in manifest
 
+    def test_non_sink_category_reflection_mints_nothing(self, tmp_path):
+        # Ingest bytes echoed through a non-sink instrumentation
+        # family (heap trace, api trace, logging) are reflection, not
+        # flow-into-a-sink: no match, no manifest, and above all no
+        # verification-grade receipt.
+        _write(tmp_path, [
+            _event(1.0, _ingest(b"GET /run?cmd=sentinel-token-xyz&x=1")),
+            _event(2.0, {"category": "heap", "fn": "malloc_log",
+                         "args": {"note": "alloc for sentinel-token-xyz"},
+                         "tid": 1}),
+        ])
+        manifest = correlate_run(tmp_path)
+        assert manifest["match_count"] == 0
+        assert "receipt_stamp" not in manifest
+        assert "evidence_role" not in manifest
+        assert not (tmp_path / "io-correlation.json").exists()
+
     def test_short_overlaps_do_not_match(self, tmp_path):
         # Sub-threshold shared substrings are coincidence.
         _write(tmp_path, [

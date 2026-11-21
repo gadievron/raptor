@@ -477,7 +477,7 @@ def cmd_record(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
-        # Namespaced tools (dynamic:crash, frida:runtime, dark_verify:*)
+        # Namespaced tools (dynamic:crash, frida:token-at-sink, dark_verify:*)
         # are stored in VALID_EVIDENCE_TOOLS under their full
         # colon-qualified names — only bare tools (semgrep, smt, ...)
         # appear as base names. Membership must therefore accept the

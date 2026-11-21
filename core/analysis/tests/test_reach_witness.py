@@ -94,6 +94,21 @@ class TestFridaWitnessStructuralPin:
         with pytest.raises(AssertionError, match=match):
             rw._pin_frida_witness_invariants(bad)
 
+    def test_import_pin_catches_frida_named_verdict_on_foreign_kind(self):
+        # The naming-trick bypass: a verdict NAMED frida_* riding a
+        # non-frida witness kind must still be pinned — otherwise a
+        # refuter-shaped "frida_not_observed" entry could ship on a
+        # borrowed UNREACHABLE kind.
+        import core.analysis.reach_witness as rw
+
+        bad = dict(rw.VERDICTS)
+        bad["frida_not_observed"] = rw.VerdictSpec(
+            Reachability.UNREACHABLE, WitnessKind.NOT_CALLED,
+            Soundness.HEURISTIC, earns_suppression=False,
+            summary="rule-violating test entry")
+        with pytest.raises(AssertionError, match="never absence"):
+            rw._pin_frida_witness_invariants(bad)
+
     def test_import_pin_accepts_the_shipped_table(self):
         import core.analysis.reach_witness as rw
 

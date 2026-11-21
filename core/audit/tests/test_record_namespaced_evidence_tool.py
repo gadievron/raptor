@@ -146,3 +146,34 @@ def test_unknown_namespaced_tool_still_rejected(tmp_path, capsys):
     captured = capsys.readouterr()
     assert rc == 1
     assert "not a recognised tool" in captured.err
+
+
+def test_detection_grade_frida_receipt_rejected(tmp_path, capsys):
+    """Bare frida:runtime is a detection-role observation (presence
+    corroboration, not an attributed execution fact) — the G2 gate
+    must reject it even with a confirmed sweep receipt present, and
+    even though the 'frida' namespace root carries verification
+    spellings."""
+    mod = _load_cli()
+    out_dir, target = _seed_run(tmp_path, sweep_tool="frida:runtime")
+    rc = mod.cmd_record(
+        _record_args(out_dir, target, evidence_tool="frida:runtime"),
+    )
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "not a recognised tool" in captured.err
+
+
+def test_attributed_frida_receipt_records_finding(tmp_path, capsys):
+    """Positive control for the frida rejection above: an attributed
+    execution fact (verification role) passes the same gate."""
+    mod = _load_cli()
+    out_dir, target = _seed_run(tmp_path, sweep_tool="frida:token-at-sink")
+    rc = mod.cmd_record(
+        _record_args(out_dir, target, evidence_tool="frida:token-at-sink",
+                     body="ingest token observed in exec argv"),
+    )
+    captured = capsys.readouterr()
+    assert rc == 0, captured.err
+    assert "not a recognised tool" not in captured.err
+    assert "recorded: src/a.c:foo" in captured.out

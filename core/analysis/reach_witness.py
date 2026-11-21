@@ -327,7 +327,12 @@ def _pin_frida_witness_invariants(verdicts: dict[str, VerdictSpec]) -> None:
     not one consumer.
     """
     for verdict, spec in verdicts.items():
-        if spec.kind.value.startswith("frida"):
+        # Match on the verdict NAME as well as the kind value: a
+        # frida-named verdict riding a non-frida kind (e.g. a
+        # hypothetical "frida_not_observed" backed by NOT_CALLED)
+        # must not slip the pin on a naming technicality.
+        if (verdict.startswith("frida")
+                or spec.kind.value.startswith("frida")):
             if spec.status is not Reachability.REACHABLE:
                 msg = (f"frida witness {verdict!r} must be REACHABLE: "
                        "dynamic evidence proves presence, never absence")

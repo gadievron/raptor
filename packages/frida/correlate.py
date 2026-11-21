@@ -45,6 +45,16 @@ _MAX_GRAM_CHECKS = 2_000_000
 # Argument keys that are not sink-side content.
 _SKIP_KEYS = frozenset({"data_hex"})
 
+# Sink-side event families eligible for correlation: exec argv /
+# loaded-object paths (exec-and-load) and watched sink arguments
+# (sink-watch) — the families the module docstring promises. Other
+# instrumentation categories (heap, jni, raptor control events, api
+# traces) reflect ingest bytes far too readily — a logging call or an
+# echo buffer carrying the request back is not flow-into-a-sink
+# evidence, and a match there must not mint the verification-grade
+# receipt below.
+_SINK_CATEGORIES = frozenset({"exec", "load", "sink"})
+
 
 def _printable(data: bytes) -> str:
     """Lenient text view of raw payload bytes for substring matching."""
@@ -139,7 +149,7 @@ def correlate_run(run_dir: Path | str) -> dict[str, Any]:
             })
             continue
 
-        if category == "ingest" or args is None:
+        if category not in _SINK_CATEGORIES or args is None:
             continue
 
         for candidate in _iter_strings(args):
@@ -197,6 +207,11 @@ def correlate_run(run_dir: Path | str) -> dict[str, Any]:
         # a recorded finding. A match-less run writes no manifest and
         # mints no stamp: the correlation proved nothing, and there is
         # no spelling for "no flow observed" (presence, never absence).
+        # Provenance caveat: events.jsonl is emitted from inside the
+        # instrumented (untrusted) target, so the stamp attests what
+        # the session OBSERVED, not more — it must only ever reach a
+        # finding through a reviewer reading this manifest, never by
+        # automated promotion of the raw artifact.
         from core.audit.evidence_grade import registered_spelling_role
 
         manifest["receipt_stamp"] = "frida:token-at-sink"
