@@ -117,6 +117,31 @@ class TestStampAndVerifyRecords:
         feas["verdict"] = "likely_exploitable"
         assert not prov.verify_feasibility(f, tmp_path)
 
+    def test_feasibility_content_tamper_fails(self, tmp_path):
+        # chain_breaks / what_would_help drive the finalize verdict
+        # derivation downstream, so the stamp binds them through
+        # source_digest: editing the prose under a valid token must
+        # fail verification.
+        f = _finding()
+        feas = {"status": "pending",
+                "chain_breaks": ["full RELRO blocks GOT overwrite"],
+                "what_would_help": []}
+        f["feasibility"] = feas
+        prov.stamp_feasibility(f, feas, tmp_path)
+        assert prov.verify_feasibility(f, tmp_path)
+        feas["chain_breaks"].append("ASLR enabled")
+        assert not prov.verify_feasibility(f, tmp_path)
+
+    def test_feasibility_help_tamper_fails(self, tmp_path):
+        f = _finding()
+        feas = {"status": "pending", "chain_breaks": [],
+                "what_would_help": ["longer buffer"]}
+        f["feasibility"] = feas
+        prov.stamp_feasibility(f, feas, tmp_path)
+        assert prov.verify_feasibility(f, tmp_path)
+        feas["what_would_help"][0] = "arbitrary write primitive"
+        assert not prov.verify_feasibility(f, tmp_path)
+
     def test_unstamped_records_never_verify(self, tmp_path):
         f = _finding(witness_execution={"verdict": "confirmed"},
                      feasibility={"status": "analyzed", "verdict": "exploitable"})

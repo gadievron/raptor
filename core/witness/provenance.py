@@ -390,6 +390,24 @@ def witness_execution_fields(
     }
 
 
+def feasibility_source_digest(feasibility: Mapping[str, Any]) -> str:
+    """Canonical digest of the source-analysis content fields.
+
+    ``chain_breaks`` / ``what_would_help`` drive the finalize-time
+    verdict re-derivation (``_finalize_non_memory_findings``), so the
+    stamp must bind them: a validly-stamped record whose content was
+    swapped afterwards (both fields live in the file-/LLM-writable
+    findings file) must not verify and then steer a derived verdict —
+    forged non-empty ``chain_breaks`` map straight to the "unlikely"
+    -> confirmed_blocked suppression tier."""
+    from core.json.utils import dumps_canonical
+    payload = dumps_canonical({
+        "chain_breaks": feasibility.get("chain_breaks") or [],
+        "what_would_help": feasibility.get("what_would_help") or [],
+    })
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def feasibility_fields(
     finding: Mapping[str, Any],
     feasibility: Mapping[str, Any],
@@ -398,14 +416,19 @@ def feasibility_fields(
     binding: str | None = None,
 ) -> dict:
     """The exact feasibility fields consumers act on, in MAC form:
-    ``status == "analyzed"`` asserts mechanical provenance and
-    ``verdict`` is what maps to final_status / is_exploitable."""
+    ``status == "analyzed"`` asserts mechanical provenance,
+    ``verdict`` is what maps to final_status / is_exploitable, and
+    ``source_digest`` binds the source-analysis content the finalize
+    re-derivation reads. Records stamped before the digest existed
+    fail verification — fail closed: they demote to unverified and
+    the re-derivation refuses them, never verifies wrongly."""
     return {
         "kind": _FEASIBILITY_KIND,
         "run": binding if binding is not None else run_binding(run_dir),
         "status": str(feasibility.get("status") or ""),
         "verdict": str(feasibility.get("verdict") or ""),
         "binary_path": str(feasibility.get("binary_path") or ""),
+        "source_digest": feasibility_source_digest(feasibility),
         **_finding_coords(finding),
     }
 
@@ -807,8 +830,11 @@ def sanitise_findings_evidence(
             and not verify_feasibility(finding, run_dir)
         ):
             # Demote the mechanical claim; keep the LLM-tier source-
-            # analysis fields (chain_breaks / what_would_help) so the
-            # consumer re-derives instead of trusting the verdict.
+            # analysis fields (chain_breaks / what_would_help) visible
+            # as prose. They carry no derivation authority: the
+            # finalize re-derivation only derives (and stamps) a
+            # verdict from content whose record verifies — see
+            # feasibility_source_digest.
             feasibility["status"] = "pending"
             feasibility.pop("verdict", None)
             feasibility.pop("binary_analysis", None)
