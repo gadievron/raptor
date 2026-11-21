@@ -1859,20 +1859,26 @@ class TestCallSummaries:
         assert r.feasible is True
         assert r.summary_axioms == []
 
-    def test_sizeof_zero_refuted_and_core_names_axiom(self):
+    def test_sizeof_zero_demotes_and_core_names_axiom(self):
+        # ``sizeof != 0`` is assumption-tier (GNU C zero-size objects),
+        # so a refutation whose core needs it demotes to inconclusive
+        # with the assumption named (test_assumption_tier_refutations).
         r = check_path_feasibility(
             [PathCondition("sizeof(x) == 0", step_index=0)],
         )
-        assert r.feasible is False
+        assert r.feasible is None
         assert "summary: sizeof(x)" in r.unsatisfied
+        assert r.summary_axioms == ["summary: sizeof(x)"]
+        assert "summary: sizeof(x)" in r.reasoning
 
-    def test_sizeof_axiom_applies_at_signed_profile_too(self):
+    def test_sizeof_axiom_demotes_at_signed_profile_too(self):
         from core.smt_solver import BV_C_INT32
         r = check_path_feasibility(
             [PathCondition("sizeof(x) == 0", step_index=0)],
             profile=BV_C_INT32,
         )
-        assert r.feasible is False
+        assert r.feasible is None
+        assert r.summary_axioms == ["summary: sizeof(x)"]
 
     def test_abs_models_int_min_corner(self):
         # abs(INT_MIN) == INT_MIN in two's-complement practice, so a
