@@ -84,6 +84,24 @@ class TestNormalizeArchiveTarget:
         assert (_normalize_archive_target(validate_dir, str(archive))
                 == str(cache))
 
+    def test_symlinked_cache_slot_is_a_miss(self, tmp_path):
+        """A symlink planted at the predictable ``_sources/<name>-<sha>``
+        slot must not be accepted: following it would redirect the whole
+        validate run's target at a tree of the planter's choosing. The
+        probe is lstat-gated, so the link is a cache MISS and the
+        archive path passes through untouched."""
+        archive = _make_zip(tmp_path / "app.zip")
+        project_dir = tmp_path / "project"
+        validate_dir = project_dir / "validate-20260925-120000"
+        validate_dir.mkdir(parents=True)
+        decoy = tmp_path / "decoy-tree"
+        decoy.mkdir()
+        cache = _cache_dir_for(archive, project_dir / "_sources")
+        cache.rmdir()
+        cache.symlink_to(decoy, target_is_directory=True)
+        assert (_normalize_archive_target(validate_dir, str(archive))
+                == str(archive))
+
 
 class TestBridgeDiscoveryOnArchiveTargets:
     def test_project_sibling_understand_found_for_zip_target(

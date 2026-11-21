@@ -256,9 +256,13 @@ def _normalize_archive_target(
             roots.append(RaptorConfig.get_out_dir())
         except Exception:  # noqa: BLE001 — out-root probe is best-effort
             pass
+        from core.archive.cache import is_cached_extraction
         for root in roots:
             candidate = root / "_sources" / cache_name
-            if candidate.is_dir():
+            # lstat-gated probe: a follow-class is_dir() would accept a
+            # symlink planted at the predictable cache-slot name and
+            # redirect the whole validate run at the link's target.
+            if is_cached_extraction(candidate):
                 logger.debug(
                     "understand_bridge: archive target normalised to "
                     "cached extraction %s", candidate)
