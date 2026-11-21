@@ -160,15 +160,17 @@ class TestWrongBinaryCaches:
 
 
 class TestIdentityUnknown:
-    def test_identity_unknown_run_local_accepted(self, tmp_path):
-        """No recorded identity at all in the run's OWN dir: the run
-        dir is single-target by construction — historical acceptance
-        stands."""
+    def test_identity_unknown_run_local_refused_for_binary(self, tmp_path):
+        """No recorded identity at all, target a hashable binary:
+        every writer stamps when the binary is readable, so an
+        unverifiable run-local document is legacy or planted —
+        refused toward re-import (stripping the unauthenticated
+        stamp must not downgrade to acceptance)."""
         binf = _make_binary(tmp_path / "prog", b"\x7fELF")
         run = tmp_path / "run"
-        cand = _write_redb(run, None)
+        _write_redb(run, None)
 
-        assert find_redb(run, binf) == cand
+        assert find_redb(run, binf) is None
 
     def test_identity_unknown_shared_parent_skipped(self, tmp_path):
         """No recorded identity in the SHARED parent dir: exactly
@@ -197,17 +199,19 @@ class TestIdentityUnknown:
 
         assert find_redb(run, binf) is None
 
-    def test_recorded_path_gone_same_stem_run_local_accepted(
+    def test_recorded_path_gone_same_stem_run_local_refused(
         self, tmp_path,
     ):
-        """The documented moved-binary case is preserved where the
-        slot itself vouches: unknown identity in the run's OWN dir
-        keeps its acceptance."""
+        """Moved-binary caches are hash-validated nowadays (writers
+        stamp; the hash leg accepts a moved binary regardless of the
+        recorded spelling), so an UNSTAMPED same-stem document for a
+        hashable target is indistinguishable from a same-stem foreign
+        or planted cache — refused toward re-import."""
         binf = _make_binary(tmp_path / "bins" / "libbeta.so", b"\x7fELF")
         run = tmp_path / "run"
-        cand = _write_redb(run, tmp_path / "gone" / "libbeta.so")
+        _write_redb(run, tmp_path / "gone" / "libbeta.so")
 
-        assert find_redb(run, binf) == cand
+        assert find_redb(run, binf) is None
 
     def test_recorded_path_gone_different_stem_skipped(self, tmp_path):
         binf = _make_binary(tmp_path / "bins" / "libbeta.so", b"\x7fELF")
@@ -220,11 +224,30 @@ class TestIdentityUnknown:
 
     def test_directory_target_keeps_run_local_acceptance(self, tmp_path):
         """A non-file target (run dir spelling) is identity-
-        undecidable: run-local caches keep their historical
+        undecidable FROM THE TARGET SIDE — no hash to demand a stamp
+        against — so run-local caches keep their historical
         acceptance."""
         cand = _write_redb(tmp_path, Path("/x/target"))
 
         assert find_redb(tmp_path, tmp_path) == cand
+
+    def test_stripped_stamp_does_not_downgrade_to_acceptance(
+        self, tmp_path,
+    ):
+        """The stamp is plain unauthenticated JSON in the run dir:
+        deleting it from a stamped document must move the verdict
+        toward re-import, never from hash-checked to accepted."""
+        binf = _make_binary(tmp_path / "prog", b"\x7fELF-v1")
+        run = tmp_path / "run"
+        run.mkdir()
+        doc = _redb_doc(None, sha256_file(binf))
+        cand = run / "re-database.json"
+        cand.write_text(json.dumps(doc))
+        assert find_redb(run, binf) == cand
+
+        del doc["metadata"]["binary_sha256"]
+        cand.write_text(json.dumps(doc))
+        assert find_redb(run, binf) is None
 
 
 class TestBaseParity:
@@ -267,18 +290,19 @@ class TestBaseParity:
 
 
 class TestGhidraImportCache:
-    def test_stem_keyed_cache_unknown_identity_accepted(
+    def test_stem_keyed_cache_unknown_identity_refused_for_binary(
         self, tmp_path, monkeypatch,
     ):
-        """The ghidra-import cache path is derived from THIS target's
-        stem — identity-unknown there cannot be a different-stem
-        foreign cache."""
+        """The ghidra-import cache path is stem-keyed, but a stem is
+        not identity: for a hashable binary target an unverifiable
+        document is refused toward re-import like the run slot —
+        the import that writes the replacement stamps it."""
         monkeypatch.setenv("RAPTOR_DIR", str(tmp_path / "raptor"))
         binf = _make_binary(tmp_path / "bins" / "libbeta.so", b"\x7fELF")
         cache = tmp_path / "raptor" / "out" / "ghidra-import-libbeta"
-        cand = _write_redb(cache, None)
+        _write_redb(cache, None)
 
-        assert find_redb(None, binf) == cand
+        assert find_redb(None, binf) is None
 
     def test_stem_keyed_cache_wrong_binary_skipped(
         self, tmp_path, monkeypatch,
@@ -435,16 +459,18 @@ class TestWrongTypedCacheFields:
         "junk", [12345, ["a", "b"], {"x": 1}, True],
         ids=["int", "list", "dict", "bool"],
     )
-    def test_wrong_typed_binary_path_run_slot_accepted(
+    def test_wrong_typed_binary_path_run_slot_refused(
         self, tmp_path, junk,
     ):
         binf = _make_binary(tmp_path / "bins" / "prog", b"\x7fELF")
         run = tmp_path / "run"
-        cand = _write_raw(run, {"source_tool": "r2", "binary_path": junk,
-                                "functions": [], "metadata": {}})
+        _write_raw(run, {"source_tool": "r2", "binary_path": junk,
+                         "functions": [], "metadata": {}})
 
-        # Identity unknown at the run's own slot: historical accept.
-        assert find_redb(run, binf) == cand
+        # Identity unknown for a hashable binary target: refused
+        # toward re-import (never a raise) — exactly the planted-
+        # document shape.
+        assert find_redb(run, binf) is None
 
     @pytest.mark.parametrize(
         "junk", [5, [3], "zzz", {"a": {}}, [["nested"]]],

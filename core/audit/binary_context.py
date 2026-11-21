@@ -315,12 +315,20 @@ def _accept_redb(
        rebuilt in place, or a foreign cache).
     2. **Path identity** — the recorded ``binary_path`` versus the
        target (:func:`_same_recorded_binary`).
-    3. **Identity unknown** — the run's own dir (``kind="run"``) and
-       the ghidra-import cache (``kind="stem-keyed"``, its location
-       is derived from this target's stem) keep their historical
-       acceptance; the shared parent slot (``kind="shared"``) is
-       exactly where a foreign binary's cache lives and is never
-       accepted without verifiable identity.
+    3. **Identity unknown** — refused when the target is a hashable
+       regular binary: every writer stamps ``binary_sha256`` whenever
+       the binary is readable, so an unverifiable document for a
+       hashable target is legacy or planted, and the stamp is plain
+       unauthenticated JSON — stripping it must fail toward
+       re-import, never downgrade to acceptance. Only when identity
+       is unestablishable from the TARGET side (a ``.gpr`` target,
+       whose binary hash cannot be compared, or a non-file target)
+       do the run dir (``kind="run"``) and the ghidra-import cache
+       (``kind="stem-keyed"``, its location is derived from this
+       target's stem) keep their historical acceptance; the shared
+       parent slot (``kind="shared"``) is exactly where a foreign
+       binary's cache lives and is never accepted without verifiable
+       identity.
 
     Unreadable, malformed, oversized or changing candidates cannot establish
     identity. Refuse them and continue looking; a later unchecked reload must
@@ -385,7 +393,16 @@ def _accept_redb(
                 f"({escape_nonprintable(str(recorded)[:300])})")
 
     if kind in ("run", "stem-keyed"):
-        return _accepted()
+        if target.suffix == ".gpr" or not target.is_file():
+            # Identity is unestablishable from the target side, so
+            # the slot's own provenance is the only signal available.
+            return _accepted()
+        return _skip(
+            "no verifiable binary identity for a hashable target "
+            "(writers stamp binary_sha256 whenever the binary is "
+            "readable — an unstamped document here is legacy or "
+            "planted, and a stripped stamp must fail toward "
+            "re-import, never acceptance)")
     return _skip(
         "no verifiable binary identity in a shared cache location")
 
