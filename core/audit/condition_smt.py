@@ -928,6 +928,14 @@ def check_guard_sufficiency(
 
     results: list[SmtSufficiencyResult] = []
 
+    # Which variables actually feed the sink's size argument. None =
+    # binding unknown (old extractions, unparsable call) — the checks
+    # below may still flag insufficiency but must not mint a
+    # "sufficient" proof about variables never tied to the sink.
+    size_idents = _sink_size_identifiers(
+        sink_guard.sink_api, getattr(sink_guard, "sink_args", None),
+    )
+
     for guard in sink_guard.guards:
         if not guard.resolvable or not guard.concrete_values:
             continue
@@ -958,6 +966,7 @@ def check_guard_sufficiency(
             buffer_size=buffer_size,
             sink_api=sink_guard.sink_api,
             sink_context=sink_context,
+            size_idents=size_idents,
         )
         results.append(result)
 
@@ -970,6 +979,7 @@ def _check_constraints_vs_safety(
     buffer_size: int | None,
     sink_api: str,
     sink_context: dict[str, Any] | None,
+    size_idents: list[str] | None = None,
 ) -> SmtSufficiencyResult:
     """Check if constraints are sufficient for the safety property.
 
@@ -977,7 +987,7 @@ def _check_constraints_vs_safety(
     the buffer size?
     """
     # Try Z3 first
-    z3_result = _try_z3_check(constraints, buffer_size, sink_api)
+    z3_result = _try_z3_check(constraints, buffer_size, sink_api, size_idents)
     if z3_result is not None:
         witness = z3_result[2] if len(z3_result) > 2 else None
         return SmtSufficiencyResult(
@@ -989,13 +999,15 @@ def _check_constraints_vs_safety(
         )
 
     # Fallback: simple arithmetic reasoning
-    return _arithmetic_check(constraints, guard, buffer_size, sink_api)
+    return _arithmetic_check(constraints, guard, buffer_size, sink_api,
+                             size_idents)
 
 
 def _try_z3_check(
     constraints: list[BoundsConstraint],
     buffer_size: int | None,
     sink_api: str,
+    size_idents: list[str] | None = None,
 ) -> tuple[bool | None, str, dict[str, int] | None] | None:
     """Try Z3 SMT check. Returns None if Z3 unavailable.
 
@@ -1008,6 +1020,7 @@ def _try_z3_check(
         "constraints": [asdict(c) for c in constraints],
         "buffer_size": buffer_size,
         "sink_api": sink_api,
+        "size_idents": size_idents,
     })
     return _verdict_tuple_from_child(out)
 
@@ -1092,23 +1105,92 @@ _BUFFER_COPY_SINKS = frozenset({
     "CopyMemory", "RtlCopyMemory",
 })
 
+#: Zero-based position(s) of the size argument per modelled sink. All
+#: the buffer-copy sinks above take the copy length third; calloc
+#: multiplies its first two arguments; realloc sizes with its second.
+_SIZE_ARG_POSITIONS: dict[str, tuple[int, ...]] = {
+    **{name: (2,) for name in _BUFFER_COPY_SINKS},
+    "malloc": (0,), "kmalloc": (0,), "kzalloc": (0,),
+    "calloc": (0, 1), "realloc": (1,),
+}
+
+#: Tokens in a size expression that are C vocabulary, not variables.
+_SIZE_IDENT_NOISE = frozenset({
+    "sizeof", "struct", "union", "enum", "const", "volatile",
+    "signed", "unsigned", "char", "short", "int", "long", "float",
+    "double", "void", "size_t", "ssize_t",
+    "uint8_t", "uint16_t", "uint32_t", "uint64_t",
+    "int8_t", "int16_t", "int32_t", "int64_t",
+})
+
+_SIZE_IDENT_RE = re.compile(r"[A-Za-z_]\w*")
+
+
+def _sink_size_identifiers(
+    sink_api: str,
+    sink_args: list[str] | None,
+) -> list[str] | None:
+    """Variable identifiers inside the sink call's size argument(s).
+
+    ``None`` means the binding is UNKNOWN (no captured arguments, an
+    unmodelled sink, or a call shape that doesn't match the sink's
+    arity) — a sufficiency proof must not be minted without it. An
+    empty list means the size argument(s) carry no variables at all
+    (literal sizes), which the guard model equally cannot rule on.
+    """
+    if not sink_args:
+        return None
+    api_base = (
+        sink_api.rsplit(".", maxsplit=1)[-1] if "." in sink_api
+        else sink_api
+    )
+    positions = _SIZE_ARG_POSITIONS.get(api_base)
+    if positions is None:
+        return None
+    if len(sink_args) <= max(positions):
+        return None
+    idents: list[str] = []
+    for pos in positions:
+        if not isinstance(sink_args[pos], str):
+            return None
+        expr = sink_args[pos]
+        # sizeof(...) is a compile-time constant whose tokens are type
+        # names, not runtime variables — strip innermost-first so
+        # ``n * sizeof(struct item)`` binds to ``n`` alone.
+        prev = None
+        while prev != expr:
+            prev = expr
+            expr = re.sub(r"sizeof\s*\([^()]*\)", "", expr)
+        for token in _SIZE_IDENT_RE.findall(expr):
+            if token not in _SIZE_IDENT_NOISE and token not in idents:
+                idents.append(token)
+    return idents
+
 
 def _z3_dispatch(
     constraints: list[BoundsConstraint],
     buffer_size: int | None,
     sink_api: str,
+    size_idents: list[str] | None = None,
 ) -> tuple[bool | None, str, dict[str, int] | None] | None:
     """Route to the appropriate Z3 check."""
     alloc_sinks = {
         "malloc", "calloc", "realloc", "kmalloc", "kzalloc",
     }
+    if size_idents is not None and (
+        not isinstance(size_idents, list)
+        or not all(isinstance(s, str) for s in size_idents)
+    ):
+        # The JSON child protocol carries this field — a malformed
+        # value means the binding is unknown, never a free pass.
+        size_idents = None
 
     api_base = sink_api.rsplit(".", maxsplit=1)[-1] if "." in sink_api else sink_api
 
     if api_base in _BUFFER_COPY_SINKS and buffer_size is not None:
-        return _z3_overflow_check(constraints, buffer_size)
+        return _z3_overflow_check(constraints, buffer_size, size_idents)
     if api_base in alloc_sinks:
-        return _z3_alloc_overflow_check(constraints)
+        return _z3_alloc_overflow_check(constraints, size_idents)
 
     return _z3_consistency_check(constraints)
 
@@ -1134,9 +1216,43 @@ def _bv_signed(value: int, width: int = _OVERFLOW_BV_WIDTH) -> int:
     return value
 
 
+def _size_binding_gap(
+    size_idents: list[str] | None,
+    constrained_vars: set[str],
+) -> str | None:
+    """Why an all-vars-bounded result must stay inconclusive, if at all.
+
+    Returns ``None`` when a sufficiency proof may be minted: the sink's
+    size-argument variables are known, non-empty, and every one is
+    bounded by the guard constraints. Otherwise returns the reason the
+    final "guard sufficient" must demote to inconclusive — bounding
+    variables that never reach the sink's size argument proves nothing
+    about the copied/allocated size.
+    """
+    if size_idents is None:
+        return (
+            "sink size-argument binding unknown — bounded guard "
+            "variables may be unrelated to the sink size; inconclusive"
+        )
+    if not size_idents:
+        return (
+            "sink size argument carries no bindable variables — the "
+            "guard model cannot rule on it; inconclusive"
+        )
+    missing = sorted(set(size_idents) - constrained_vars)
+    if missing:
+        return (
+            f"sink size depends on unconstrained "
+            f"{', '.join(missing)} — guard bounds do not cover the "
+            f"sink size; inconclusive"
+        )
+    return None
+
+
 def _z3_overflow_check(
     constraints: list[BoundsConstraint],
     buffer_size: int,
+    size_idents: list[str] | None = None,
 ) -> tuple[bool | None, str, dict[str, int] | None]:
     """Z3: Can length still overflow given the guard constraints?
 
@@ -1148,6 +1264,15 @@ def _z3_overflow_check(
     ``size_t``): a signed ``len = -1`` that passes ``len < 1024``
     reaches ``memcpy`` as ``SIZE_MAX``.  The previous ``z3.Int`` model
     had no wrap at all and declared such guards sufficient.
+
+    ``size_idents`` names the variables appearing in the sink's size
+    argument.  A "guard sufficient" verdict is only minted when those
+    variables are known, non-empty, and all bounded by the guard —
+    previously ``if (retries < 8) memcpy(dst, src, len)`` proved
+    "sufficient" by bounding ``retries``, a variable that never
+    reaches the copy.  ``None`` = binding unknown: insufficiency
+    (True) may still be flagged, sufficiency (False) demotes to
+    inconclusive.
     """
     if not _signed_guard_bounds_fit(constraints):
         return (None, "guard bounds do not fit the signed 64-bit model — inconclusive", None)
@@ -1186,8 +1311,12 @@ def _z3_overflow_check(
     bv_buffer = z3.BitVecVal(buffer_size, _OVERFLOW_BV_WIDTH)
 
     # Ask: can any constrained variable, as the sink's size_t argument,
-    # exceed buffer_size?
+    # exceed buffer_size?  With a known binding, only variables that
+    # actually feed the size argument can ground an insufficiency
+    # claim about this sink.
     for name, v in vars_map.items():
+        if size_idents is not None and name not in size_idents:
+            continue
         solver.push()
         solver.add(z3.UGT(v, bv_buffer))
         result = check_solver(solver)
@@ -1220,10 +1349,14 @@ def _z3_overflow_check(
             return (None, "solver returned unknown — guard sufficiency inconclusive", None)
         solver.pop()
 
+    gap = _size_binding_gap(size_idents, set(vars_map))
+    if gap is not None:
+        return (None, gap, None)
     return (
         False,
         (
-            f"guard sufficient: all constrained vars ≤ {buffer_size} "
+            f"guard sufficient: size-argument vars "
+            f"({', '.join(sorted(size_idents or []))}) all ≤ {buffer_size} "
             f"(unsigned interpretation, signed guard atoms)"
         ),
         None,
@@ -1232,6 +1365,7 @@ def _z3_overflow_check(
 
 def _z3_alloc_overflow_check(
     constraints: list[BoundsConstraint],
+    size_idents: list[str] | None = None,
 ) -> tuple[bool | None, str, dict[str, int] | None]:
     """Z3: Can an allocation size integer-overflow given the constraints?
 
@@ -1242,6 +1376,14 @@ def _z3_alloc_overflow_check(
     multiplication query came back UNSAT and the check declared
     "allocation size cannot overflow" from a mis-modeled guard.  The
     wrap question itself stays on the unsigned (size_t) product.
+
+    ``size_idents`` names the variables in the allocation's size
+    argument(s).  A no-overflow proof is only minted when they are
+    known, non-empty, and all guard-bounded — previously a guard on
+    an unrelated loop counter could "prove" ``malloc(n * size)``
+    safe without any constraint touching ``n`` or ``size``.  ``None``
+    = binding unknown: wrap witnesses (True) may still be flagged,
+    the no-overflow proof (False) demotes to inconclusive.
     """
     if not _signed_guard_bounds_fit(constraints):
         return (None, "guard bounds do not fit the signed 64-bit model — inconclusive", None)
@@ -1275,7 +1417,12 @@ def _z3_alloc_overflow_check(
             solver.add(v != bv_val)
 
     # Check: can multiplication of any two constrained vars wrap?
-    var_list = list(vars_map.items())
+    # With a known binding, only variables that feed the allocation
+    # size can ground a wrap claim about this sink.
+    var_list = [
+        (name, v) for name, v in vars_map.items()
+        if size_idents is None or name in size_idents
+    ]
     if len(var_list) >= 2:
         for i in range(len(var_list)):
             for j in range(i + 1, len(var_list)):
@@ -1303,12 +1450,28 @@ def _z3_alloc_overflow_check(
                 solver.pop()
                 if result == z3.unknown:
                     return (None, "solver returned unknown — allocation overflow inconclusive", None)
-        return (False, "allocation size cannot overflow given constraints", None)
+        gap = _size_binding_gap(size_idents, set(vars_map))
+        if gap is not None:
+            return (None, gap, None)
+        return (
+            False,
+            (
+                f"allocation size over "
+                f"({', '.join(sorted(size_idents or []))}) cannot "
+                f"overflow given constraints"
+            ),
+            None,
+        )
 
-    # A single constrained variable gives the multiplication model
-    # nothing to check — that is the ABSENCE of an analysis, not a
-    # proof that the allocation size cannot overflow.  Returning False
-    # here used to stamp guard_sufficient=True vacuously.
+    # Fewer than two bindable constrained variables give the
+    # multiplication model nothing to check — that is the ABSENCE of
+    # an analysis, not a proof that the allocation size cannot
+    # overflow.  Returning False here used to stamp
+    # guard_sufficient=True vacuously.  Prefer the binding-specific
+    # reason when the sink's size argument is what starves the model.
+    gap = _size_binding_gap(size_idents, set(vars_map))
+    if gap is not None:
+        return (None, gap, None)
     return (
         None,
         (
@@ -1405,6 +1568,7 @@ def _z3_dispatch_json(request: dict) -> Any:
         constraints = [BoundsConstraint(**c) for c in args["constraints"]]
         result = _z3_dispatch(
             constraints, args.get("buffer_size"), args.get("sink_api", ""),
+            args.get("size_idents"),
         )
         return list(result) if result is not None else None
     if tag == "path_feasibility":
@@ -1647,6 +1811,7 @@ def _arithmetic_check(
     guard: GuardCondition,
     buffer_size: int | None,
     sink_api: str,
+    size_idents: list[str] | None = None,
 ) -> SmtSufficiencyResult:
     """Exact fallback for the native copy check's signed-64 guard model.
 
@@ -1654,6 +1819,12 @@ def _arithmetic_check(
     copy length, just as in _z3_overflow_check. This establishes neither
     source argument identity nor C type/conversion semantics. Allocation
     and unknown sink models remain inconclusive without Z3.
+
+    ``size_idents`` follows the same binding policy as
+    ``_z3_overflow_check``: a "sufficient" verdict requires the sink's
+    size-argument variables to be known, non-empty, and all bounded;
+    insufficiency may still be flagged with an unknown binding, but
+    only on variables that feed the size argument when it is known.
     """
     def result(feasible, reasoning, witness=None):
         return SmtSufficiencyResult(
@@ -1679,6 +1850,8 @@ def _arithmetic_check(
     ]
     base = list(constraints) + domains
     for var in variables:
+        if size_idents is not None and var not in size_idents:
+            continue
         # Negative signed values become value + 2**64 at the sink.
         # Positive values retain their integer value. Query both ranges,
         # always retaining every guard constraint on every variable.
@@ -1691,7 +1864,10 @@ def _arithmetic_check(
                 return result(True, f"unsigned copy-length model exceeds {buffer_size}", candidate.witness)
             if candidate.feasible is None:
                 return result(None, "arithmetic copy-length model inconclusive")
-    return result(False, f"all constrained copy-length values fit {buffer_size} in the signed-64 guard model")
+    gap = _size_binding_gap(size_idents, set(variables))
+    if gap is not None:
+        return result(None, gap)
+    return result(False, f"all size-argument copy-length values fit {buffer_size} in the signed-64 guard model")
 
 
 # ---------------------------------------------------------------------------

@@ -361,3 +361,34 @@ def run(cmd):
 """
         guards = extract_sink_guards_python(source, "x.py")
         assert len(guards) == 1
+
+
+class TestSinkArgsCapture:
+    """The deep-AST layer must capture sink call argument texts so the
+    SMT sufficiency check can bind proofs to the size argument."""
+
+    SINKS = frozenset({"eval", "subprocess.run"})
+
+    def test_arguments_captured_via_unparse(self):
+        source = (
+            "def f(expr, flag):\n"
+            "    if flag:\n"
+            "        eval(expr, None)\n"
+        )
+        guards = extract_sink_guards_python(
+            source, "x.py", sink_names=self.SINKS,
+        )
+        assert len(guards) == 1
+        assert guards[0].sink_args == ["expr", "None"]
+
+    def test_expression_arguments_round_trip(self):
+        source = (
+            "import subprocess\n"
+            "def f(cmd, n):\n"
+            "    subprocess.run(cmd + str(n))\n"
+        )
+        guards = extract_sink_guards_python(
+            source, "x.py", sink_names=self.SINKS,
+        )
+        assert len(guards) == 1
+        assert guards[0].sink_args == ["cmd + str(n)"]

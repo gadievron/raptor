@@ -75,6 +75,10 @@ class SinkGuard:
     sink_api: str
     guards: list[GuardCondition] = field(default_factory=list)
     unconditional: bool = False
+    # Verbatim argument texts of the sink call, in call order. Empty
+    # when argument capture failed — consumers must treat empty as
+    # "binding unknown", never as a zero-argument call.
+    sink_args: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -84,6 +88,7 @@ class SinkGuard:
             "sink_api": self.sink_api,
             "guards": [g.to_dict() for g in self.guards],
             "unconditional": self.unconditional,
+            "sink_args": list(self.sink_args),
         }
 
     @property
@@ -926,6 +931,14 @@ def extract_sink_guards(
                 line=_node_line(_cond_node),
             ))
 
+        call_node = _find_matching_call_node(
+            root, sink_line, lang, sink_api, source_bytes,
+        )
+        sink_args = (
+            _call_argument_texts(call_node, source_bytes)
+            if call_node is not None else []
+        )
+
         sg = SinkGuard(
             sink_file=filepath,
             sink_line=sink_line,
@@ -933,10 +946,58 @@ def extract_sink_guards(
             sink_api=sink_api,
             guards=guards,
             unconditional=(len(guards) == 0),
+            sink_args=sink_args,
         )
         results.append(sg)
 
     return results
+
+
+def _call_argument_texts(call_node, source_bytes: bytes) -> list[str]:
+    """Verbatim argument texts of a call node, in call order.
+
+    Reads the named children of the call's argument-list child
+    (``argument_list`` / ``arguments`` across grammars), skipping
+    comments. Empty when the node has no argument list — consumers
+    treat empty as "arguments unknown", never as a zero-argument call.
+    """
+    args_node = None
+    for child in call_node.children:
+        if "argument" in child.type:
+            args_node = child
+            break
+    if args_node is None:
+        return []
+    return [
+        _node_text(c, source_bytes)
+        for c in args_node.named_children
+        if c.type != "comment"
+    ]
+
+
+def _find_matching_call_node(
+    root, line: int, lang: str, sink_api: str, source_bytes: bytes,
+):
+    """The call node on *line* whose callee matches *sink_api* (same
+    matching rule as :func:`find_sink_calls`). None when no callee on
+    the line re-matches — arguments must never be borrowed from a
+    different call, because downstream sufficiency proofs bind to
+    them; an unmatched sink stays "binding unknown"."""
+    call_types = _CALL_TYPES.get(lang, ())
+    target_row = line - 1
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node.start_point[0] == target_row and node.type in call_types:
+            name = _extract_call_name(node, source_bytes)
+            if name == sink_api or _match_sink(
+                    name, frozenset({sink_api})) == sink_api:
+                return node
+        stack.extend(reversed([
+            child for child in node.children
+            if child.start_point[0] <= target_row <= child.end_point[0]
+        ]))
+    return None
 
 
 def _find_call_at_line(root, target_row: int, lang: str):

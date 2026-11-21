@@ -712,3 +712,91 @@ class TestDeepNesting:
         )
         assert len(guards) == 1
         assert guards[0].sink_line == sink_line
+
+
+# ---------------------------------------------------------------------------
+# Sink argument capture (size-argument binding substrate)
+# ---------------------------------------------------------------------------
+
+
+@requires_ts("c")
+class TestSinkArgsCapture:
+    """extract_sink_guards must capture the sink call's argument texts
+    so the SMT sufficiency check can bind proofs to the size argument."""
+
+    def test_c_call_arguments_captured_verbatim(self):
+        source = (
+            "void f(char *dst, char *src, int len) {\n"
+            "    if (len < 1024) {\n"
+            "        memcpy(dst, src, len);\n"
+            "    }\n"
+            "}\n"
+        )
+        guards = extract_sink_guards(
+            source, "x.c", sink_names=frozenset({"memcpy"}),
+        )
+        assert len(guards) == 1
+        assert guards[0].sink_args == ["dst", "src", "len"]
+
+    def test_c_expression_arguments_captured(self):
+        source = (
+            "void f(int n) {\n"
+            "    if (n < 64) {\n"
+            "        char *p = malloc(n * sizeof(struct item));\n"
+            "    }\n"
+            "}\n"
+        )
+        guards = extract_sink_guards(
+            source, "x.c", sink_names=frozenset({"malloc"}),
+        )
+        assert len(guards) == 1
+        assert guards[0].sink_args == ["n * sizeof(struct item)"]
+
+    def test_no_matching_callee_leaves_arguments_unknown(self):
+        # sink_lines mode can point at a line whose call is NOT the
+        # named sink (wrapper macros, LLM-reported lines). Arguments
+        # must never be borrowed from a different call.
+        source = (
+            "void f(char *dst, char *src, int len) {\n"
+            "    if (len < 1024) {\n"
+            "        other_copy(dst, src, len);\n"
+            "    }\n"
+            "}\n"
+        )
+        guards = extract_sink_guards(
+            source, "x.c", sink_lines=[3],
+        )
+        assert len(guards) == 1
+        # The callee on the line is other_copy; its name is captured
+        # and its own arguments may bind — but asking for a memcpy
+        # node on that line must find nothing.
+        from core.audit.condition_extraction import _find_matching_call_node
+        from core.audit.condition_extraction import _get_parser
+        parser = _get_parser("c")
+        tree = parser.parse(source.encode("utf-8"))
+        assert _find_matching_call_node(
+            tree.root_node, 3, "c", "memcpy", source.encode("utf-8"),
+        ) is None
+
+    def test_comments_inside_argument_list_skipped(self):
+        source = (
+            "void f(char *dst, char *src, int len) {\n"
+            "    memcpy(dst, src, /* bytes */ len);\n"
+            "}\n"
+        )
+        guards = extract_sink_guards(
+            source, "x.c", sink_names=frozenset({"memcpy"}),
+        )
+        assert len(guards) == 1
+        assert guards[0].sink_args == ["dst", "src", "len"]
+
+    def test_to_dict_carries_sink_args(self):
+        source = (
+            "void f(char *dst, char *src, int len) {\n"
+            "    memcpy(dst, src, len);\n"
+            "}\n"
+        )
+        guards = extract_sink_guards(
+            source, "x.c", sink_names=frozenset({"memcpy"}),
+        )
+        assert guards[0].to_dict()["sink_args"] == ["dst", "src", "len"]

@@ -417,6 +417,11 @@ def extract_sink_guards_python(
         )
         guards.extend(preceding)
 
+        try:
+            sink_args = [ast.unparse(a) for a in call_node.args]
+        except Exception:  # noqa: BLE001 — unparse failure = binding unknown
+            sink_args = []
+
         sg = SinkGuard(
             sink_file=filepath,
             sink_line=call_node.lineno,
@@ -424,6 +429,7 @@ def extract_sink_guards_python(
             sink_api=sink_api,
             guards=guards,
             unconditional=(len(guards) == 0),
+            sink_args=sink_args,
         )
         results.append(sg)
 

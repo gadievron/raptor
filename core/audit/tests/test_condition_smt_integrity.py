@@ -140,8 +140,11 @@ def test_copy_fallback_agrees_with_native_model_and_replays_witness(text, size, 
     pytest.importorskip("z3")
     condition = guard(text)
     constraints = bridge.constraints_for_guard(condition)
-    fallback = bridge._arithmetic_check(constraints, condition, size, "memcpy")
-    native = bridge._z3_overflow_check(constraints, size)
+    # Sufficiency proofs require the size-argument binding; bind every
+    # constrained variable so both backends keep their False verdicts.
+    idents = sorted({c.variable for c in constraints})
+    fallback = bridge._arithmetic_check(constraints, condition, size, "memcpy", idents)
+    native = bridge._z3_overflow_check(constraints, size, idents)
     assert fallback.feasible is expected
     assert native[0] is expected
     if expected:

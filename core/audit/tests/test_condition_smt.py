@@ -32,7 +32,12 @@ def _guard(text: str, category: str = "bounds", **kw) -> GuardCondition:
     )
 
 
-def _sg(sink_api: str, guards: list, line: int = 10) -> SinkGuard:
+def _sg(
+    sink_api: str,
+    guards: list,
+    line: int = 10,
+    sink_args: list[str] | None = None,
+) -> SinkGuard:
     return SinkGuard(
         sink_file="test.c",
         sink_line=line,
@@ -40,6 +45,7 @@ def _sg(sink_api: str, guards: list, line: int = 10) -> SinkGuard:
         sink_api=sink_api,
         guards=guards,
         unconditional=(len(guards) == 0),
+        sink_args=sink_args if sink_args is not None else [],
     )
 
 
@@ -141,7 +147,9 @@ class TestCheckGuardSufficiency:
             resolvable=True,
             concrete_values={"BUF_SIZE": "128"},
         )
-        sg = _sg("memcpy", [g])
+        # Sufficiency proofs additionally require the size-argument
+        # binding: the guarded variable must be what the sink copies.
+        sg = _sg("memcpy", [g], sink_args=["dst", "src", "len"])
         results = check_guard_sufficiency(sg, buffer_size=256)
         assert len(results) >= 1
         r = results[0]
@@ -197,7 +205,7 @@ class TestCheckGuardSufficiency:
             resolvable=True,
             concrete_values={"MAX_SIZE": "4096", "LIMIT": "256"},
         )
-        sg = _sg("memcpy", [g])
+        sg = _sg("memcpy", [g], sink_args=["dst", "src", "len"])
         results = check_guard_sufficiency(sg, buffer_size=256)
         assert len(results) >= 1
         r = results[0]
@@ -248,7 +256,10 @@ class TestCheckAllSufficiency:
             "n > 0 && n <= SIZE",
             resolvable=True, concrete_values={"SIZE": "128"},
         )
-        guards = [_sg("memcpy", [g1], line=10), _sg("memcpy", [g2], line=20)]
+        guards = [
+            _sg("memcpy", [g1], line=10),
+            _sg("memcpy", [g2], line=20, sink_args=["dst", "src", "n"]),
+        ]
         results = check_all_sufficiency(
             guards,
             buffer_sizes={10: 256, 20: 256},
@@ -314,12 +325,14 @@ class TestNonProofsAreInconclusive:
             BoundsConstraint,
             _z3_alloc_overflow_check,
         )
+        # The no-overflow proof also needs the size-argument binding:
+        # the bounded variables must be the ones the allocation sizes.
         out = _z3_alloc_overflow_check([
             BoundsConstraint("n", ">", 0, "n > 0"),
             BoundsConstraint("n", "<", 100, "n < 100"),
             BoundsConstraint("m", ">", 0, "m > 0"),
             BoundsConstraint("m", "<", 100, "m < 100"),
-        ])
+        ], ["n", "m"])
         assert out[0] is False
 
 
@@ -374,7 +387,7 @@ class TestBlindSpotSufficientGuardIsBoost:
             resolvable=True,
             concrete_values={"LIMIT": "128"},
         )
-        sg = _sg("memcpy", [g], line=10)
+        sg = _sg("memcpy", [g], line=10, sink_args=["dst", "src", "n"])
         results = check_guard_sufficiency(sg, buffer_size=256)
         assert len(results) >= 1
         assert results[0].feasible is False
@@ -1874,3 +1887,156 @@ class TestSuccessReturnWhitespaceRun:
         assert _SUCCESS_RETURN_RE.match("return EXIT_SUCCESS  ;  ")
         assert _SUCCESS_RETURN_RE.match("  return nil")
         assert not _SUCCESS_RETURN_RE.match("    return 0   x")
+
+
+# ── Size-argument binding ───────────────────────────────────────────────
+
+
+class TestSinkSizeIdentifiers:
+    """Unit contract for the size-argument binding extractor."""
+
+    def test_copy_sink_binds_third_argument(self):
+        from core.audit.condition_smt import _sink_size_identifiers
+        assert _sink_size_identifiers(
+            "memcpy", ["dst", "src", "len"]) == ["len"]
+
+    def test_sizeof_operand_is_not_a_variable(self):
+        from core.audit.condition_smt import _sink_size_identifiers
+        assert _sink_size_identifiers(
+            "malloc", ["n * sizeof(struct item)"]) == ["n"]
+
+    def test_calloc_binds_both_count_and_size(self):
+        from core.audit.condition_smt import _sink_size_identifiers
+        assert _sink_size_identifiers("calloc", ["n", "elem_size"]) == [
+            "n", "elem_size"]
+
+    def test_literal_size_binds_to_no_variables(self):
+        from core.audit.condition_smt import _sink_size_identifiers
+        assert _sink_size_identifiers("memcpy", ["dst", "src", "64"]) == []
+
+    def test_missing_arguments_mean_binding_unknown(self):
+        from core.audit.condition_smt import _sink_size_identifiers
+        assert _sink_size_identifiers("memcpy", []) is None
+        assert _sink_size_identifiers("memcpy", None) is None
+
+    def test_short_call_shape_means_binding_unknown(self):
+        from core.audit.condition_smt import _sink_size_identifiers
+        assert _sink_size_identifiers("memcpy", ["dst", "src"]) is None
+
+    def test_unmodelled_sink_means_binding_unknown(self):
+        from core.audit.condition_smt import _sink_size_identifiers
+        assert _sink_size_identifiers("system", ["cmd"]) is None
+
+
+class TestSizeArgumentBinding:
+    """Sufficiency proofs must bind to the sink's size argument.
+
+    Bounding variables that never reach the sink's size argument used
+    to mint "guard sufficient" / "cannot overflow" proofs, which the
+    orchestrator consumes to skip decorative-guard verification."""
+
+    def test_unrelated_guard_cannot_prove_alloc_safe(self):
+        # Reproduced false conclusion: the guards bound retries and
+        # attempts; the allocation sizes with n * size. The old pair
+        # model multiplied the two GUARD variables and declared
+        # "cannot overflow".
+        g = _guard(
+            "retries >= 0 && retries < MAXR && attempts >= 0 && attempts < MAXA",
+            resolvable=True, concrete_values={"MAXR": "8", "MAXA": "3"},
+        )
+        sg = _sg("malloc", [g], sink_args=["n * size"])
+        results = check_guard_sufficiency(sg)
+        assert len(results) >= 1
+        for r in results:
+            assert r.feasible is None
+            assert r.guard_sufficient is None
+        assert any("unconstrained" in r.reasoning for r in results)
+
+    def test_unrelated_guard_cannot_prove_copy_safe(self):
+        # Old behaviour: retries ≤ 8 ≤ 256 → "guard sufficient" for a
+        # memcpy whose length is len, never bounded anywhere.
+        g = _guard(
+            "retries >= 0 && retries < MAXR",
+            resolvable=True, concrete_values={"MAXR": "8"},
+        )
+        sg = _sg("memcpy", [g], sink_args=["dst", "src", "len"])
+        results = check_guard_sufficiency(sg, buffer_size=256)
+        assert len(results) >= 1
+        assert results[0].feasible is None
+        assert "len" in results[0].reasoning
+
+    def test_unrelated_guard_cannot_flag_copy_insufficient(self):
+        # With a KNOWN binding, a loose bound on a non-size variable
+        # must not mint an insufficiency finding either — retries can
+        # be 4095 > 256, but retries is not what memcpy copies.
+        g = _guard(
+            "retries >= 0 && retries < MAXR",
+            resolvable=True, concrete_values={"MAXR": "4096"},
+        )
+        sg = _sg("memcpy", [g], sink_args=["dst", "src", "len"])
+        results = check_guard_sufficiency(sg, buffer_size=256)
+        assert len(results) >= 1
+        assert results[0].feasible is None
+
+    def test_bound_size_variable_keeps_sufficiency_proof(self):
+        g = _guard(
+            "len >= 0 && len < CAP",
+            resolvable=True, concrete_values={"CAP": "128"},
+        )
+        sg = _sg("memcpy", [g], sink_args=["dst", "src", "len"])
+        results = check_guard_sufficiency(sg, buffer_size=256)
+        assert len(results) >= 1
+        assert results[0].feasible is False
+        assert results[0].guard_sufficient is True
+
+    def test_bound_size_variable_keeps_insufficiency_finding(self):
+        g = _guard(
+            "len >= 0 && len < CAP",
+            resolvable=True, concrete_values={"CAP": "4096"},
+        )
+        sg = _sg("memcpy", [g], sink_args=["dst", "src", "len"])
+        results = check_guard_sufficiency(sg, buffer_size=256)
+        assert len(results) >= 1
+        assert results[0].feasible is True
+        assert results[0].guard_sufficient is False
+
+    def test_partially_bound_size_expression_is_inconclusive(self):
+        # len is bounded but the copy length is len + hdr_len; a proof
+        # over len alone says nothing about the sum.
+        g = _guard(
+            "len >= 0 && len < CAP",
+            resolvable=True, concrete_values={"CAP": "128"},
+        )
+        sg = _sg("memcpy", [g], sink_args=["dst", "src", "len + hdr_len"])
+        results = check_guard_sufficiency(sg, buffer_size=256)
+        assert len(results) >= 1
+        assert results[0].feasible is None
+        assert "hdr_len" in results[0].reasoning
+
+    def test_literal_size_argument_is_inconclusive(self):
+        g = _guard(
+            "len >= 0 && len < CAP",
+            resolvable=True, concrete_values={"CAP": "128"},
+        )
+        sg = _sg("memcpy", [g], sink_args=["dst", "src", "64"])
+        results = check_guard_sufficiency(sg, buffer_size=256)
+        assert len(results) >= 1
+        assert results[0].feasible is None
+
+    def test_unknown_binding_keeps_insufficiency_but_demotes_proof(self):
+        # No sink_args captured (legacy extraction, unparsable call):
+        # the insufficiency direction stays available as a hint, the
+        # proof direction demotes to inconclusive.
+        loose = _guard(
+            "len < CAP", resolvable=True, concrete_values={"CAP": "4096"})
+        tight = _guard(
+            "len >= 0 && len < CAP",
+            resolvable=True, concrete_values={"CAP": "128"},
+        )
+        flagged = check_guard_sufficiency(
+            _sg("memcpy", [loose]), buffer_size=256)
+        proved = check_guard_sufficiency(
+            _sg("memcpy", [tight]), buffer_size=256)
+        assert flagged[0].feasible is True
+        assert proved[0].feasible is None
+        assert "binding unknown" in proved[0].reasoning
