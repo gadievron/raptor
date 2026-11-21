@@ -196,7 +196,7 @@ def read_capped(
 
 
 def read_capped_with_stat(
-    path: Path, max_bytes: int,
+    path: Path, max_bytes: int, *, dir_fd: int | None = None,
 ) -> tuple[bytes, os.stat_result] | tuple[None, None]:
     """:func:`read_capped` (default fail-closed, O_NOFOLLOW stance)
     plus the fstat of the fd the bytes came from.
@@ -206,11 +206,16 @@ def read_capped_with_stat(
     lstat/stat leaves a window between the stat and the read where the
     object can be swapped, so those fields must come from the fstat of
     the very fd that produced the bytes — one atomic observation of
-    one inode. ``(None, None)`` on any refusal.
+    one inode. ``dir_fd`` anchors a relative ``path`` to an
+    already-open directory (``os.open(dir_fd=...)`` semantics), for
+    callers that must pin the read to a directory identity they have
+    already vetted rather than to a re-walk of its spelling.
+    ``(None, None)`` on any refusal — including on platforms whose
+    ``os.open`` lacks ``dir_fd`` support when one is passed.
     """
     try:
         return _read_capped_or_raise(
-            path, max_bytes, follow_symlinks=False,
+            path, max_bytes, follow_symlinks=False, dir_fd=dir_fd,
         )
     except Exception:  # noqa: BLE001 — any I/O surprise fails closed
         return None, None

@@ -122,33 +122,12 @@ def _spellings(path: Path) -> frozenset[str]:
     return frozenset({str(path), str(path.resolve())})
 
 
-def _spoof_lstat_uid(
-    monkeypatch: pytest.MonkeyPatch, victims: list[Path], delta: int = 1,
-) -> None:
-    """os.lstat wrapper: shifted ``st_uid`` for ``victims``,
-    passthrough for everything else."""
-    doctored = frozenset().union(*(_spellings(v) for v in victims))
-    real_lstat = os.lstat
-
-    def fake_lstat(path, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003, ANN202 — delegating shim, signature mirrors os.lstat
-        st = real_lstat(path, *args, **kwargs)
-        try:
-            spelled = os.fsdecode(path)
-        except TypeError:
-            return st
-        if spelled in doctored:
-            return _uid_shifted(st, delta)
-        return st
-
-    patch_module_attribute(monkeypatch, _trust_common, "os", "lstat", fake_lstat)
-
-
-def _spoof_read_fd_uid(
+def _spoof_root_fd_uid(
     monkeypatch: pytest.MonkeyPatch, victim: Path, delta: int = 1,
 ) -> None:
-    """Doctor the fstat of the very fd a capped read of ``victim``
-    takes its bytes from — the stat the back-link ownership check
-    binds to."""
+    """Doctor the fstat of the very fd the gate's single fd-bound root
+    observation opens on ``victim`` — the stat the registered-root
+    type/ownership/identity checks bind to."""
     doctored = _spellings(victim)
     real_open = os.open
     real_close = os.close
@@ -162,6 +141,58 @@ def _spoof_read_fd_uid(
                 victim_fds.add(fd)
         except TypeError:
             pass
+        return fd
+
+    def fake_close(fd: int) -> None:
+        victim_fds.discard(fd)
+        real_close(fd)
+
+    def fake_fstat(fd: int) -> os.stat_result:
+        st = real_fstat(fd)
+        if fd in victim_fds:
+            return _uid_shifted(st, delta)
+        return st
+
+    patch_module_attribute(monkeypatch, _trust_common, "os", "open", fake_open)
+    patch_module_attribute(monkeypatch, _trust_common, "os", "close", fake_close)
+    patch_module_attribute(monkeypatch, _trust_common, "os", "fstat", fake_fstat)
+
+
+def _spoof_read_fd_uid(
+    monkeypatch: pytest.MonkeyPatch, victim: Path, delta: int = 1,
+) -> None:
+    """Doctor the fstat of the very fd a capped read of ``victim``
+    takes its bytes from — the stat the back-link ownership check
+    binds to. Matches both spellings the read can use: the absolute
+    path, and the victim's NAME opened relative to a ``dir_fd`` on the
+    victim's parent directory (the gate's fd-anchored back-link
+    read)."""
+    doctored = _spellings(victim)
+    real_open = os.open
+    real_close = os.close
+    real_fstat = os.fstat
+    victim_fds: set[int] = set()
+
+    def _victim_relative(spelled: str, kwargs: dict) -> bool:
+        dir_fd = kwargs.get("dir_fd")
+        if dir_fd is None or spelled != victim.name:
+            return False
+        try:
+            st_dir = real_fstat(dir_fd)
+            st_parent = os.stat(victim.parent)
+        except OSError:
+            return False
+        return (st_dir.st_dev, st_dir.st_ino) == (
+            st_parent.st_dev, st_parent.st_ino)
+
+    def fake_open(path, flags, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003, ANN202 — delegating shim, signature mirrors os.open
+        fd = real_open(path, flags, *args, **kwargs)
+        try:
+            spelled = os.fsdecode(path)
+        except TypeError:
+            return fd
+        if spelled in doctored or _victim_relative(spelled, kwargs):
+            victim_fds.add(fd)
         return fd
 
     def fake_close(fd: int) -> None:
@@ -361,7 +392,7 @@ class TestForgedTargetSideIsNotSelf:
         wt.mkdir()
         (wt / ".git").write_text(f"gitdir: {registry_entry}\n")
         _plant_dangerous_config(wt)
-        _spoof_lstat_uid(monkeypatch, [wt])
+        _spoof_root_fd_uid(monkeypatch, wt)
         _spoof_read_fd_uid(monkeypatch, wt / ".git")
         _pin_raptor_dir(monkeypatch, root)
         assert _check(str(wt)) is True
