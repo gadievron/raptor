@@ -614,17 +614,22 @@ class TestLoadChecklist:
     def test_load_routes_through_shared_accessor(self, tmp_path: Path,
                                                  monkeypatch):
         # The audit read side must share the inventory writers' flock +
-        # project-symlink resolution (torn-read protection).
+        # project-symlink resolution (torn-read protection), and relay
+        # the caller's frame_sink so frame provenance survives the hop.
         import core.inventory as inv
         calls = []
 
-        def _spy(output_dir):
-            calls.append(Path(output_dir))
+        def _spy(output_dir, *, frame_sink=None):
+            calls.append((Path(output_dir), frame_sink))
             return {"spied": True}
 
+        def _sink(_tier: str) -> None:
+            pass
+
         monkeypatch.setattr(inv, "read_checklist", _spy)
-        assert load_checklist(tmp_path) == {"spied": True}
-        assert calls == [tmp_path]
+        assert load_checklist(
+            tmp_path, frame_sink=_sink) == {"spied": True}
+        assert calls == [(tmp_path, _sink)]
 
     def test_load_reads_project_checklist_through_symlink(
             self, tmp_path: Path):

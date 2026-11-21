@@ -86,8 +86,10 @@ def main() -> int:
         )
         return 1
 
-    from core.inventory import read_checklist
-    checklist = read_checklist(understand_dir)
+    from core.inventory import checklist_frame_mac, read_checklist
+    checklist_frame: list[str] = []
+    checklist = read_checklist(
+        understand_dir, frame_sink=checklist_frame.append)
     target_path = checklist.get("target_path")
     if not target_path:
         print(
@@ -120,10 +122,16 @@ def main() -> int:
     except Exception:  # noqa: BLE001 — routing is additive; enrichment must survive resolution failure
         graph_store = None
 
+    # Only a VERIFIED checklist frame may mint verified mechanical
+    # store rows; a demoted frame's edges persist unstamped (hint
+    # tier), so a rewritten checklist cannot launder its edge set
+    # into the verdict-feeding reachability lane.
     edge_count = enrich_with_call_edges(
         context_map, checklist=checklist,
         graph_store=graph_store, run_dir=understand_dir,
         target_path=str(target_path),
+        checklist_frame_verified=(
+            checklist_frame == [checklist_frame_mac.FRAME_VERIFIED]),
     )
 
     # Reuse the checklist as the inventory — no re-parse of the

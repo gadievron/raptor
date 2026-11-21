@@ -815,6 +815,7 @@ def ingest_call_edges(
     *,
     checklist_hash: str = "",
     graph_path: Optional[Path] = None,
+    source_verified: bool = True,
 ) -> Optional[dict[str, Any]]:
     """Batch-ingest mechanical call edges into the graph store.
 
@@ -833,6 +834,18 @@ def ingest_call_edges(
     the minted edge COUNT (deletion witness). When no usable key
     exists the rows persist unstamped — hint tier, never a verdict
     input (``verified_mechanical_call_edges`` returns no lane).
+
+    ``source_verified=False`` forces that same unstamped degradation
+    regardless of key availability: no edge or snapshot token is
+    minted and the result reports ``"stamped": False``. Callers that
+    relay edges from a mutable artifact MUST pass the artifact's own
+    authentication result here — a demoted (unstamped/relocated/
+    tampered) checklist frame whose edges were re-minted with fresh
+    run-bound tokens would verify forever afterwards, laundering a
+    forged edge set into the store's verdict-feeding lane (negative
+    reachability treats a COMPLETE verified set as proof). The
+    default ``True`` is for producers minting over edges they derived
+    mechanically themselves.
 
     ``edges`` yields ``{"caller_file", "caller", "callee",
     "callee_file"}`` dicts (the context-map ``call_edges`` shape);
@@ -888,12 +901,14 @@ def ingest_call_edges(
 
     stamper = integrity.edge_stamper(graph_path)
     created_at = utc_now_iso()
-    snap_token = integrity.snapshot_stamper(graph_path).mint(
-        integrity.snapshot_payload(
-            snap_id, target, checklist_hash, CALLGRAPH_PRODUCER, edge_count,
-            created_at,
-        )
-    ) or ""
+    snap_token = ""
+    if source_verified:
+        snap_token = integrity.snapshot_stamper(graph_path).mint(
+            integrity.snapshot_payload(
+                snap_id, target, checklist_hash, CALLGRAPH_PRODUCER,
+                edge_count, created_at,
+            )
+        ) or ""
 
     # Node rows for the unique endpoints (name/file are what the
     # reachability consumers read back; the edge tokens cover the
@@ -915,11 +930,13 @@ def ingest_call_edges(
         for (caller_file, caller, callee_file, callee) in seen:
             src_id = _node_id(caller_file, caller)
             dst_id = _node_id(callee_file, callee)
-            token = stamper.mint(integrity.edge_payload(
-                snap_id,
-                caller_file, caller,
-                callee_file, callee,
-            )) or ""
+            token = ""
+            if source_verified:
+                token = stamper.mint(integrity.edge_payload(
+                    snap_id,
+                    caller_file, caller,
+                    callee_file, callee,
+                )) or ""
             yield (
                 stable_edge_id("CALLS", src_id, dst_id),
                 src_id, dst_id, snap_id, "mechanical", token,
@@ -979,7 +996,7 @@ def ingest_call_edges(
         "graph_path": graph_path,
         "snapshot": snap_id,
         "edges": edge_count,
-        "stamped": stamper.usable,
+        "stamped": bool(source_verified and stamper.usable),
     }
 
 

@@ -359,10 +359,56 @@ class TestBootstrapRoutesToStore:
         cmap: dict = {}
         config = SimpleNamespace(
             out_dir=out_dir, target_path=Path("/target"))
-        orch._prep_call_edges(cmap, config, checklist)
+        # The in-memory checklist stands in for a frame-authenticated
+        # load — declare the provenance the real caller threads from
+        # load_checklist's frame_sink (an unverified frame mints the
+        # hint tier instead; pinned in
+        # test_unverified_frame_bootstrap_keeps_truncation below).
+        orch._prep_call_edges(
+            cmap, config, checklist, checklist_frame_verified=True)
         assert cmap.get("call_edges_store"), "bootstrap must ingest"
         assert len(cmap["call_edges"]) == 3  # full graph, not the cap
         assert not cmap.get("call_edges_truncated")
+
+    def test_unverified_frame_bootstrap_keeps_truncation(
+            self, tmp_path, monkeypatch):
+        # Same bootstrap, but WITHOUT the frame-verified declaration
+        # (the default): the edges still route to the store, but as
+        # the UNSTAMPED hint tier — no verified lane exists to lift
+        # the truncation, so a forged/demoted checklist's edge set can
+        # never read as a COMPLETE verified graph (the negative-
+        # reachability laundering path).
+        import core.audit.orchestrator as orch
+        import core.orchestration.context_map_callgraph as cmc
+        from core.understand_graph.queries import (
+            verified_mechanical_call_edges,
+        )
+        monkeypatch.setattr(cmc, "_MAX_CALL_EDGES", 2)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        checklist = {
+            "target_path": "/target",
+            "files": [{
+                "path": "a.c",
+                "call_graph": {"calls": [
+                    {"caller": "main", "chain": ["helper"]},
+                    {"caller": "helper", "chain": ["f"]},
+                    {"caller": "orphan", "chain": ["iso"]},
+                ]},
+                "items": [],
+            }],
+        }
+        cmap: dict = {}
+        config = SimpleNamespace(
+            out_dir=out_dir, target_path=Path("/target"))
+        orch._prep_call_edges(cmap, config, checklist)
+        marker = cmap.get("call_edges_store")
+        assert marker, "bootstrap still ingests (hint tier)"
+        assert cmap.get("call_edges_truncated") is True
+        assert len(cmap["call_edges"]) == 2  # the cap holds
+        graph = orch._graph_store_for_config(config)
+        assert verified_mechanical_call_edges(
+            graph, marker["snapshot"], "/target") is None
 
     def test_incomplete_lane_union_is_deduplicated(self, tmp_path):
         # A repeated consult over an incomplete lane must not double

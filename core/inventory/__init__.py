@@ -298,11 +298,17 @@ def _read_file_hardened(
     return data
 
 
-def _load_checklist_index(index_path: "Path") -> dict[str, Any]:
+def _load_checklist_index(
+    index_path: "Path",
+    *, frame_sink: "Callable[[str], None] | None" = None,
+) -> dict[str, Any]:
     """Load + validate ``checklist/index.json``.
 
     Raises :class:`ChecklistIntegrityError` on any violation of the
-    index contract (see the layout note above).
+    index contract (see the layout note above). ``frame_sink``
+    receives the frame provenance tier once computed (reported even
+    for a TAMPERED frame, just before the refusal raises) — same
+    contract as :func:`_single_file_frame_gate`.
     """
     from core.json import loads
 
@@ -392,6 +398,8 @@ def _load_checklist_index(index_path: "Path") -> dict[str, Any]:
     provenance = checklist_frame_mac.frame_provenance(
         index, checklist_frame_mac.frame_binding(index_path.parent.parent),
         checklist_frame_mac.FORM_SHARDED)
+    if frame_sink is not None:
+        frame_sink(provenance)
     if provenance == checklist_frame_mac.FRAME_TAMPERED:
         raise ChecklistIntegrityError(
             f"checklist index at {index_path} FAILED frame "
@@ -448,14 +456,19 @@ def _read_shard_files(
     return doc["files"]
 
 
-def _load_sharded_checklist(checklist_path: "Path") -> dict[str, Any]:
+def _load_sharded_checklist(
+    checklist_path: "Path",
+    *, frame_sink: "Callable[[str], None] | None" = None,
+) -> dict[str, Any]:
     """Merge a sharded checklist back into the single in-memory dict.
 
     Raises :class:`ChecklistIntegrityError` on any contract violation.
-    Callers hold the checklist flock.
+    Callers hold the checklist flock. ``frame_sink``: see
+    :func:`_load_checklist_index`.
     """
     shard_dir = _sharded_dir_for(checklist_path)
-    index = _load_checklist_index(shard_dir / CHECKLIST_INDEX_NAME)
+    index = _load_checklist_index(
+        shard_dir / CHECKLIST_INDEX_NAME, frame_sink=frame_sink)
     merged: dict[str, Any] = dict(index["meta"])
     files: list[Any] = []
     for row in index["shards"]:
@@ -1195,6 +1208,7 @@ def checklist_exists(output_dir: "str | Path") -> bool:
 
 def _single_file_frame_gate(
     data: dict[str, Any], checklist_path: "Path", what: str,
+    *, frame_sink: "Callable[[str], None] | None" = None,
 ) -> bool:
     """Frame-authentication gate for a loaded single-file checklist.
 
@@ -1205,12 +1219,21 @@ def _single_file_frame_gate(
     present but invalid): the caller must refuse the document in its
     own degrade direction. Logs the loud refusal here so every
     refusing caller names the file the same way.
+
+    ``frame_sink`` receives the computed provenance tier
+    (``core.inventory.checklist_frame_mac`` vocabulary) so callers
+    that gate DOWNSTREAM authority on the frame — e.g. whether
+    checklist-derived call edges may mint verified mechanical store
+    rows — can distinguish a verified frame from a demoted one, which
+    this gate's boolean deliberately does not.
     """
     from . import checklist_frame_mac
 
     provenance = checklist_frame_mac.frame_provenance(
         data, checklist_frame_mac.frame_binding(checklist_path.parent),
         checklist_frame_mac.FORM_SINGLE)
+    if frame_sink is not None:
+        frame_sink(provenance)
     if provenance == checklist_frame_mac.FRAME_TAMPERED:
         logger.warning(
             "%s: checklist at %s FAILED frame authentication — its "
@@ -1226,7 +1249,10 @@ def _single_file_frame_gate(
     return True
 
 
-def read_checklist(output_dir: "str | Path") -> dict[str, Any]:
+def read_checklist(
+    output_dir: "str | Path",
+    *, frame_sink: "Callable[[str], None] | None" = None,
+) -> dict[str, Any]:
     """Read the checklist under the writers' flock + symlink resolution.
 
     Read-side counterpart of :func:`save_checklist` /
@@ -1252,6 +1278,15 @@ def read_checklist(output_dir: "str | Path") -> dict[str, Any]:
     integrity contract, or a frame in EITHER form that fails its
     frame authentication (loud warning; see
     ``core.inventory.checklist_frame_mac``).
+
+    ``frame_sink``, when given, receives the frame provenance tier of
+    whichever on-disk form was examined (nothing is reported for a
+    missing slot or a non-dict document). The accepting boolean gate
+    deliberately flattens verified and demoted frames into one
+    readable tier; callers whose DOWNSTREAM authority depends on the
+    distinction — e.g. whether checklist-derived call edges may be
+    minted as verified mechanical graph-store rows — recover it here
+    instead of re-deriving the frame themselves.
     """
     from core.json import load_json
 
@@ -1263,7 +1298,8 @@ def read_checklist(output_dir: "str | Path") -> dict[str, Any]:
     with _checklist_lock(checklist_path, create=False):
         if _sharded_index_path(checklist_path).is_file():
             try:
-                return _load_sharded_checklist(checklist_path)
+                return _load_sharded_checklist(
+                    checklist_path, frame_sink=frame_sink)
             except ChecklistIntegrityError as exc:
                 logger.warning(
                     "read_checklist: sharded checklist at %s refused "
@@ -1274,7 +1310,8 @@ def read_checklist(output_dir: "str | Path") -> dict[str, Any]:
         data = load_json(checklist_path, max_bytes=_MAX_CHECKLIST_BYTES)
     if not isinstance(data, dict):
         return {}
-    if not _single_file_frame_gate(data, checklist_path, "read_checklist"):
+    if not _single_file_frame_gate(
+            data, checklist_path, "read_checklist", frame_sink=frame_sink):
         return {}
     return data
 

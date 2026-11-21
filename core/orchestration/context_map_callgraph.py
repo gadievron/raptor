@@ -206,6 +206,7 @@ def enrich_with_call_edges(
     graph_store: Path | None = None,
     run_dir: Path | None = None,
     target_path: str = "",
+    checklist_frame_verified: bool = False,
 ) -> int:
     """Add a ``call_edges`` array to the context map from checklist call graphs.
 
@@ -228,6 +229,21 @@ def enrich_with_call_edges(
     it stays the storeless compatibility path, and the size-budget
     shed (``core.artifacts.context_map_budget``) already handles it on
     very large maps while the marker survives the shed.
+
+    Store trust: the checklist is a mutable run artifact, so the
+    edges it carries may only be minted as VERIFIED mechanical store
+    rows when the checklist's own frame authentication succeeded.
+    ``checklist_frame_verified`` is the pre-loaded (``checklist=``)
+    lane's declaration of that result — callers thread the provenance
+    reported by ``core.inventory.read_checklist``'s ``frame_sink``
+    (``verified`` and only ``verified`` maps to True). The default is
+    False: an undeclared frame mints UNSTAMPED rows (hint tier —
+    ``verified_mechanical_call_edges`` returns no lane), never
+    verified ones. The ``checklist_path`` lane derives the frame
+    provenance itself, since it loads the raw document without the
+    read accessors' gate. The in-artifact ``call_edges`` list is
+    unaffected either way — its consumers apply their own caps and
+    truncation semantics.
     """
     if checklist is None:
         if checklist_path is None or not checklist_path.exists():
@@ -236,6 +252,15 @@ def enrich_with_call_edges(
         checklist = load_json(checklist_path, max_bytes=_MAX_CHECKLIST_BYTES)
         if not isinstance(checklist, dict):
             return 0
+        from core.inventory import checklist_frame_mac
+        provenance = checklist_frame_mac.frame_provenance(
+            checklist,
+            checklist_frame_mac.frame_binding(
+                checklist_path.resolve().parent),
+            checklist_frame_mac.FORM_SINGLE)
+        checklist.pop(checklist_frame_mac.FRAME_TOKEN_KEY, None)
+        checklist_frame_verified = (
+            provenance == checklist_frame_mac.FRAME_VERIFIED)
 
     func_to_file: dict[str, str] = {}
     for fi in checklist.get("files", []):
@@ -288,6 +313,7 @@ def enrich_with_call_edges(
                 run_dir, target_path,  # type: ignore[arg-type]
                 _iter_checklist_call_edges(checklist, func_to_file),
                 graph_path=graph_store,
+                source_verified=checklist_frame_verified,
             )
         except Exception:  # noqa: BLE001 — routing is additive; the artifact path must survive a broken store
             logger.debug(

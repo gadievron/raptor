@@ -1538,7 +1538,10 @@ def write_not_attempted(
     return path
 
 
-def load_checklist(out_dir: Path) -> dict[str, Any]:
+def load_checklist(
+    out_dir: Path,
+    *, frame_sink: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
     """Load checklist.json from the output directory.
 
     Routed through :func:`core.inventory.read_checklist` so audit-side
@@ -1548,9 +1551,14 @@ def load_checklist(out_dir: Path) -> dict[str, Any]:
     marking priorities) and, in project mode, read a stale run-local
     copy instead of the project-level checklist the writers resolve to.
     Missing/malformed files still load as ``{}``.
+
+    ``frame_sink`` passes straight through to ``read_checklist`` —
+    callers that gate downstream authority on the frame provenance
+    tier (e.g. the call-edge store routing's verified mechanical
+    minting) receive it here.
     """
     from core.inventory import read_checklist
-    return read_checklist(out_dir)
+    return read_checklist(out_dir, frame_sink=frame_sink)
 
 
 def find_checklist_item(

@@ -5696,7 +5696,8 @@ def _reusable_prepass_census(config, source_texts, *,
 
 
 def _prep_call_edges(context_map: dict[str, Any], config,
-                     checklist: dict[str, Any] | None) -> None:
+                     checklist: dict[str, Any] | None,
+                     *, checklist_frame_verified: bool = False) -> None:
     """The prep seam's call-edge flow, in one testable unit.
 
     Order matters and is behavior: (1) store lane first — an existing
@@ -5713,6 +5714,13 @@ def _prep_call_edges(context_map: dict[str, Any], config,
     verified lane replaces the capped list and lifts the truncation
     markers for every in-audit consumer; an incomplete lane unions
     (deduplicated) and keeps truncation semantics.
+
+    ``checklist_frame_verified`` is the checklist's own frame-
+    authentication result (True only for a ``verified`` frame, as
+    reported by ``load_checklist``'s ``frame_sink``); both bootstrap
+    enrich calls relay it so a demoted checklist's edges land in the
+    store unstamped (hint tier) instead of being re-minted as
+    verified mechanical rows.
     """
     if _call_edges_need_bootstrap(context_map) or context_map.get(
         "call_edges_truncated"
@@ -5728,6 +5736,7 @@ def _prep_call_edges(context_map: dict[str, Any], config,
                 context_map, checklist=checklist,
                 graph_store=_cg_store, run_dir=config.out_dir,
                 target_path=str(config.target_path or ""),
+                checklist_frame_verified=checklist_frame_verified,
             )
 
         _load_call_edges_from_store(
@@ -5744,6 +5753,7 @@ def _prep_call_edges(context_map: dict[str, Any], config,
             graph_store=_graph_store_for_config(config),
             run_dir=config.out_dir,
             target_path=str(config.target_path or ""),
+            checklist_frame_verified=checklist_frame_verified,
         )
         if edge_count:
             logger.debug(
@@ -5778,7 +5788,16 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
         if cost_ledger is not None:
             cost_ledger.start_phase(name)
 
-    checklist = load_checklist(config.out_dir)
+    # Capture the checklist's frame-authentication tier alongside the
+    # load: the call-edge store routing below may only mint VERIFIED
+    # mechanical rows from a verified frame (a demoted frame's edges
+    # persist unstamped — hint tier).
+    from core.inventory import checklist_frame_mac
+    checklist_frame: list[str] = []
+    checklist = load_checklist(
+        config.out_dir, frame_sink=checklist_frame.append)
+    checklist_frame_verified = (
+        checklist_frame == [checklist_frame_mac.FRAME_VERIFIED])
     if not checklist:
         logger.error("no checklist.json in %s", config.out_dir)
         return None
@@ -5874,7 +5893,9 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
     if context_map is None:
         context_map = {}
     if not binary_mode:
-        _prep_call_edges(context_map, config, checklist)
+        _prep_call_edges(
+            context_map, config, checklist,
+            checklist_frame_verified=checklist_frame_verified)
     if not context_map.get("crypto_inventory"):
         # Bare-audit fallback (A9): without a prior /understand map the
         # crypto API packs never fed the audit — per-function contexts

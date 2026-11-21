@@ -561,3 +561,66 @@ def test_frame_provenance_tiers(tmp_path: Path) -> None:
         mutated, slot, cm.FORM_SINGLE) == cm.FRAME_TAMPERED
     assert cm.frame_provenance(
         doc, slot, cm.FORM_SINGLE) == cm.FRAME_UNSTAMPED
+
+
+# ── frame_sink reporting ─────────────────────────────────────────────
+# read_checklist's boolean gate flattens verified and demoted frames
+# into one readable tier; frame_sink hands callers the tier itself so
+# downstream authority (e.g. whether checklist-derived call edges may
+# mint verified mechanical graph-store rows) can require VERIFIED.
+
+def test_frame_sink_reports_verified_single_file(tmp_path: Path) -> None:
+    out = _out(tmp_path)
+    save_checklist(out, _doc(2))
+    seen: list[str] = []
+    data = read_checklist(out, frame_sink=seen.append)
+    assert data["files"]
+    assert seen == [cm.FRAME_VERIFIED]
+
+
+def test_frame_sink_reports_unstamped_single_file(tmp_path: Path) -> None:
+    out = _out(tmp_path)
+    (out / "checklist.json").write_text(json.dumps(_doc(2)))
+    seen: list[str] = []
+    data = read_checklist(out, frame_sink=seen.append)
+    assert data["files"]  # legacy tier still reads
+    assert seen == [cm.FRAME_UNSTAMPED]
+
+
+def test_frame_sink_reports_tampered_single_file(tmp_path: Path) -> None:
+    out = _out(tmp_path)
+    save_checklist(out, _doc(2))
+    path = out / "checklist.json"
+    on_disk = json.loads(path.read_text())
+    on_disk["files"].extend(EVIL)
+    path.write_text(json.dumps(on_disk))
+    seen: list[str] = []
+    assert read_checklist(out, frame_sink=seen.append) == {}
+    assert seen == [cm.FRAME_TAMPERED]
+
+
+def test_frame_sink_reports_verified_sharded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _force_sharded(monkeypatch)
+    out = _out(tmp_path)
+    save_checklist(out, _doc(12))
+    seen: list[str] = []
+    data = read_checklist(out, frame_sink=seen.append)
+    assert data["files"]
+    assert seen == [cm.FRAME_VERIFIED]
+
+
+def test_frame_sink_reports_unstamped_sharded(tmp_path: Path) -> None:
+    out = _out(tmp_path)
+    _write_unstamped_sharded(out, _doc(3))
+    seen: list[str] = []
+    data = read_checklist(out, frame_sink=seen.append)
+    assert data["files"]
+    assert seen == [cm.FRAME_UNSTAMPED]
+
+
+def test_frame_sink_silent_on_missing_slot(tmp_path: Path) -> None:
+    seen: list[str] = []
+    assert read_checklist(_out(tmp_path), frame_sink=seen.append) == {}
+    assert seen == []

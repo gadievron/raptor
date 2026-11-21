@@ -146,6 +146,32 @@ def test_unstamped_when_no_key(tmp_path, monkeypatch):
         result["graph_path"], result["snapshot"]) is None
 
 
+def test_source_unverified_persists_hint_tier(tmp_path):
+    """``source_verified=False`` forces the unstamped degradation even
+    with a usable key: a relayed edge set whose source artifact failed
+    (or never had) frame authentication must never be re-minted with
+    fresh run-bound tokens — that would launder a forged checklist's
+    edges into the verdict-feeding verified lane."""
+    result = _ingest(tmp_path, source_verified=False)
+    assert result is not None
+    assert result["edges"] == 3
+    assert result["stamped"] is False
+    conn = open_graph(result["graph_path"])
+    try:
+        rows = conn.execute(
+            "SELECT integrity FROM edges WHERE kind='CALLS'").fetchall()
+        assert len(rows) == 3
+        assert all(row["integrity"] == "" for row in rows)
+        snap = conn.execute(
+            "SELECT integrity FROM snapshots WHERE producer='callgraph'"
+        ).fetchone()
+        assert snap["integrity"] == ""
+    finally:
+        conn.close()
+    assert verified_mechanical_call_edges(
+        result["graph_path"], result["snapshot"], "/target") is None
+
+
 def test_junk_store_costs_the_ingest_not_the_caller(tmp_path):
     graph = tmp_path / "graph" / "raptor.graph.sqlite"
     graph.parent.mkdir(parents=True)

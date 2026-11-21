@@ -369,9 +369,15 @@ class TestStoreRouting:
         run_dir.mkdir(exist_ok=True)
         store = tmp_path / "project" / "graph" / "raptor.graph.sqlite"
         cm: dict = {}
+        # These routing tests build their checklist in memory, which
+        # the real callers only do after a frame-authenticated load —
+        # declare that provenance so the verified lane assertions
+        # exercise the stamped path (frame trust itself is pinned in
+        # TestChecklistFrameTrust).
         n = cmc.enrich_with_call_edges(
             cm, checklist=self._checklist(n_calls),
             graph_store=store, run_dir=run_dir, target_path="/target",
+            checklist_frame_verified=True,
         )
         return cm, n, store
 
@@ -461,3 +467,141 @@ class TestStoreRouting:
         assert n == 6
         assert "call_edges_store" not in cm
         assert not (tmp_path / "g.sqlite").exists()
+
+
+class TestChecklistFrameTrust:
+    """Checklist-relayed edges may only mint VERIFIED mechanical store
+    rows when the checklist's own frame authenticated. The checklist
+    is a mutable run artifact whose frame gate demotes-but-returns
+    unstamped/relocated documents — re-minting a demoted document's
+    edges with fresh run-bound tokens would launder a forged edge set
+    into the verdict-feeding lane (negative reachability reads a
+    COMPLETE verified set as proof of unreachability)."""
+
+    @pytest.fixture(autouse=True)
+    def _hermetic_ambient_state(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+
+    @staticmethod
+    def _checklist() -> dict:
+        return {"files": [{
+            "path": "src/a.c",
+            "items": [{"name": "f0"}],
+            "call_graph": {"calls": [
+                {"caller": f"f{i}", "chain": [f"g{i}"]} for i in range(3)
+            ]},
+        }]}
+
+    def _route(self, tmp_path, **kwargs):
+        from core.orchestration import context_map_callgraph as cmc
+        run_dir = tmp_path / "run"
+        run_dir.mkdir(exist_ok=True)
+        store = tmp_path / "project" / "graph" / "raptor.graph.sqlite"
+        cm: dict = {}
+        cmc.enrich_with_call_edges(
+            cm, graph_store=store, run_dir=run_dir,
+            target_path="/target", **kwargs,
+        )
+        return cm, store
+
+    @staticmethod
+    def _store_rows(store: Path):
+        from core.understand_graph.store import open_graph
+        conn = open_graph(store)
+        try:
+            return conn.execute(
+                "SELECT integrity FROM edges WHERE kind='CALLS'"
+            ).fetchall()
+        finally:
+            conn.close()
+
+    def test_undeclared_frame_mints_hint_tier(self, tmp_path):
+        """Default (no declaration): rows persist UNSTAMPED and the
+        verdict-feeding view refuses the lane."""
+        from core.understand_graph.queries import (
+            verified_mechanical_call_edges,
+        )
+        cm, store = self._route(tmp_path, checklist=self._checklist())
+        marker = cm["call_edges_store"]
+        assert marker["edges"] == 3
+        rows = self._store_rows(store)
+        assert len(rows) == 3
+        assert all(row["integrity"] == "" for row in rows)
+        assert verified_mechanical_call_edges(
+            store, marker["snapshot"], "/target") is None
+
+    def test_declared_verified_frame_keeps_stamped_lane(self, tmp_path):
+        from core.understand_graph.queries import (
+            verified_mechanical_call_edges,
+        )
+        cm, store = self._route(
+            tmp_path, checklist=self._checklist(),
+            checklist_frame_verified=True,
+        )
+        lane = verified_mechanical_call_edges(
+            store, cm["call_edges_store"]["snapshot"], "/target")
+        assert lane is not None
+        assert lane["complete"] is True
+        assert len(lane["edges"]) == 3
+
+    def test_path_lane_unstamped_file_demotes_to_hint_tier(self, tmp_path):
+        """The checklist_path lane loads the raw document (no accessor
+        gate), so it derives frame provenance itself: an unstamped
+        file — exactly what a run-dir writer forging the checklist
+        would leave — must not reach the verified lane."""
+        from core.json import save_json
+        from core.understand_graph.queries import (
+            verified_mechanical_call_edges,
+        )
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        checklist_path = out_dir / "checklist.json"
+        save_json(checklist_path, self._checklist())
+        cm, store = self._route(tmp_path, checklist_path=checklist_path)
+        marker = cm["call_edges_store"]
+        assert all(
+            row["integrity"] == "" for row in self._store_rows(store))
+        assert verified_mechanical_call_edges(
+            store, marker["snapshot"], "/target") is None
+
+    def test_path_lane_stamped_file_keeps_verified_lane(self, tmp_path):
+        """A writer-stamped checklist read through the path lane keeps
+        the stamped store lane — the demotion is earned by the frame,
+        not applied blanket to the lane."""
+        from core.inventory import save_checklist
+        from core.understand_graph.queries import (
+            verified_mechanical_call_edges,
+        )
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        save_checklist(out_dir, self._checklist())
+        cm, store = self._route(
+            tmp_path, checklist_path=out_dir / "checklist.json")
+        lane = verified_mechanical_call_edges(
+            store, cm["call_edges_store"]["snapshot"], "/target")
+        assert lane is not None
+        assert lane["complete"] is True
+
+    def test_path_lane_relocated_file_demotes(self, tmp_path):
+        """A validly-stamped frame copied to a different slot is the
+        legacy-demoted tier for reading — and therefore the hint tier
+        for minting."""
+        import shutil
+
+        from core.inventory import save_checklist
+        from core.understand_graph.queries import (
+            verified_mechanical_call_edges,
+        )
+        born_dir = tmp_path / "born"
+        born_dir.mkdir()
+        save_checklist(born_dir, self._checklist())
+        moved_dir = tmp_path / "moved"
+        moved_dir.mkdir()
+        shutil.copy2(born_dir / "checklist.json",
+                     moved_dir / "checklist.json")
+        cm, store = self._route(
+            tmp_path, checklist_path=moved_dir / "checklist.json")
+        marker = cm["call_edges_store"]
+        assert verified_mechanical_call_edges(
+            store, marker["snapshot"], "/target") is None
