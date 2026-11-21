@@ -209,6 +209,12 @@ _RECORD_LINE_MARKERS = (
     # query (_has_scala_error) or reads as a graph swap
     # (_lease_swapped).
     "JOERN_FLOW_PART:",
+    # Structural scan records (structural_c.sc / joern_scan phase):
+    # hit and error payloads quote scanned-repo code and exception
+    # text, so the diagnostic scan must never read them; the sentinels
+    # frame the final-expression echo exactly like JOERN_FLOWS_*.
+    "JOERN_SCANHIT:", "JOERN_SCANERR:", "JOERN_SCAN_DONE:",
+    "JOERN_SCAN_START", "JOERN_SCAN_END",
     # The audit verify channels' sentinel protocol (joern_verify):
     # sentinel payloads quote scanned-repo source — a payload
     # containing a "path:N: error:"-shaped string literal must never
