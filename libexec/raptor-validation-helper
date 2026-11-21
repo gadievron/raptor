@@ -3899,6 +3899,7 @@ def prepare_F(workdir, target=None):
             f"{stats['final_status_demoted']}, is_exploitable "
             f"{stats['exploitable_demoted']})"
         )
+    from packages.exploitability_validation.models import Feasibility
     for finding in data.get("findings", []):
         feas = finding.get("feasibility")
         if not isinstance(feas, dict) or feas.get("verdict"):
@@ -3908,6 +3909,34 @@ def prepare_F(workdir, target=None):
         if not (feas.get("chain_breaks") or feas.get("what_would_help")):
             continue
         if _ruling(finding).get("status") not in ("confirmed", "exploitable"):
+            continue
+        if not verify_feasibility(finding, workdir):
+            # Source-analysis content whose record does NOT verify
+            # (same contract as the orchestrator's finalize arm):
+            # chain_breaks / what_would_help live in the file-/
+            # LLM-writable findings file, so unverified content is
+            # indistinguishable from a forgery — and non-empty
+            # chain_breaks map straight to "unlikely" ->
+            # confirmed_blocked, the suppression tier. The sanitiser
+            # above demotes forged "analyzed" records to exactly this
+            # pending shape; deriving and stamping here would launder
+            # them back into mechanical provenance. Keep the prose at
+            # hint tier and finalise the finding unanalysed.
+            print(
+                f"  {_sft(str(finding.get('id', '?')), max_len=120)}: "
+                "unverified source-analysis content — refusing verdict "
+                "derivation; blockers kept as hint-tier prose",
+                file=sys.stderr,
+            )
+            hints: list[str] = []
+            for field_name in ("imported_blockers", "chain_breaks"):
+                value = feas.get(field_name)
+                if isinstance(value, list):
+                    hints.extend(b for b in value if isinstance(b, str))
+            finding["feasibility"] = Feasibility(
+                status="not_applicable",
+                imported_blockers=list(dict.fromkeys(hints)),
+            ).to_dict()
             continue
         verdict = _derive_verdict_from_source(feas)
         feas["status"] = "analyzed"
