@@ -217,6 +217,79 @@ def test_reveal_secrets_skips_the_transcript_scrub(tmp_path):
     assert runner.reveal_secrets is True
 
 
+def test_scrub_refuses_symlinked_store_root(tmp_path):
+    """The store dir sits in a run dir the network-facing child writes
+    under: the child can replace the whole ``nuclei-responses`` dir with
+    a symlink, steering the scrub's chmod/redact/REWRITE walk at a tree
+    of its choosing. The scrub must lstat-gate the root and refuse."""
+    import os
+
+    runner = _runner(tmp_path)
+    victim_dir = tmp_path / "victim-tree"
+    victim_dir.mkdir()
+    victim_file = victim_dir / "notes.txt"
+    token = "tok-" + "b" * 32
+    victim_file.write_text(f"Authorization: Bearer {token}\n", encoding="utf-8")
+    os.chmod(victim_file, 0o644)
+    os.chmod(victim_dir, 0o755)
+
+    store = tmp_path / "nuclei-responses"
+    store.symlink_to(victim_dir)
+
+    runner._scrub_response_store(store)
+
+    assert victim_dir.stat().st_mode & 0o777 == 0o755, (
+        "scrub chmodded through the symlinked store root"
+    )
+    assert victim_file.stat().st_mode & 0o777 == 0o644
+    assert token in victim_file.read_text(encoding="utf-8"), (
+        "scrub rewrote a file outside the store"
+    )
+
+
+def test_scrub_entry_swap_cannot_retarget_chmod(tmp_path, monkeypatch):
+    """Simulate the check-then-chmod swap: the symlink gate sees a
+    regular file (as if the entry were swapped right after the check).
+    The permission drop and read must still refuse the link — fd-based
+    ``O_NOFOLLOW`` + ``fchmod`` discipline, not path-based ``chmod``
+    (which follows symlinks; Linux has no lchmod)."""
+    import os
+    import stat as stat_mod
+
+    runner = _runner(tmp_path)
+    victim = tmp_path / "victim.txt"
+    victim.write_text("precious", encoding="utf-8")
+    os.chmod(victim, 0o644)
+
+    store = tmp_path / "nuclei-responses"
+    store.mkdir()
+    planted = store / "req-1.txt"
+    planted.symlink_to(victim)
+
+    real_lstat = Path.lstat
+    real_is_symlink = Path.is_symlink
+
+    def lying_lstat(self):
+        st = real_lstat(self)
+        if self.name == "req-1.txt":
+            fake_mode = stat_mod.S_IFREG | stat_mod.S_IMODE(st.st_mode)
+            return os.stat_result((fake_mode, *tuple(st)[1:]))
+        return st
+
+    monkeypatch.setattr(Path, "lstat", lying_lstat)
+    monkeypatch.setattr(
+        Path, "is_symlink",
+        lambda self: False if self.name == "req-1.txt" else real_is_symlink(self),
+    )
+
+    runner._scrub_response_store(store)
+
+    assert victim.stat().st_mode & 0o777 == 0o644, (
+        "scrub followed the planted symlink and chmodded its target"
+    )
+    assert victim.read_text(encoding="utf-8") == "precious"
+
+
 def test_private_host_recognizes_hostnames_by_resolution(monkeypatch, _private_host_lookup):
     is_private, lookup = _private_host_lookup
 

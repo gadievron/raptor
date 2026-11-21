@@ -20,6 +20,7 @@ import ipaddress
 import json
 import os
 import shutil
+import stat
 import subprocess
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -453,42 +454,118 @@ class ExternalValidatorRunner:
 
     def _scrub_response_store(self, responses_dir: Path) -> None:
         """Redact credential material inside stored transcripts at rest
-        and drop their permissions to 0600 (dirs 0700)."""
-        if not responses_dir.is_dir():
+        and drop their permissions to 0600 (dirs 0700).
+
+        The store was written by the (network-facing) child, so every
+        entry is untrusted. Symlinks are skipped outright — following a
+        planted link would chmod/read/REWRITE whatever it points at
+        outside the store — and, because that lstat-class check leaves
+        a swap window before any path-based chmod (``os.chmod`` follows
+        symlinks; Linux has no lchmod), every permission drop and read
+        goes through a file descriptor whose ``O_NOFOLLOW`` open
+        re-refuses a link at the final component (ELOOP) and whose
+        ``fstat`` pins the file type before ``fchmod``/read.
+        """
+        try:
+            st_root = responses_dir.lstat()
+        except OSError:
+            return
+        if not stat.S_ISDIR(st_root.st_mode):
+            # A symlink (or anything else) where the store dir should
+            # be means the child replaced it — walking through it would
+            # scrub a tree of the child's choosing. Refuse.
+            logger.debug(
+                "response store %s is not a real directory; skipping scrub",
+                responses_dir,
+            )
             return
         try:
             entries = sorted(responses_dir.rglob("*"))
         except OSError:
             logger.debug("could not walk nuclei response store", exc_info=True)
             return
-        try:
-            responses_dir.chmod(0o700)
-        except OSError:
-            logger.debug("could not restrict response store dir", exc_info=True)
+        self._restrict_store_dir(responses_dir)
         for entry in entries:
             try:
-                # Skip symlinks outright: the store was written by
-                # the (network-facing) child — following a planted
-                # link here would chmod/read/REWRITE whatever it
-                # points at outside the store.
-                if entry.is_symlink():
-                    continue
-                if entry.is_dir():
-                    entry.chmod(0o700)
-                    continue
-                if not entry.is_file():
-                    continue
-                entry.chmod(0o600)
-                if entry.stat().st_size > self._MAX_SCRUB_BYTES:
-                    continue
-                text = entry.read_text(encoding="utf-8", errors="replace")
-                redacted = redact_secrets(text)
-                if redacted != text:
-                    write_text_atomically(entry, redacted)
+                st = entry.lstat()
             except OSError:
                 logger.debug(
                     "could not scrub transcript %s", entry, exc_info=True,
                 )
+                continue
+            if stat.S_ISLNK(st.st_mode):
+                continue
+            if stat.S_ISDIR(st.st_mode):
+                self._restrict_store_dir(entry)
+                continue
+            if not stat.S_ISREG(st.st_mode):
+                continue
+            self._scrub_transcript(entry)
+
+    @staticmethod
+    def _restrict_store_dir(path: Path) -> None:
+        """Drop one store directory to 0700 via an O_NOFOLLOW dir fd."""
+        try:
+            fd = os.open(
+                path,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            )
+        except OSError:
+            logger.debug(
+                "could not restrict response store dir %s", path,
+                exc_info=True,
+            )
+            return
+        try:
+            os.fchmod(fd, 0o700)
+        except OSError:
+            logger.debug(
+                "could not restrict response store dir %s", path,
+                exc_info=True,
+            )
+        finally:
+            os.close(fd)
+
+    def _scrub_transcript(self, entry: Path) -> None:
+        """Drop one transcript to 0600 and redact it, all on one fd."""
+        from core.atomic_fs import open_hardened_read
+        try:
+            fd = open_hardened_read(entry)
+        except OSError:
+            logger.debug(
+                "could not scrub transcript %s", entry, exc_info=True,
+            )
+            return
+        try:
+            os.fchmod(fd, 0o600)
+            if os.fstat(fd).st_size > self._MAX_SCRUB_BYTES:
+                return
+            chunks: list[bytes] = []
+            while True:
+                chunk = os.read(fd, 1 << 20)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+        except OSError:
+            logger.debug(
+                "could not scrub transcript %s", entry, exc_info=True,
+            )
+            return
+        finally:
+            os.close(fd)
+        text = b"".join(chunks).decode("utf-8", errors="replace")
+        redacted = redact_secrets(text)
+        if redacted == text:
+            return
+        try:
+            # Atomic replace swaps the directory ENTRY (rename never
+            # follows a link at the destination), so a racing planted
+            # symlink cannot steer the rewrite either.
+            write_text_atomically(entry, redacted)
+        except OSError:
+            logger.debug(
+                "could not scrub transcript %s", entry, exc_info=True,
+            )
 
     @staticmethod
     def _is_private_host(url: str) -> bool:
