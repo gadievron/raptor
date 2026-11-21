@@ -63,6 +63,7 @@ from typing import Any
 from core.atomic_fs import write_text_atomically
 from core.json import JsonCache, save_json
 from core.logging import configure_cli_logging
+from core.security.log_sanitisation import sanitise_for_terminal
 
 from . import sca_cache_root, default_client
 from .discovery import find_manifests
@@ -1493,7 +1494,8 @@ def _run_self_test(
         if stash.returncode not in (0, 1) or stash.stderr.strip():
             print(f"raptor-sca fix --harden --self-test: `git stash create` "
                   f"failed (rc={stash.returncode}): "
-                  f"{stash.stderr or stash.stdout}", file=sys.stderr)
+                  f"{sanitise_for_terminal(stash.stderr or stash.stdout)}",
+                  file=sys.stderr)
             return 6
         worktree_ref = stash.stdout.strip() or "HEAD"
 
@@ -1513,7 +1515,8 @@ def _run_self_test(
         )
         if proc.returncode != 0:
             print(f"raptor-sca fix --harden --self-test: git worktree add failed: "
-                  f"{proc.stderr or proc.stdout}", file=sys.stderr)
+                  f"{sanitise_for_terminal(proc.stderr or proc.stdout)}",
+                  file=sys.stderr)
             return 6
 
         # Apply the patch inside the worktree. The patch lives at
@@ -1535,7 +1538,8 @@ def _run_self_test(
         )
         if proc.returncode != 0:
             print(f"raptor-sca fix --harden --self-test: patch application failed: "
-                  f"{proc.stderr or proc.stdout}", file=sys.stderr)
+                  f"{sanitise_for_terminal(proc.stderr or proc.stdout)}",
+                  file=sys.stderr)
             return 6
 
         # Re-plan against the post-state. Same flags as pass 1 — notably

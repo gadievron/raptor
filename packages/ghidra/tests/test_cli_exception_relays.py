@@ -65,6 +65,38 @@ def test_r2_import_failure_notice_is_inert(tmp_path, monkeypatch, capsys):
     _assert_inert(err)
 
 
+def test_detach_failure_notice_is_one_line_and_bounded(
+        monkeypatch, capsys):
+    """Exception text in one-line echoes cannot forge label lines.
+
+    ``_safe_name`` strips terminal controls but deliberately keeps
+    newlines (decompile block output) and does not bound length — an
+    OSError whose message embeds ``\\nerror: ...`` would start a
+    forged line at column 0 on the operator TTY. One-line relays must
+    route through ``_safe_line`` (flatten + bound) instead.
+    """
+    import packages.ghidra.attach as attach
+
+    mod = _load_cli(monkeypatch)
+    payload = (_ESC_PAYLOAD
+               + "\nerror: forged verdict line\n" + "A" * 5000)
+
+    def _raise(_gpr, wait=False):
+        raise OSError(payload)
+
+    monkeypatch.setattr(attach, "detach", _raise)
+    rc = mod._cmd_detach(
+        argparse.Namespace(gpr=None, wait=False))
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "detach failed" in err
+    _assert_inert(err)
+    # Flattened: the embedded newline cannot open a column-0 line.
+    assert "\nerror: forged" not in err
+    # Bounded: the 5000-char tail is cut at the relay's limit.
+    assert len(err) < 2000
+
+
 def _decompile_args(tmp_path: Path) -> argparse.Namespace:
     gpr = tmp_path / "proj.gpr"
     gpr.write_text("")

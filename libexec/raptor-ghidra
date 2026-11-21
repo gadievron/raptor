@@ -175,7 +175,14 @@ _CTRL_CHARS = re.compile(
 
 
 def _safe_name(name: str) -> str:
-    """Strip terminal control characters from attacker-chosen names."""
+    """Strip terminal control characters from attacker-chosen text.
+
+    For MULTI-LINE block output only (decompilation / disassembly
+    dumps, where newlines are the content). It deliberately preserves
+    newlines and does not bound length, so a value it scrubbed can
+    still forge label-shaped lines at column 0 — every one-line echo
+    (error notices, list entries, status labels) must go through
+    :func:`_safe_line` instead."""
     return _CTRL_CHARS.sub("", str(name))
 
 
@@ -278,7 +285,7 @@ def _cmd_attach(args: argparse.Namespace) -> int:
         assert isinstance(res, tuple)
         cache_dir, db = res
     except ValueError as e:
-        print(f"error: {_safe_name(str(e))}", file=sys.stderr)
+        print(f"error: {_safe_line(str(e), limit=1600)}", file=sys.stderr)
         return 1
     except OSError as e:
         # Registration may already be persisted (the save is atomic
@@ -286,7 +293,7 @@ def _cmd_attach(args: argparse.Namespace) -> int:
         # traceback that hides the half-done state.
         print(
             f"error: attach failed on a filesystem operation: "
-            f"{_safe_name(str(e))}\n"
+            f"{_safe_line(str(e), limit=1600)}\n"
             "check 'raptor-ghidra status' — the registration may "
             "already be in place; re-run attach after fixing the "
             "cause", file=sys.stderr,
@@ -295,7 +302,7 @@ def _cmd_attach(args: argparse.Namespace) -> int:
     except Exception as e:
         if type(e).__name__ == "OpLockContention":
             print(
-                f"error: the project is busy ({_safe_name(str(e))}) — "
+                f"error: the project is busy ({_safe_line(str(e), limit=300)}) — "
                 "a run or another project operation holds the lock; "
                 "retry when it finishes", file=sys.stderr,
             )
@@ -303,7 +310,7 @@ def _cmd_attach(args: argparse.Namespace) -> int:
         raise
 
     if import_error or db is None:
-        detail = _safe_name(str(import_error[0])) if import_error \
+        detail = _safe_line(str(import_error[0]), limit=1600) if import_error \
             else "no database produced"
         print(
             f"attached (registered on the project), but the import "
@@ -371,13 +378,13 @@ def _cmd_detach(args: argparse.Namespace) -> int:
     try:
         removed = detach(args.gpr, wait=args.wait)
     except OSError as e:
-        print(f"error: detach failed: {_safe_name(str(e))}",
+        print(f"error: detach failed: {_safe_line(str(e), limit=1600)}",
               file=sys.stderr)
         return 1
     except Exception as e:
         if type(e).__name__ == "OpLockContention":
             print(
-                f"error: the project is busy ({_safe_name(str(e))}) — "
+                f"error: the project is busy ({_safe_line(str(e), limit=300)}) — "
                 "retry when the current operation finishes",
                 file=sys.stderr,
             )
@@ -664,7 +671,7 @@ def _cmd_diff(args: argparse.Namespace) -> int:
             print("\npriority review targets (added/changed, "
                   "auto-named excluded):")
             for name in targets[:25]:
-                print(f"  - {_safe_name(name)}")
+                print(f"  - {_safe_line(name)}")
             if len(targets) > 25:
                 print(f"  … and {len(targets) - 25} more "
                       "(see version-diff.json)")
@@ -758,12 +765,12 @@ def _cmd_decompile(args: argparse.Namespace) -> int:
             )
             if contained and binary.is_file():
                 print("decompiler unavailable — objdump disassembly "
-                      f"for {func.name}:", file=sys.stderr)
+                      f"for {_safe_line(func.name)}:", file=sys.stderr)
                 print(_safe_name(disassemble_function(
                     binary, func.address, func.size)))
                 return 0
             if binary.is_file():
-                print(f"error: cached binary path {binary} is outside "
+                print(f"error: cached binary path {_safe_line(str(binary))} is outside "
                       "the project and out/ directories — refusing "
                       "to disassemble it", file=sys.stderr)
                 return 1
@@ -792,7 +799,7 @@ def _cmd_list(args: argparse.Namespace) -> int:
         else:
             print(f"{gpr.name}: {len(programs)} program(s)")
             for name in programs[:50]:
-                print(f"  {_safe_name(name)}")
+                print(f"  {_safe_line(name)}")
             if len(programs) > 50:
                 print(f"  … and {len(programs) - 50} more")
         return 0
@@ -817,8 +824,8 @@ def _cmd_list(args: argparse.Namespace) -> int:
             else:
                 print(f"{gpr.name}: {len(files)} program(s)")
                 for f in files:
-                    print(f"  {_safe_name(f.getName())}  "
-                          f"({_safe_name(f.getContentType())})")
+                    print(f"  {_safe_line(f.getName())}  "
+                          f"({_safe_line(f.getContentType(), limit=100)})")
             project.close()
         finally:
             shutil.rmtree(work_dir, ignore_errors=True)
@@ -855,7 +862,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
             # guards — malformed run artifacts must surface as an
             # actionable message, same posture as the --to path.
             print(f"error: export failed while gathering findings: "
-                  f"{_safe_name(str(e)[:300])}", file=sys.stderr)
+                  f"{_safe_line(str(e), limit=300)}", file=sys.stderr)
             return 1
         print(
             f"{int(result)} submission(s) across "
@@ -885,7 +892,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
     try:
         counts = export_all_to_ghidra(out_dir, gpr_path, results)
     except Exception as e:
-        print(f"error: export failed: {_safe_name(str(e)[:1600])}",
+        print(f"error: export failed: {_safe_line(str(e), limit=1600)}",
               file=sys.stderr)
         return 1
 
@@ -933,7 +940,7 @@ def main() -> int:
             # attacker-influenced (the JVM echoes bundle-internal
             # names) — so it passes the same scrub as every other
             # hostile-derived print.
-            print(f"error: {_safe_name(str(e)[:1600])}",
+            print(f"error: {_safe_line(str(e), limit=1600)}",
                   file=sys.stderr)
             return 1
         if not isinstance(e, ImportError):

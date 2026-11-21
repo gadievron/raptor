@@ -413,19 +413,19 @@
       "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-ghidra::_cmd_attach::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
+      "note": "broad-handler exception relay, remediated at the print sites: every one-line echo now routes through _safe_line (control-char scrub via _CTRL_CHARS + newline/tab flatten + length bound). _safe_line is a regex-strip scrubber, not a canonical log_sanitisation primitive, so the detector cannot recognise it and the entry stays (same shadow-arm adjudication as decomp_tree._clip); multi-line decompile/disassembly block output legitimately keeps _safe_name."
     },
     "libexec/raptor-ghidra::_cmd_decompile::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
+      "note": "broad-handler exception relay, remediated at the print sites: every one-line echo now routes through _safe_line (control-char scrub via _CTRL_CHARS + newline/tab flatten + length bound). _safe_line is a regex-strip scrubber, not a canonical log_sanitisation primitive, so the detector cannot recognise it and the entry stays (same shadow-arm adjudication as decomp_tree._clip); multi-line decompile/disassembly block output legitimately keeps _safe_name."
     },
     "libexec/raptor-ghidra::_cmd_detach::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
+      "note": "broad-handler exception relay, remediated at the print sites: every one-line echo now routes through _safe_line (control-char scrub via _CTRL_CHARS + newline/tab flatten + length bound). _safe_line is a regex-strip scrubber, not a canonical log_sanitisation primitive, so the detector cannot recognise it and the entry stays (same shadow-arm adjudication as decomp_tree._clip); multi-line decompile/disassembly block output legitimately keeps _safe_name."
     },
     "libexec/raptor-ghidra::_cmd_export::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
+      "note": "broad-handler exception relay, remediated at the print sites: every one-line echo now routes through _safe_line (control-char scrub via _CTRL_CHARS + newline/tab flatten + length bound). _safe_line is a regex-strip scrubber, not a canonical log_sanitisation primitive, so the detector cannot recognise it and the entry stays (same shadow-arm adjudication as decomp_tree._clip); multi-line decompile/disassembly block output legitimately keeps _safe_name."
     },
     "libexec/raptor-ghidra::main::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
+      "note": "broad-handler exception relay, remediated at the print sites: every one-line echo now routes through _safe_line (control-char scrub via _CTRL_CHARS + newline/tab flatten + length bound). _safe_line is a regex-strip scrubber, not a canonical log_sanitisation primitive, so the detector cannot recognise it and the entry stays (same shadow-arm adjudication as decomp_tree._clip); multi-line decompile/disassembly block output legitimately keeps _safe_name."
     },
     "libexec/raptor-pick-strategies::main::unsanitised_exception_text::e": {
       "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
@@ -545,37 +545,37 @@
       "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "packages/exploit_feasibility/api.py::format_analysis_summary::unsanitised_llm_value::_fmt": {
-      "note": "exploit-feasibility summary lanes, previously triaged on this file; widened vocabulary re-keys the same lanes — sanitise + register on next functional touch"
+      "note": "remediated via the _inert_display_copy chokepoint: the whole result/context dict is deep-copied with every string passed through sanitise_for_terminal at the top of the formatter, before any f-string. The AST detector keys on per-interpolation sanitiser calls and cannot see a dict-level chokepoint, so the entry stays as a triaged residual with this note."
     },
     "packages/exploit_feasibility/api.py::format_analysis_summary::unsanitised_llm_value::description": {
-      "note": "feasibility summaries interpolate the package's own mitigation-catalog constants; the target-derived residue is unit-filed to the exploit_feasibility owner (campaign row U17-18)"
+      "note": "remediated via the _inert_display_copy chokepoint: the whole result/context dict is deep-copied with every string passed through sanitise_for_terminal at the top of the formatter, before any f-string. The AST detector keys on per-interpolation sanitiser calls and cannot see a dict-level chokepoint, so the entry stays as a triaged residual with this note."
     },
     "packages/exploit_feasibility/api.py::format_analysis_summary::unsanitised_llm_value::name": {
-      "note": "blocker names come from the package's own mitigation-catalog constants; same adjudication as this file's existing description/reason entries"
+      "note": "remediated via the _inert_display_copy chokepoint: the whole result/context dict is deep-copied with every string passed through sanitise_for_terminal at the top of the formatter, before any f-string. The AST detector keys on per-interpolation sanitiser calls and cannot see a dict-level chokepoint, so the entry stays as a triaged residual with this note."
     },
     "packages/exploit_feasibility/api.py::format_analysis_summary::unsanitised_llm_value::reason": {
-      "note": "exploit-feasibility summary lanes, previously triaged on this file; widened vocabulary re-keys the same lanes — sanitise + register on next functional touch"
+      "note": "remediated via the _inert_display_copy chokepoint: the whole result/context dict is deep-copied with every string passed through sanitise_for_terminal at the top of the formatter, before any f-string. The AST detector keys on per-interpolation sanitiser calls and cannot see a dict-level chokepoint, so the entry stays as a triaged residual with this note."
     },
     "packages/exploit_feasibility/api.py::format_analysis_summary::unsanitised_llm_value::technique": {
-      "note": "exploit-feasibility summary lanes, previously triaged on this file; widened vocabulary re-keys the same lanes — sanitise + register on next functional touch"
+      "note": "remediated via the _inert_display_copy chokepoint: the whole result/context dict is deep-copied with every string passed through sanitise_for_terminal at the top of the formatter, before any f-string. The AST detector keys on per-interpolation sanitiser calls and cannot see a dict-level chokepoint, so the entry stays as a triaged residual with this note."
     },
     "packages/exploit_feasibility/api.py::format_analysis_summary::unsanitised_llm_value::version": {
-      "note": "exploit-feasibility summary lanes, previously triaged on this file; widened vocabulary re-keys the same lanes — sanitise + register on next functional touch"
+      "note": "remediated via the _inert_display_copy chokepoint: the whole result/context dict is deep-copied with every string passed through sanitise_for_terminal at the top of the formatter, before any f-string. The AST detector keys on per-interpolation sanitiser calls and cannot see a dict-level chokepoint, so the entry stays as a triaged residual with this note."
     },
     "packages/exploit_feasibility/api.py::format_analysis_summary::unsanitised_llm_value::viability_summary": {
-      "note": "feasibility summaries interpolate the package's own mitigation-catalog constants; the target-derived residue is unit-filed to the exploit_feasibility owner (campaign row U17-18)"
+      "note": "remediated via the _inert_display_copy chokepoint: the whole result/context dict is deep-copied with every string passed through sanitise_for_terminal at the top of the formatter, before any f-string. The AST detector keys on per-interpolation sanitiser calls and cannot see a dict-level chokepoint, so the entry stays as a triaged residual with this note."
     },
     "packages/exploit_feasibility/api.py::print_exploit_context::unsanitised_llm_value::b": {
-      "note": "exploit-feasibility summary lanes, previously triaged on this file; widened vocabulary re-keys the same lanes — sanitise + register on next functional touch"
+      "note": "remediated via the _inert_display_copy chokepoint: the whole result/context dict is deep-copied with every string passed through sanitise_for_terminal at the top of the formatter, before any f-string. The AST detector keys on per-interpolation sanitiser calls and cannot see a dict-level chokepoint, so the entry stays as a triaged residual with this note."
     },
     "packages/exploit_feasibility/api.py::print_exploit_context::unsanitised_llm_value::name": {
-      "note": "binary-derived target symbol name in the terminal summary; same residual tier as this file's other baselined summary lanes — sanitise + register on next functional touch"
+      "note": "remediated via the _inert_display_copy chokepoint: the whole result/context dict is deep-copied with every string passed through sanitise_for_terminal at the top of the formatter, before any f-string. The AST detector keys on per-interpolation sanitiser calls and cannot see a dict-level chokepoint, so the entry stays as a triaged residual with this note."
     },
     "packages/exploit_feasibility/api.py::print_exploit_context::unsanitised_llm_value::note": {
-      "note": "exploit-feasibility summary lanes, previously triaged on this file; widened vocabulary re-keys the same lanes — sanitise + register on next functional touch"
+      "note": "remediated via the _inert_display_copy chokepoint: the whole result/context dict is deep-copied with every string passed through sanitise_for_terminal at the top of the formatter, before any f-string. The AST detector keys on per-interpolation sanitiser calls and cannot see a dict-level chokepoint, so the entry stays as a triaged residual with this note."
     },
     "packages/exploit_feasibility/api.py::print_exploit_context::unsanitised_llm_value::notes": {
-      "note": "exploit-feasibility summary lanes, previously triaged on this file; widened vocabulary re-keys the same lanes — sanitise + register on next functional touch"
+      "note": "remediated via the _inert_display_copy chokepoint: the whole result/context dict is deep-copied with every string passed through sanitise_for_terminal at the top of the formatter, before any f-string. The AST detector keys on per-interpolation sanitiser calls and cannot see a dict-level chokepoint, so the entry stays as a triaged residual with this note."
     },
     "packages/exploit_feasibility/constraints.py::BadByteImpact.summary::unsanitised_llm_value::reason": {
       "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
@@ -657,15 +657,6 @@
     },
     "packages/sca/clean_cache.py::main::unsanitised_exception_text::e": {
       "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
-    },
-    "packages/sca/harden.py::_run_self_test::unsanitised_llm_value::proc": {
-      "note": "self-test lane relays its own child's output for the operator running the self-test; the child is RAPTOR's own harden CLI"
-    },
-    "packages/sca/harden.py::_run_self_test::unsanitised_llm_value::stderr": {
-      "note": "self-test lane relays its own child's output for the operator running the self-test; the child is RAPTOR's own harden CLI"
-    },
-    "packages/sca/harden.py::_run_self_test::unsanitised_llm_value::stdout": {
-      "note": "self-test lane relays its own child's output for the operator running the self-test; the child is RAPTOR's own harden CLI"
     },
     "packages/sca/harden.py::_write_report::unsanitised_llm_value::detail": {
       "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
