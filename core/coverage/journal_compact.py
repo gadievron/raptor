@@ -441,12 +441,21 @@ def _spend_carrier_line(entry: ReviewJournalEntry,
     (``journal_spend_usd``) sees the identical value sequence — the
     spend floor is preserved bit-exactly, not merely to the cent. The
     row is loader-compatible by construction (built through the entry
-    dataclass and MAC-stamped like a live append) and inert
-    everywhere: ``error`` verdict (excluded from ``reviewed_set``,
-    coverage import, drift, and every reuse fold), reserved
-    file/function identity, and a ``[mechanical]`` body prefix so the
-    single counting rule (``is_mechanical_echo``) keeps it out of
-    review counts.
+    dataclass) and inert everywhere: ``error`` verdict (excluded from
+    ``reviewed_set``, coverage import, drift, and every reuse fold),
+    reserved file/function identity, and a ``[mechanical]`` body
+    prefix so the single counting rule (``is_mechanical_echo``) keeps
+    it out of review counts.
+
+    MAC tier follows the SOURCE row (same doctrine as
+    :func:`_slim_stub_line` — the compactor never mints over content
+    it could not verify): a carrier for a verified superseded row is
+    stamped like a live append; a carrier for an unstamped or
+    tampered row lands honest-unstamped. The journal lives in a
+    target-writable run dir, so a forged ``cost_usd`` must not come
+    out of compaction wearing a fresh valid token. The spend floor is
+    unaffected either way — ``journal_spend_usd`` sums ``cost_usd``
+    regardless of stamp tier.
     """
     cost = raw.get("cost_usd")
     if not isinstance(cost, (int, float)) or isinstance(cost, bool) \
@@ -472,9 +481,11 @@ def _spend_carrier_line(entry: ReviewJournalEntry,
     from core.coverage import journal_mac
     row = carrier.to_dict()
     row.pop(journal_mac.TOKEN_KEY, None)
-    token = journal_mac.mint_row(row)
-    if token:
-        row[journal_mac.TOKEN_KEY] = token
+    source_token = raw.get(journal_mac.TOKEN_KEY)
+    if bool(source_token) and journal_mac.verify_row(raw, source_token):
+        token = journal_mac.mint_row(row)
+        if token:
+            row[journal_mac.TOKEN_KEY] = token
     return (
         json.dumps(row, separators=(",", ":"), allow_nan=False) + "\n"
     ).encode("utf-8")

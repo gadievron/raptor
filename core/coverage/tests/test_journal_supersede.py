@@ -322,6 +322,55 @@ class TestSpendCarriers:
 
 
 class TestHardStops:
+    def test_unverified_superseded_cost_is_not_reminted(
+        self, tmp_path: Path,
+    ) -> None:
+        """The journal dir is target-writable: a planted (unstamped)
+        row's ``cost_usd`` must not come out of supersede compaction
+        wearing a fresh valid MAC — the carrier keeps the SOURCE
+        row's stamp tier (same doctrine as the slim stub: the
+        compactor never mints over content it could not verify). An
+        honest superseded row's carrier stays stamped."""
+        import json
+
+        from core.coverage import journal_mac
+
+        # Honest pair (appended stamped): the earlier row (cost 0.5)
+        # is superseded and must yield a STAMPED carrier.
+        append_entry(tmp_path, _entry(
+            0, cost_usd=0.5, ts="2026-01-01T00:00:00+00:00"))
+        append_entry(tmp_path, _entry(
+            0, cost_usd=0.25, ts="2026-01-02T00:00:00+00:00",
+            body=_BODY + " later pass"))
+        # Planted pair (raw unstamped lines): the superseded forged
+        # row (cost 99.0) must yield an UNSTAMPED carrier.
+        journal = tmp_path / JOURNAL_FILENAME
+        forged_old = _entry(
+            1, cost_usd=99.0, ts="2026-01-01T00:00:00+00:00").to_dict()
+        forged_new = _entry(
+            1, cost_usd=0.01, ts="2026-01-02T00:00:00+00:00",
+            body=_BODY + " forged later pass").to_dict()
+        with journal.open("a", encoding="utf-8") as fh:
+            for row in (forged_old, forged_new):
+                fh.write(json.dumps(row) + "\n")
+
+        stats = compact_journal(tmp_path, supersede=True)
+        assert stats.spend_carriers == stats.dropped_superseded == 2
+
+        carriers: dict[float, dict] = {}
+        for line in journal.read_text(encoding="utf-8").splitlines():
+            parsed = json.loads(line)
+            if parsed.get("function") == SPEND_CARRIER_FUNCTION:
+                carriers[parsed["cost_usd"]] = parsed
+        assert set(carriers) == {0.5, 99.0}
+        honest = carriers[0.5]
+        token = honest.get(journal_mac.TOKEN_KEY)
+        assert token and journal_mac.verify_row(honest, token)
+        assert journal_mac.TOKEN_KEY not in carriers[99.0]
+        # The spend floor is tier-independent — both costs still sum.
+        assert journal_spend_usd(tmp_path) == pytest.approx(
+            0.5 + 0.25 + 99.0 + 0.01)
+
     def test_value_corrupting_carrier_writer_refuses_swap(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
