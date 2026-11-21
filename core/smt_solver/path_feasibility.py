@@ -925,6 +925,41 @@ def _minmax_summary(pick_smaller: bool):
     return _builder
 
 
+#: Callees whose summary axiom is an ASSUMPTION rather than a contract:
+#: ``sizeof != 0`` is wrong even for the genuine operator — GNU C
+#: zero-size objects (zero-length array members, empty structs) have
+#: ``sizeof`` 0, so a refutation whose native unsat core NEEDS this
+#: axiom proves only that the assumption conflicts with the path. It is
+#: demoted to inconclusive. The other summaries state semantics that
+#: hold for the genuine callee (strlen/wcslen nonnegativity, the
+#: strnlen bound, the abs-family INT_MIN corner, the min/max ordering
+#: ITE) and remain refutation-grade.
+_ASSUMPTION_TIER_CALLEES = frozenset({"sizeof"})
+
+
+def _assumption_tier_core_axioms(
+    core_labels: list[str] | None,
+    axiom_labels: list[str],
+) -> list[str]:
+    """Assumption-tier axiom labels named by the native unsat core.
+
+    Empty when the core could not be extracted (``core_labels`` falsy) —
+    known dependence demotes the verdict; unknown dependence is left to
+    the ``refutation_uses_call_terms`` receipt.
+    """
+    if not core_labels:
+        return []
+    axiom_set = set(axiom_labels)
+    hits: list[str] = []
+    for label in core_labels:
+        if label not in axiom_set or not label.startswith("summary: "):
+            continue
+        callee = label[len("summary: "):].split("(", 1)[0].strip()
+        if callee in _ASSUMPTION_TIER_CALLEES:
+            hits.append(label)
+    return sorted(set(hits))
+
+
 # Callee name (case-sensitive, matching C) → (arity, axiom builder). A builder
 # returns a Z3 expression or None (axiom not meaningful for this
 # profile / arguments) — None keeps today's free-variable behaviour.
@@ -1637,23 +1672,49 @@ def _solve_pending(
         )
         core_epoch = tracked.single_core_origin(solver) if has_mutation else None
         unmodeled_mutation = has_mutation and core_epoch is None
+        # A refutation may REST on a background call-summary axiom.
+        # Contract-tier axioms (semantics of the genuine callee:
+        # strlen, strnlen, abs, min/max) can ground an unsat;
+        # assumption-tier axioms cannot — sizeof can be 0 for GNU C
+        # zero-size objects, so a core that needs ``sizeof != 0``
+        # proves only that the assumption conflicts with the path, not
+        # that the path is dead. Demotion applies on KNOWN dependence
+        # (the native core names the axiom); an unextractable core
+        # keeps today's verdict and the
+        # ``refutation_uses_call_terms=None`` receipt already tells
+        # consumers the dependence was not ruled out.
+        assumption_axioms = _assumption_tier_core_axioms(
+            conflicts, _axiom_labels)
         if unmodeled_mutation:
             reasoning = (
                 f"indeterminate ({mode}): encoded constraints are unsatisfiable, "
                 "but rejected input has unmodeled scalar value flow; "
                 "refusing the refutation"
             )
+        elif assumption_axioms:
+            reasoning = (
+                f"indeterminate ({mode}): encoded constraints are "
+                f"unsatisfiable only with background assumption(s) "
+                f"{', '.join(assumption_axioms[:3])} — sizeof can be 0 "
+                f"for GNU C zero-size objects; refusing the "
+                f"refutation, verify the assumption against source"
+            )
         else:
             reasoning = f"infeasible ({mode}): path conditions are mutually exclusive"
             if has_mutation:
                 reasoning += f"; native core confined to mutation-free segment {core_epoch}"
         if conflicts:
-            label = "encoded conflict" if unmodeled_mutation else "conflict"
+            label = (
+                "encoded conflict"
+                if unmodeled_mutation or assumption_axioms else "conflict"
+            )
             reasoning += f"; {label}: {' ⊥ '.join(conflicts[:3])}"
         return PathSMTResult(
             wp_complete=reduce_constraints and not has_mutation,
             refutation_uses_call_terms=uses_calls,
-            feasible=None if unmodeled_mutation else False,
+            feasible=(
+                None if unmodeled_mutation or assumption_axioms else False
+            ),
             satisfied=satisfied, unsatisfied=conflict_set, unknown=unknown,
             unknown_reasons=unknown_reasons,
             model={}, smt_available=True,

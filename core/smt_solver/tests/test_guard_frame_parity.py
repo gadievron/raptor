@@ -28,7 +28,9 @@ def verb_query(texts, profile, reduce):
     (["probe(Data) == 1", "probe(Other) == 2"], True),
     (["probe(Data) == 1", "Probe(Data) == 2"], True),
     (["strlen(Data) < 0"], False),
-    (["sizeof(Data) == 0"], False),
+    # sizeof != 0 is an assumption (GNU C zero-size objects), not a
+    # contract — a refutation resting on it demotes to inconclusive.
+    (["sizeof(Data) == 0"], None),
     (["min(Value, 4) > 4"], False),
     (["max(Value, 4) < 4"], False),
     (["abs(Value) == -1"], False),
@@ -43,7 +45,9 @@ def test_path_and_intrinsic_guards_agree(texts, expected, reduce):
     assert path.anon_var_map == verb.anon_var_map
     assert path.summary_axioms == verb.summary_axioms
     assert not path.unknown and not verb.unknown
-    assert verb.wp_complete is reduce
+    # Completeness certification needs a decided verdict — a demoted
+    # (inconclusive) row never certifies a complete summary.
+    assert verb.wp_complete is (reduce and expected is not None)
 
 
 @pytest.mark.parametrize("reduce", [True, False])
