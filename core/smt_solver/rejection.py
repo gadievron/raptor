@@ -150,6 +150,15 @@ class RejectionKind(str, Enum):
     path. Independent contradictions within one segment remain useful.
     Call occurrences are always fresh, regardless of mutation markers."""
 
+    UNMODELED_PROPERTY = "unmodeled_property"
+    """The condition parsed, but the claimed property lies outside the
+    bitvector model and its encoding is only a NECESSARY condition.
+    Example: a one-gadget ``<addr> is writable`` constraint encodes as
+    ``addr != 0`` — a crash state forcing the address non-null does not
+    establish that the memory is mapped writable, so the constraint is
+    reported undecided rather than satisfied. The refutation direction
+    stays sound: a forced-null address is definitely not writable."""
+
     UNMODELED_STATE_EFFECT = "unmodeled_state_effect"
     """Input may expose mutable state or contain uninspected lexical structure.
     Opaque arguments, incomplete literals/comments and untranslated source tokens
