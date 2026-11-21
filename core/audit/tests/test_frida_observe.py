@@ -231,17 +231,68 @@ class TestParseObservations:
 class TestFridaObserveResult:
     def test_defaults(self):
         r = FridaObserveResult(attached=False)
-        assert r.evidence_strength == "inconclusive"
+        assert r.receipt_stamp is None
         assert r.observations == []
         assert r.observed_functions == frozenset()
 
-    def test_confirmed_when_target_observed(self):
+    def test_result_carries_registry_vocabulary_only(self):
+        # The result speaks the evidence_grade taxonomy, not a
+        # parallel informal tier: the one stamp it can mint is the
+        # registry's detection-role runtime-observation receipt, and
+        # "not observed" has no spelling at all (receipt_stamp is
+        # None) — dynamic evidence proves presence, never absence.
+        from core.audit import evidence_grade as eg
+
         r = FridaObserveResult(
             attached=True,
             observed_functions=frozenset(["parse"]),
-            evidence_strength="confirmed",
+            receipt_stamp="frida:runtime",
         )
-        assert r.evidence_strength == "confirmed"
+        assert r.receipt_stamp == "frida:runtime"
+        assert eg.registry_owns(r.receipt_stamp)
+        assert eg.registered_spelling_role(r.receipt_stamp) == (
+            eg._ROLE_DETECTION
+        )
+        assert "evidence_strength" not in {
+            f.name for f in __import__("dataclasses").fields(r)
+        }
+
+
+class TestObservationMintsReceiptStamp:
+    """Two directions of the stamp mint in run_frida_observation:
+    target observed → the detection-role runtime receipt; target not
+    observed → None, with no absence spelling to reach for."""
+
+    def _run(self, monkeypatch, log_lines, target="parse"):
+        monkeypatch.setattr(fo, "_resolve_target_pid", lambda config: 1234)
+        monkeypatch.setattr(
+            fo, "_run_frida_session",
+            lambda pid, script, log_fd, config: (
+                fo._write_session_log(log_fd, "\n".join(log_lines) + "\n")
+                or True
+            ),
+        )
+        outcome = mock.Mock(status="finding", function=target, file="a.c")
+        return fo.run_frida_observation(outcome, {}, mock.Mock())
+
+    def test_target_observed_mints_runtime_receipt(self, monkeypatch):
+        result = self._run(monkeypatch, [
+            json.dumps({"type": "call", "function": "parse",
+                        "args": [], "ts": 1}),
+        ])
+        assert result is not None
+        assert result.receipt_stamp == "frida:runtime"
+
+    def test_target_unobserved_mints_nothing(self, monkeypatch):
+        # Other functions firing is not evidence about the target —
+        # and there is no "not observed" stamp to downgrade into.
+        result = self._run(monkeypatch, [
+            json.dumps({"type": "call", "function": "other",
+                        "args": [], "ts": 1}),
+        ])
+        assert result is not None
+        assert result.attached is True
+        assert result.receipt_stamp is None
 
 
 def _raise_timeout(cmd, env, timeout):
@@ -472,9 +523,8 @@ class TestParseCliFraming:
 class TestParseLogBounds:
     """A busy 30s session exceeds 8KiB within its first fraction of a
     second, so a whole-log prefix cap dropped every observation from
-    later in the window — the target function read as unobserved
-    (evidence_strength stayed inconclusive), worsening the
-    observation-window bias. The parser now streams line by line
+    later in the window — the target function read as unobserved (no
+    receipt stamp minted), worsening the observation-window bias. The parser now streams line by line
     under byte + line-count bounds: late observations are counted,
     memory stays bounded."""
 

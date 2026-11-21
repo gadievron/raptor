@@ -59,7 +59,13 @@ class FridaObserveResult:
     attached: bool
     observations: list[FridaObservation] = field(default_factory=list)
     observed_functions: frozenset[str] = field(default_factory=frozenset)
-    evidence_strength: str = "inconclusive"
+    # Receipt stamp in the evidence_grade exact-spelling vocabulary:
+    # "frida:runtime" when the target function was observed executing
+    # (detection role — unattributed presence, corroborates but never
+    # convicts alone), None when it was not. There is no spelling for
+    # "not observed": dynamic evidence proves presence, never absence,
+    # so an absence receipt is unrepresentable in this result.
+    receipt_stamp: str | None = None
     duration_s: float = 0.0
     error: str | None = None
 
@@ -146,14 +152,12 @@ def run_frida_observation(
             if obs.function == function_name:
                 target_observed = True
 
-        evidence_strength = "confirmed" if target_observed else "inconclusive"
-
         duration = time.monotonic() - start
         return FridaObserveResult(
             attached=success,
             observations=observations,
             observed_functions=frozenset(observed_set),
-            evidence_strength=evidence_strength,
+            receipt_stamp="frida:runtime" if target_observed else None,
             duration_s=duration,
         )
 
@@ -162,7 +166,6 @@ def run_frida_observation(
         logger.debug("Frida observation failed: %s", exc, exc_info=True)
         return FridaObserveResult(
             attached=False,
-            evidence_strength="inconclusive",
             duration_s=duration,
             error=str(exc),
         )

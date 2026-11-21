@@ -4723,14 +4723,13 @@ def _review_one_function_impl(
 
                 if should_run_frida(outcome, config):
                     frida_result = run_frida_observation(outcome, ctx, config)
-                    if (
-                        frida_result
-                        and frida_result.evidence_strength == "confirmed"
-                        and "frida:runtime" not in (outcome.evidence_tool or "")
+                    _frida_stamp = getattr(frida_result, "receipt_stamp", None)
+                    if _frida_stamp and _frida_stamp not in (
+                        outcome.evidence_tool or ""
                     ):
                         outcome.evidence_tool = (
-                            f"{outcome.evidence_tool}+frida:runtime"
-                            if outcome.evidence_tool else "frida:runtime"
+                            f"{outcome.evidence_tool}+{_frida_stamp}"
+                            if outcome.evidence_tool else _frida_stamp
                         )
             except Exception:
                 logger.debug(
