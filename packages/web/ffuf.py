@@ -12,7 +12,6 @@ import json
 import os
 import re
 import shutil
-import stat
 import subprocess
 import tempfile
 from dataclasses import dataclass, replace
@@ -27,6 +26,7 @@ from core.run.workdir import exec_workdir
 from core.sandbox import run_untrusted_networked
 from core.security.redaction import is_secret_field_name, redact_secrets
 
+from packages.web.harvest import harvest_regular_file
 from packages.web.origin import origin_of
 
 logger = get_logger()
@@ -1252,7 +1252,7 @@ class FfufRunner:
                 # copy, which must survive the teardown, so harvest a
                 # fresh 0600 inode into work_dir.
                 if config_file is not None and self.reveal_secrets:
-                    self._harvest_regular_file(
+                    harvest_regular_file(
                         config_file, work_dir / "ffuf_config.toml",
                     )
             # Harvest the report — written on graceful exit, or partially
@@ -1263,7 +1263,7 @@ class FfufRunner:
             # not ffuf's report. The fresh-0600-inode destination write
             # also displaces anything a pre-conversion child planted at
             # the predictable work_dir name.
-            self._harvest_regular_file(child_output, output_file)
+            harvest_regular_file(child_output, output_file)
 
         results: list[dict[str, Any]] = []
         if output_file.exists():
@@ -1301,45 +1301,6 @@ class FfufRunner:
             "results": summarized_results,
             "stderr": self._redact(self._redact_stderr(stderr_text.strip())),
         }
-
-    @staticmethod
-    def _harvest_regular_file(src: Path, dst: Path) -> bool:
-        """Copy a child-written workspace file to its parent-side home.
-
-        The source dir was the sandbox's write grant, so the child
-        chooses what sits at the name: O_NOFOLLOW refuses a planted
-        symlink (copying whatever it aims at into the run dir),
-        fstat S_ISREG refuses FIFOs/devices (a FIFO would hang the
-        parent forever). The destination is a fresh 0600 inode —
-        the report may embed delivered credentials until the scrub
-        pass rewrites it. Size is bounded upstream by the sandbox's
-        file-size rlimit on the child, exactly as when the child
-        wrote into the run dir directly. Missing source (ffuf died
-        before flushing) is a normal no-op."""
-        try:
-            fd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW)
-        except OSError:
-            return False
-        try:
-            if not stat.S_ISREG(os.fstat(fd).st_mode):
-                logger.warning(
-                    "refusing to harvest %s: not a regular file", src.name,
-                )
-                return False
-            dst.unlink(missing_ok=True)
-            out_fd = os.open(
-                dst, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                0o600,
-            )
-            with os.fdopen(out_fd, "wb") as out:
-                while chunk := os.read(fd, 1 << 20):
-                    out.write(chunk)
-            return True
-        except OSError as exc:
-            logger.warning("could not harvest %s: %s", src.name, exc)
-            return False
-        finally:
-            os.close(fd)
 
     @staticmethod
     def _restrict_report(output_file: Path) -> None:
