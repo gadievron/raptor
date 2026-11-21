@@ -316,10 +316,19 @@ def load_refined_specs(out_dir: Path) -> list[TaintSpec]:
     dir by the audit orchestrator after the refine loop.  Reading it
     back (resumed / re-entered runs, and as a prior-spec source next
     to the project store) preserves refinement continuity even when
-    the project store is absent.  Evidence tiers round-trip: the
-    artifact rows carry ``evidence_tier`` and ``_specs_from_list``
-    restores them (unknown / missing tier degrades to heuristic, never
-    upward).
+    the project store is absent.
+
+    Evidence tiers are floored to heuristic on load: unlike the
+    project store's stamped envelope, this artifact is a bare list in
+    a run dir that sandboxed children write under, so a stored tier
+    (or ``operator_confirmed`` source) is an unauthenticated claim.
+    Honouring it would launder into the freshly stamped project store
+    on the next refine persist — the orchestrator merges this
+    artifact into ``prior_specs`` with higher-tier-wins semantics and
+    then re-persists with a fresh provenance stamp. Tier continuity
+    for legitimate rows rides the verified store, which is written by
+    the same persist step; the refine loop / operator annotations
+    re-corroborate the rest.
     """
     path = Path(out_dir) / "iris-taint-specs-refined.json"
     if not path.is_file():
@@ -327,7 +336,11 @@ def load_refined_specs(out_dir: Path) -> list[TaintSpec]:
     data = load_json(path, max_bytes=_MAX_STORE_BYTES)
     if not isinstance(data, list):
         return []
-    return _specs_from_list(data)
+    return _floor_unverified_tiers(
+        _specs_from_list(data), path,
+        "run-local artifact carries no provenance stamp",
+        kind="refined spec",
+    )
 
 
 def persist_refined_specs(

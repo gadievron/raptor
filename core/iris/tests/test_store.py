@@ -330,13 +330,20 @@ class TestLoadRefinedSpecs:
         payload = json.dumps([s.to_dict() for s in specs], indent=2)
         (run_dir / "iris-taint-specs-refined.json").write_text(payload)
 
-    def test_round_trip_preserves_tier_and_source(self, tmp_path):
+    def test_stored_tiers_and_operator_source_floor_on_load(self, tmp_path):
+        """The run-local artifact is a bare, unstamped list in a dir
+        sandboxed children write under: a stored elevated tier (or
+        ``operator_confirmed`` source) is an unauthenticated claim. It
+        must floor to heuristic / unverified on load — otherwise a
+        forged artifact row launders into the freshly stamped project
+        store (with suppression authority) on the next refine persist.
+        Legitimate tier continuity rides the verified project store."""
         from core.iris.store import load_refined_specs
 
         run_dir = tmp_path / "project" / "run_001"
         run_dir.mkdir(parents=True)
         self._write_artifact(run_dir, [
-            _make_spec(fn="confirmed", role="sanitiser",
+            _make_spec(fn="forged", role="sanitiser",
                        evidence_tier=EvidenceTier.XREF_BACKED,
                        source="operator_confirmed"),
             _make_spec(fn="guessy", role="sink",
@@ -344,8 +351,8 @@ class TestLoadRefinedSpecs:
         ])
         loaded = load_refined_specs(run_dir)
         by_fn = {s.function: s for s in loaded}
-        assert by_fn["confirmed"].evidence_tier == EvidenceTier.XREF_BACKED
-        assert by_fn["confirmed"].source == "operator_confirmed"
+        assert by_fn["forged"].evidence_tier == EvidenceTier.HEURISTIC
+        assert by_fn["forged"].source == "unverified"
         assert by_fn["guessy"].evidence_tier == EvidenceTier.HEURISTIC
 
     def test_missing_artifact_empty(self, tmp_path):
