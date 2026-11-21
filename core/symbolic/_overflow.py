@@ -135,6 +135,22 @@ def _find_overflow_reaching_input_impl(
     if unmapped is not None:
         return unmapped
 
+    if register_constraints:
+        bad = _unknown_register_names(project, register_constraints)
+        if bad is not None:
+            return SymbolicResult(
+                succeeded=False,
+                reason=(
+                    "register_constraints name(s) unknown to "
+                    f"{project.arch.name}: {', '.join(bad)} — "
+                    "constraints were never applied; fix the register "
+                    "names (caller error, not an unsatisfiability "
+                    "verdict)"
+                ),
+                wall_seconds=time.monotonic() - t0,
+                metadata={"target_address": target_address},
+            )
+
     state = _engine.make_entry_state(project)
 
     # Entry stack pointer: the boundary between program-written stack
@@ -158,6 +174,7 @@ def _find_overflow_reaching_input_impl(
     steps = 0
     tried_unconstrained = 0
     overcap_lengths: list = []
+    constraint_failures: list = []
     try:
       with z3_call_budget(deadline):
         while time.monotonic() < deadline:
@@ -182,7 +199,18 @@ def _find_overflow_reaching_input_impl(
                             "exhausted — "
                             f"{len(simgr.unconstrained)} unconstrained "
                             "state(s), none satisfy pc == target under "
-                            "the given constraints (unsatisfiable)"
+                            "the given constraints"
+                            + (
+                                (
+                                    f" ({len(constraint_failures)} "
+                                    "state-check(s) skipped: register "
+                                    "constraints could not be applied "
+                                    "— not an unsatisfiability "
+                                    "verdict)"
+                                )
+                                if constraint_failures else
+                                " (unsatisfiable)"
+                            )
                             + _engine.errored_suffix(simgr)
                         )
                         if simgr.unconstrained else
@@ -206,6 +234,7 @@ def _find_overflow_reaching_input_impl(
                 register_constraints=register_constraints,
                 overcap_lengths=overcap_lengths,
                 entry_sp=entry_sp,
+                constraint_failures=constraint_failures,
             )
             tried_unconstrained = len(simgr.unconstrained)
             if solved is not None:
@@ -217,6 +246,7 @@ def _find_overflow_reaching_input_impl(
                     concrete_input=data,
                     states_explored=_engine.count_states(simgr),
                     metadata={
+                        "hijack_sites": snapshot.get("hijack_sites", []),
                         "target_address": target_address,
                         "input_length": len(data),
                         "steps": steps,
@@ -270,6 +300,7 @@ def _find_overflow_reaching_input_impl(
         simgr.unconstrained, target_address, max_input_bytes,
         register_constraints=register_constraints,
         entry_sp=entry_sp,
+        constraint_failures=constraint_failures,
     )
     if solved is not None:
         data, snapshot = solved
@@ -280,6 +311,7 @@ def _find_overflow_reaching_input_impl(
             concrete_input=data,
             states_explored=states,
             metadata={
+                "hijack_sites": snapshot.get("hijack_sites", []),
                 "target_address": target_address,
                 "input_length": len(data),
                 "steps": steps,
@@ -293,12 +325,17 @@ def _find_overflow_reaching_input_impl(
             },
         )
 
+    skipped_note = (
+        f" — {len(constraint_failures)} state-check(s) skipped: register "
+        "constraints could not be applied; not an unsatisfiability verdict"
+        if constraint_failures else ""
+    )
     reason = (
         f"timeout after {wall:.1f}s with {len(simgr.unconstrained)} "
-        f"unconstrained states (none satisfy pc == target)"
+        f"unconstrained states (none satisfy pc == target)" + skipped_note
         if timed_out else
         f"exhausted exploration ({len(simgr.unconstrained)} unconstrained "
-        "states, none satisfy pc == target)"
+        "states, none satisfy pc == target)" + skipped_note
     )
     return SymbolicResult(
         succeeded=False,
@@ -321,6 +358,7 @@ def _try_solve_pc(
     register_constraints: Optional[dict] = None,
     overcap_lengths: list | None = None,
     entry_sp: Optional[int] = None,
+    constraint_failures: list | None = None,
 ) -> Optional[tuple]:
     """Try each unconstrained state: constrain PC to target_address
     (plus any register_constraints), check satisfiability, extract
@@ -350,12 +388,15 @@ def _try_solve_pc(
                     reg = getattr(candidate.regs, reg_name)
                     candidate.solver.add(reg == value)
                 except Exception:  # noqa: BLE001
-                    # Unknown register name for this arch, or
-                    # register can't be constrained (concrete /
-                    # not-tracked) — skip this state, try the next.
+                    # Register can't be constrained on this state
+                    # (concrete / not-tracked) — skip the state, but
+                    # RECORD the skip: a state never solver-checked
+                    # must not ground an "unsatisfiable" verdict.
                     reg_ok = False
                     break
             if not reg_ok:
+                if constraint_failures is not None:
+                    constraint_failures.append(str(reg_name))
                 continue
         try:
             if not candidate.satisfiable():
@@ -377,6 +418,69 @@ def _try_solve_pc(
     return None
 
 
+def _unknown_register_names(
+    project, register_constraints: dict,
+) -> Optional[list]:
+    """Names in ``register_constraints`` the target arch does not
+    define; None when every name is known (or the arch can't be
+    vetted).
+
+    Checked up front and loudly: the per-state solve skips a state
+    whenever a constraint fails to apply, so a typo'd register name
+    would silently skip EVERY state and the exhausted path would then
+    read as a solver verdict. A caller error must surface as a caller
+    error, never as "unsatisfiable".
+    """
+    try:
+        known = set(project.arch.registers)
+    except Exception:  # noqa: BLE001 — exotic arch: vet per-state instead
+        return None
+    bad = sorted(
+        str(name) for name in register_constraints if name not in known
+    )
+    return bad or None
+
+
+#: Trailing concrete blocks attributed per hijack witness — the LAST
+#: block is the frame whose return the overflow overwrote; a couple of
+#: predecessors give the consumer the approach path.
+_HIJACK_SITE_BLOCKS = 3
+
+
+def _hijack_sites(state) -> list:
+    """Attribute the unconstrained state's final concrete blocks to
+    symbols: WHERE the program lost PC control.
+
+    A hijack witness proves input controls PC; it does NOT prove the
+    hypothesised function is the vulnerable one — exploration wanders,
+    and the frame that leaked control may belong to a different
+    function entirely. Consumers confirming per-function findings must
+    match these sites against the hypothesis instead of taking the
+    landing target on faith. Entries are most-recent first:
+    ``{"address": int, "symbol": str | None}``; symbol is None when no
+    sized symbol contains the address (stripped binary, glue code).
+    """
+    try:
+        addrs = [int(a) for a in state.history.bbl_addrs]
+        loader = state.project.loader
+    except Exception:  # noqa: BLE001 — no history: no attribution
+        return []
+    sites: list = []
+    for addr in reversed(addrs[-_HIJACK_SITE_BLOCKS:]):
+        name = None
+        try:
+            sym = loader.find_symbol(addr, fuzzy=True)
+            # fuzzy = nearest preceding symbol; accept it only when
+            # the address falls inside the symbol's sized extent.
+            if (sym is not None and sym.size
+                    and addr < sym.rebased_addr + sym.size):
+                name = str(sym.name)
+        except Exception:  # noqa: BLE001 — loader quirk: unattributed
+            name = None
+        sites.append({"address": addr, "symbol": name})
+    return sites
+
+
 #: rsp-relative memory window captured at the hijacked state — one-
 #: gadget constraints are dominated by [rsp+K] slots; 32 qwords covers
 #: the offsets real gadget constraint sets reference.
@@ -384,9 +488,11 @@ _MEM_WINDOW_BYTES = 0x100
 
 
 def _state_snapshot(state, *, entry_sp: Optional[int] = None) -> dict:
-    """Registers plus the rsp-relative memory window, JSON-safe.
+    """Registers, hijack-site attribution, and the rsp-relative
+    memory window, JSON-safe.
 
-    Shape: ``{"registers": {...}, "memory": {"rsp+0x30": int, ...}}``.
+    Shape: ``{"registers": {...}, "hijack_sites": [...],
+    "memory": {"rsp+0x30": int, ...}}``.
     Memory capture needs a concrete stack pointer; each 8-byte slot is
     recorded only when the state pins it to one concretion — a
     symbolic slot stays absent (free for the one-gadget solver, which
@@ -397,7 +503,7 @@ def _state_snapshot(state, *, entry_sp: Optional[int] = None) -> dict:
     verdicts on model artifacts.
     """
     registers = _register_snapshot(state)
-    snap = {"registers": registers}
+    snap = {"registers": registers, "hijack_sites": _hijack_sites(state)}
     sp_name = "rsp" if "rsp" in registers else (
         "esp" if "esp" in registers else None)
     sp_val = (registers.get(sp_name) or {}).get("value") if sp_name else None

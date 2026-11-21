@@ -5806,6 +5806,45 @@ def run_symbolic_sweep(
                     f"inference, target-forgeable; not crash-grade)"
                 )
 
+    if hijack:
+        # The solve constrains PC to the audited function's address —
+        # the function is the LANDING target, not necessarily the
+        # vulnerable frame. Confirming the per-function finding needs
+        # the hijack SITE (where control was lost) to match; a witness
+        # minted in some other frame proves PC control exists, not
+        # that THIS function's finding is real.
+        from core.security.log_sanitisation import escape_nonprintable
+        meta = getattr(result, "metadata", None) or {}
+        sites = [
+            s for s in (meta.get("hijack_sites") or [])
+            if isinstance(s, dict)
+        ]
+        details["hijack_sites"] = sites
+        # Symbol names come from the analysed binary — attacker-chosen
+        # bytes; render them inert before they reach any report line.
+        named = list(dict.fromkeys(
+            escape_nonprintable(str(s["symbol"]))[:200]
+            for s in sites if s.get("symbol")
+        ))
+        if base_name not in named:
+            where = (
+                f"control was lost in {', '.join(named)}"
+                if named else
+                "the hijack site could not be attributed to any "
+                "sized symbol"
+            )
+            details["reason"] = (
+                "witness proves input controls pc, but "
+                f"{where} — not in {base_name}; the per-function "
+                "hijack claim is unconfirmed (witness kept for review)"
+            )
+            return SweepResult(
+                tool="symbolic", file_path=file_path,
+                function_name=function_name, outcome="inconclusive",
+                rule_id=rule_id,
+                details=details,
+            )
+
     return SweepResult(
         tool="symbolic", file_path=file_path,
         function_name=function_name, outcome="confirmed",

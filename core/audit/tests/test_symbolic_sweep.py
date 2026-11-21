@@ -141,16 +141,9 @@ class TestRunnerErrors:
         assert "crashed with signal" not in message
         assert "target-forgeable" in message
 
-    def test_witness_confirms(self, tmp_path):
+    def _hijack_sweep(self, tmp_path, result_cls):
         binary = tmp_path / "b"
         binary.write_bytes(b"\x7fELF" + b"\x00" * 60)
-
-        class _R:
-            succeeded = True
-            concrete_input = b"A" * 32
-            reason = ""
-            wall_seconds = 1.0
-
         with (
             patch(
                 "core.symbolic._availability.angr_available",
@@ -159,15 +152,82 @@ class TestRunnerErrors:
             patch("core.symbolic.load_binary", return_value=_Info()),
             patch(
                 "core.symbolic.find_overflow_reaching_input",
-                return_value=_R(),
+                return_value=result_cls(),
             ),
         ):
-            res = run_symbolic_sweep(
+            return run_symbolic_sweep(
                 target_path=binary, file_path="binary:b",
                 function_name="f", out_dir=tmp_path,
                 address=0x1000, cwe="CWE-121",
             )
+
+    def test_witness_confirms(self, tmp_path):
+        class _R:
+            succeeded = True
+            concrete_input = b"A" * 32
+            reason = ""
+            wall_seconds = 1.0
+            metadata = {"hijack_sites": [
+                {"address": 0x1040, "symbol": "f"},
+                {"address": 0x1010, "symbol": "f"},
+            ]}
+
+        res = self._hijack_sweep(tmp_path, _R)
         assert res.outcome == "confirmed"
         assert res.rule_id == "symbolic-pc-hijack"
+        assert (res.details or {}).get("hijack_sites")
         entry = res.to_log_entry()
         assert entry["key"] == "binary:b:f"
+
+    def test_hijack_site_elsewhere_is_inconclusive(self, tmp_path):
+        # The witness steers PC to f's address, but the frame that
+        # leaked control belongs to other_func — confirming f's
+        # finding from this witness would be a false conclusion.
+        class _R:
+            succeeded = True
+            concrete_input = b"A" * 32
+            reason = ""
+            wall_seconds = 1.0
+            metadata = {"hijack_sites": [
+                {"address": 0x2040, "symbol": "other_func"},
+            ]}
+
+        res = self._hijack_sweep(tmp_path, _R)
+        assert res.outcome == "inconclusive"
+        assert res.rule_id == "symbolic-pc-hijack"
+        reason = (res.details or {}).get("reason", "")
+        assert "other_func" in reason
+        assert "unconfirmed" in reason
+
+    def test_hijack_without_attribution_is_inconclusive(self, tmp_path):
+        # No metadata at all (solver stub / legacy result): the site
+        # is unknown, so the per-function claim stays unconfirmed.
+        class _R:
+            succeeded = True
+            concrete_input = b"A" * 32
+            reason = ""
+            wall_seconds = 1.0
+
+        res = self._hijack_sweep(tmp_path, _R)
+        assert res.outcome == "inconclusive"
+        reason = (res.details or {}).get("reason", "")
+        assert "could not be attributed" in reason
+
+    def test_hijack_hostile_symbol_rendered_inert(self, tmp_path):
+        # Symbol names are attacker-chosen bytes from the analysed
+        # binary; the inconclusive reason must carry escapes, not
+        # raw control characters.
+        class _R:
+            succeeded = True
+            concrete_input = b"A" * 32
+            reason = ""
+            wall_seconds = 1.0
+            metadata = {"hijack_sites": [
+                {"address": 0x2040, "symbol": "evil\x1b[2Jname"},
+            ]}
+
+        res = self._hijack_sweep(tmp_path, _R)
+        assert res.outcome == "inconclusive"
+        reason = (res.details or {}).get("reason", "")
+        assert "\x1b" not in reason
+        assert "evil" in reason
