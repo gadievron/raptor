@@ -1018,11 +1018,18 @@ class DatabaseManager:
     # the canonical slot is only ever replaced atomically by a complete one.
 
     def _staging_path(self, repo_hash: str, language: str) -> Path:
-        """Return per-process staging path on the same filesystem as canonical.
+        """Return the per-call staging WORKSPACE, a sibling of canonical.
 
-        Same-parent-dir is required so os.rename is atomic — cross-fs rename
-        falls back to copy-then-delete which is non-atomic and would let
-        readers see partial state.
+        The workspace is the sandbox output= grant for the build: the
+        DB target nests inside it (``<workspace>/<language>-db``)
+        alongside the sandbox fake home / CodeQL caches (``.home/``),
+        so a traced build's write authority ends at this call's own
+        scratch and never reaches the shared cache slot.
+
+        Same-parent-dir as canonical is required so the promote
+        os.rename is atomic — cross-fs rename falls back to
+        copy-then-delete which is non-atomic and would let readers see
+        partial state.
 
         **Unique per call** — PID plus a 4-byte random suffix — so
         concurrent writers never share a staging dir whether they are
@@ -1141,22 +1148,30 @@ class DatabaseManager:
                 continue
         return deleted
 
-    def _detach_staging_from_gc(self, staging_path: Path, language: str) -> Path:
+    def _detach_staging_from_gc(
+        self, staging_path: Path, language: str, *,
+        slot_dir: Path | None = None,
+    ) -> Path:
         """Move a kept-as-final staging DB out of the staging GC's scope.
 
-        The promote-failure fallbacks hand the caller a DB living at a
-        `.staging-*` path, but _gc_stale_markers reaps any `.staging-*`
-        entry older than 1h on every sibling run's cache miss — a
-        long-running analysis (routinely >1h on large DBs) could have
-        its database rmtree'd out from under it mid-query. A same-
-        directory rename to a `.kept-*` name (24h GC TTL instead of 1h)
-        is atomic and keeps already-open FDs valid. On rename failure
-        the original path is returned: the GC race remains for that
-        run, but the caller still has a usable DB.
+        The promote-failure fallbacks hand the caller a DB living
+        inside a `.staging-*` workspace, but _gc_stale_markers reaps
+        any `.staging-*` entry older than 1h on every sibling run's
+        cache miss — a long-running analysis (routinely >1h on large
+        DBs) could have its database rmtree'd out from under it
+        mid-query. A rename to a `.kept-*` name (24h GC TTL instead of
+        1h) under ``slot_dir`` — the cache slot, same filesystem, so
+        still atomic — keeps already-open FDs valid. ``slot_dir`` must
+        lift the DB OUT of the per-call workspace: a `.kept-*` name
+        nested inside a `.staging-*` workspace would still die with
+        the workspace's own 1h GC (or the create_database finally).
+        Defaults to the staging path's parent for flat layouts. On
+        rename failure the original path is returned: the GC race
+        remains for that run, but the caller still has a usable DB.
         """
-        kept = staging_path.with_name(
-            f".kept-{language}-{os.getpid()}-{secrets.token_hex(4)}"
-        )
+        kept = (
+            slot_dir if slot_dir is not None else staging_path.parent
+        ) / f".kept-{language}-{os.getpid()}-{secrets.token_hex(4)}"
         try:
             os.rename(staging_path, kept)
         except OSError as e:
@@ -1441,11 +1456,17 @@ class DatabaseManager:
                     cached=True,
                 )
 
-        # Paths. canonical is the cache slot; staging is per-process,
-        # on the same filesystem so atomic rename works. See
-        # _staging_path docstring for the same-fs requirement.
+        # Paths. canonical is the cache slot; the staging WORKSPACE is
+        # per-call, on the same filesystem so atomic rename works (see
+        # _staging_path for the same-fs requirement). The DB target
+        # nests INSIDE the workspace so the sandbox output= grant below
+        # (``staging_work``) covers only this call's scratch — never
+        # the shared cache slot, whose canonical DBs, trust-bearing
+        # <language>-metadata.json files and sibling writers' staging
+        # dirs must stay out of a traced build's write authority.
         canonical_path = self.get_database_dir(repo_hash, language)
-        staging_path = self._staging_path(repo_hash, language)
+        staging_work = self._staging_path(repo_hash, language)
+        staging_path = staging_work / f"{language}-db"
 
         # Ensure parent directory exists (db_root/<repo_hash>/)
         canonical_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1606,9 +1627,10 @@ class DatabaseManager:
             )
             logger.warning("%s", "=" * 70)
 
-        # Cleanup any prior leftover staging from this same process (e.g.,
-        # from a previous crashed run with the same PID after PID reuse).
-        rmtree_hardened(staging_path)
+        # Cleanup any prior leftover workspace from this same process
+        # (belt-and-braces — the random suffix makes a name collision
+        # with a crashed predecessor vanishingly unlikely).
+        rmtree_hardened(staging_work)
 
         # Build the codeql command — point at staging, not canonical, so
         # readers of canonical never see a partial DB.
@@ -1800,8 +1822,11 @@ class DatabaseManager:
                     writable_paths=[str(repo_path)],
                 )
                 # CodeQL uses its own common-cache setting rather than HOME
-                # alone (the JVM can derive user.home from the account database).
-                cmd.append(f"--common-caches={staging_path.parent / '.home' / '.codeql'}")
+                # alone (the JVM can derive user.home from the account
+                # database). The caches home rides inside the per-call
+                # workspace — it dies with the workspace, so one traced
+                # build can never poison a cache another run consumes.
+                cmd.append(f"--common-caches={staging_work / '.home' / '.codeql'}")
                 sandbox_tool_paths = list(sandbox_tool_paths) + python_runtime_tool_paths()
                 # Only homes selected by RAPTOR's toolchain detection are runtime
                 # grants. Never grant the operator's HOME (or its ancestors), even
@@ -1818,6 +1843,11 @@ class DatabaseManager:
                             if path.is_dir() and str(path) not in sandbox_tool_paths:
                                 sandbox_tool_paths.append(str(path))
 
+            # The output= bind and its fake-home setup need the
+            # workspace to exist before the sandbox call; created here
+            # (inside the try) so the finally below reaps it on every
+            # exit path.
+            staging_work.mkdir(parents=True, exist_ok=True)
             result = sandbox_run(
                 temporary_command(cmd),  # type: ignore[arg-type]
                 block_network=True,
@@ -1831,10 +1861,12 @@ class DatabaseManager:
                 # (multiprocessing forkserver needs a unix socket).
                 # target= is always a READ-ONLY mount. Traced builds
                 # instead carry the source as an out-of-view writable
-                # bind via writable_paths above; output= keeps the DB
-                # parent, lock files and sandbox HOME writable.
+                # bind via writable_paths above; output= is the PER-CALL
+                # workspace (DB target, CodeQL lock files, sandbox HOME)
+                # — never the shared cache slot, so a traced build can't
+                # touch canonical DBs, metadata or sibling stagings.
                 target=None if executes_build else str(repo_path),
-                output=str(staging_path.parent),
+                output=str(staging_work),
                 tool_paths=sandbox_tool_paths,
                 **build_policy,
                 # Audit JSONL home (only used when --audit is engaged).
@@ -1917,7 +1949,10 @@ class DatabaseManager:
                 # name the stale-marker GC already reaps (1h TTL), so
                 # diagnostics survive without accumulating: keep only
                 # the newest failed dir per cache slot.
-                _failed = staging_path.parent / (
+                # Slot level, not inside the workspace — the workspace
+                # is reaped in the finally below, which would destroy
+                # the diagnostics it exists to preserve.
+                _failed = staging_work.parent / (
                     f".staging-failed-{language}"
                 )
                 rmtree_hardened(_failed)
@@ -2041,7 +2076,8 @@ class DatabaseManager:
                                 # Don't validate-and-cascade; keep staging
                                 # (renamed out of the staging GC's scope).
                                 final_path = self._detach_staging_from_gc(
-                                    staging_path, language
+                                    staging_path, language,
+                                    slot_dir=canonical_path.parent,
                                 )
                     else:
                         # Genuine I/O error (permissions, disk full); fall back
@@ -2053,7 +2089,8 @@ class DatabaseManager:
                             "Could not promote staging to canonical (%s); using staging path", e
                         )
                         final_path = self._detach_staging_from_gc(
-                            staging_path, language
+                            staging_path, language,
+                            slot_dir=canonical_path.parent,
                         )
 
             # Count files in database (use whatever path won out above).
@@ -2190,16 +2227,21 @@ class DatabaseManager:
                     build_script.unlink(missing_ok=True)
                 except OSError as _bs_err:
                     logger.debug("build_script unlink failed: %s", _bs_err)
-            # Belt-and-braces staging cleanup for timeout / unhandled exception
-            # paths that bypass the success/failure cleanup branches above.
-            # Skip if we ended up using staging as final_path (the fallback
-            # cases where promote failed but we kept staging as a usable DB)
-            # — otherwise we'd delete the very DB we're returning to the
-            # caller. Use locals().get to handle the case where we never
-            # reached the assignment (early exception before final_path set).
+            # Workspace cleanup on every exit (success leaves the
+            # emptied-of-DB workspace with the sandbox home; timeout /
+            # unhandled exception paths bypass the branch cleanups
+            # above entirely). Skip only when the DB we are returning
+            # still LIVES inside the workspace (detach-rename failed
+            # and final_path is the nested staging DB) — otherwise
+            # we'd delete the very DB we're handing the caller. Use
+            # locals().get to handle the case where we never reached
+            # the assignment (early exception before final_path set).
             _final = locals().get('final_path')
-            if staging_path.exists() and _final != staging_path:
-                rmtree_hardened(staging_path)
+            if staging_work.exists() and (
+                _final is None
+                or not Path(_final).is_relative_to(staging_work)
+            ):
+                rmtree_hardened(staging_work)
 
     def create_databases_parallel(
         self,
@@ -2290,14 +2332,31 @@ class DatabaseManager:
 
         Returns:
             True if database is valid
+
+        Symlink posture: everything here is lstat-based and never
+        follows a link. A DB tree is build output (traced builds run
+        the repository's own build logic), so a planted symlink must
+        neither stand in for required content nor inflate the
+        substance check with some unrelated host file's size — a
+        hollow or hostile tree has to fail validation on its own
+        regular-file contents.
         """
-        if not db_path.exists():
+        try:
+            if not stat.S_ISDIR(db_path.lstat().st_mode):
+                logger.debug("Not a directory (lstat): %s", db_path)
+                return False
+        except OSError:
             return False
 
-        # Check for essential database files
+        # Check for essential database files (regular files only).
         essential_files = ["codeql-database.yml"]
         for file_name in essential_files:
-            if not (db_path / file_name).exists():
+            try:
+                if not stat.S_ISREG((db_path / file_name).lstat().st_mode):
+                    logger.debug(
+                        "Essential file not a regular file: %s", file_name)
+                    return False
+            except OSError:
                 logger.debug("Missing essential file: %s", file_name)
                 return False
 
@@ -2314,7 +2373,8 @@ class DatabaseManager:
         # files only land on successful build completion.
         try:
             db_subdirs = [d for d in db_path.iterdir()
-                          if d.is_dir() and d.name.startswith("db-")]
+                          if d.name.startswith("db-")
+                          and stat.S_ISDIR(d.lstat().st_mode)]
             if not db_subdirs:
                 logger.debug("No db-* subdir in %s", db_path)
                 return False
@@ -2330,10 +2390,17 @@ class DatabaseManager:
             #     leaves the yml plus an empty or byte-sized db-* dir.
             # 10KB keeps the aborted-build signature (empty / sub-KB
             # dataset dirs) while admitting small-but-complete DBs.
+            # Size the subdir without following symlinks in either
+            # role: a link to a big host file must not count as
+            # substance (f.stat() through the link sized the TARGET),
+            # and a linked directory must not be walked.
             for sub in db_subdirs:
-                total_size = sum(
-                    f.stat().st_size for f in sub.rglob("*") if f.is_file()
-                )
+                total_size = 0
+                for root, _dirs, files in os.walk(sub, followlinks=False):
+                    for name in files:
+                        info = os.lstat(os.path.join(root, name))
+                        if stat.S_ISREG(info.st_mode):
+                            total_size += info.st_size
                 if total_size > 10 * 1024:
                     return True
             logger.debug(
