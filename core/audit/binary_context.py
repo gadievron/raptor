@@ -314,7 +314,12 @@ def _accept_redb(
        spelling — the binary merely moved), mismatch skips (binary
        rebuilt in place, or a foreign cache).
     2. **Path identity** — the recorded ``binary_path`` versus the
-       target (:func:`_same_recorded_binary`).
+       target (:func:`_same_recorded_binary`). A ``False`` verdict
+       skips; a ``True`` verdict only accepts when the target's
+       identity is unestablishable from the target side (``.gpr`` /
+       non-file) — for a hashable target the recorded path is
+       attacker-writable JSON and a stamped document was already
+       decided by leg 1, so path identity falls through to leg 3.
     3. **Identity unknown** — refused when the target is a hashable
        regular binary: every writer stamps ``binary_sha256`` whenever
        the binary is readable, so an unverifiable document for a
@@ -386,8 +391,17 @@ def _accept_redb(
         from core.security.log_sanitisation import escape_nonprintable
         verdict = _same_recorded_binary(Path(recorded), target)
         if verdict is True:
-            return _accepted()
-        if verdict is False:
+            if target.suffix == ".gpr" or not target.is_file():
+                return _accepted()
+            # Path identity on a HASHABLE target is not acceptance:
+            # binary_path is attacker-writable JSON, and a stamped
+            # document would have been decided by the hash leg above
+            # either way — reaching here means the stamp is absent
+            # (stripped, legacy, or planted), so recording the
+            # target's own path must not downgrade a hash-mismatch
+            # skip to acceptance. Fall through to the identity-unknown
+            # slot rule, which refuses toward re-import.
+        elif verdict is False:
             return _skip(
                 "database records a different binary "
                 f"({escape_nonprintable(str(recorded)[:300])})")

@@ -128,10 +128,17 @@ class TestWrongBinaryCaches:
 
         assert find_redb(run_b, bin_b) == local
 
-    def test_hardlinked_recorded_spelling_accepted(self, tmp_path):
+    def test_hardlinked_recorded_spelling_without_stamp_refused(
+        self, tmp_path,
+    ):
         """The recorded path is a HARDLINK to the target under a
-        different name: resolve() equality cannot see it, only the
-        samefile step can — same inode is the same binary."""
+        different name — but path identity alone is not acceptance
+        for a hashable target: binary_path is attacker-writable JSON,
+        so an UNSTAMPED document naming the target's own inode is
+        indistinguishable from a planted one (and accepting it would
+        let stamp-stripping downgrade a hash-mismatch skip). Writers
+        stamp readable binaries, so the stamped spelling is the one
+        that round-trips (hash leg, regardless of recorded path)."""
         binf = _make_binary(tmp_path / "bins" / "target_bin",
                             b"\x7fELF-v1")
         alias = tmp_path / "other" / "alias_name"
@@ -142,6 +149,11 @@ class TestWrongBinaryCaches:
         run.mkdir(parents=True)
         cand = _write_redb(project, alias)
 
+        assert find_redb(run, binf) is None
+
+        # The same alias-recorded document WITH its write-time stamp
+        # is content-validated and accepted.
+        _write_redb(project, alias, sha256_file(binf))
         assert find_redb(run, binf) == cand
 
     def test_wrong_local_falls_through_to_right_parent(self, tmp_path):
@@ -248,6 +260,29 @@ class TestIdentityUnknown:
         del doc["metadata"]["binary_sha256"]
         cand.write_text(json.dumps(doc))
         assert find_redb(run, binf) is None
+
+    def test_stripped_stamp_with_recorded_target_path_still_refused(
+        self, tmp_path,
+    ):
+        """The path-identity leg must not resurrect a stripped stamp:
+        a document recording the target's OWN path with the (hash-
+        mismatching) stamp deleted would be accepted via samefile if
+        path identity counted for hashable targets — the exact
+        downgrade the stamp rule exists to prevent."""
+        binf = _make_binary(tmp_path / "prog", b"\x7fELF-v1")
+        run = tmp_path / "run"
+        stale = sha256_file(binf)
+        binf.write_bytes(b"\x7fELF-v2-rebuilt")
+        cand = _write_redb(run, binf, stale)
+        assert find_redb(run, binf) is None  # hash mismatch: skip
+
+        doc = json.loads(cand.read_text())
+        del doc["metadata"]["binary_sha256"]
+        cand.write_text(json.dumps(doc))
+        assert find_redb(run, binf) is None, (
+            "deleting the unauthenticated stamp flipped a hash-"
+            "mismatch skip into path-identity acceptance"
+        )
 
 
 class TestBaseParity:

@@ -64,7 +64,13 @@ def _setup(tmp_path: Path, *, with_redb: bool):
                 ),
             )],
         )
-        (out_dir / "re-database.json").write_text(json.dumps(db.to_dict()))
+        doc = db.to_dict()
+        # Writers stamp binary_sha256 whenever the binary is readable;
+        # the cache-identity gate refuses unstamped docs for hashable
+        # targets, so the fixture mirrors the writer contract.
+        from core.audit.binary_context import stamp_binary_sha256
+        stamp_binary_sha256(doc, target)
+        (out_dir / "re-database.json").write_text(json.dumps(doc))
     return out_dir, target
 
 
