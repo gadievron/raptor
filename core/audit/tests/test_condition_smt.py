@@ -1939,7 +1939,10 @@ class TestSizeArgumentBinding:
         # Reproduced false conclusion: the guards bound retries and
         # attempts; the allocation sizes with n * size. The old pair
         # model multiplied the two GUARD variables and declared
-        # "cannot overflow".
+        # "cannot overflow". The source-bound oracle goes further
+        # than the binding-gap demotion: n and size are free, so it
+        # PROVES the guard insufficient with a replayed wrap witness.
+        pytest.importorskip("z3")
         g = _guard(
             "retries >= 0 && retries < MAXR && attempts >= 0 && attempts < MAXA",
             resolvable=True, concrete_values={"MAXR": "8", "MAXA": "3"},
@@ -1948,9 +1951,10 @@ class TestSizeArgumentBinding:
         results = check_guard_sufficiency(sg)
         assert len(results) >= 1
         for r in results:
-            assert r.feasible is None
-            assert r.guard_sufficient is None
-        assert any("unconstrained" in r.reasoning for r in results)
+            assert r.feasible is True
+            assert r.guard_sufficient is False
+            assert r.oracle == "alloc-wrap/source-bound"
+            assert r.witness and "n" in r.witness and "size" in r.witness
 
     def test_unrelated_guard_cannot_prove_copy_safe(self):
         # Old behaviour: retries ≤ 8 ≤ 256 → "guard sufficient" for a
@@ -2040,3 +2044,271 @@ class TestSizeArgumentBinding:
         assert flagged[0].feasible is True
         assert proved[0].feasible is None
         assert "binding unknown" in proved[0].reasoning
+
+
+class TestSizeExpressionParser:
+    """Unit contract for the source-bound size-expression grammar."""
+
+    def test_product_with_sizeof(self):
+        from core.audit.condition_smt import _parse_size_expr
+        assert _parse_size_expr("n * sizeof(struct item)") == (
+            "mul", [("var", "n"), ("sizeof", "sizeof(struct item)")],
+        )
+
+    def test_sum_of_variables(self):
+        from core.audit.condition_smt import _parse_size_expr
+        assert _parse_size_expr("len + hdr_len") == (
+            "add", [("var", "len"), ("var", "hdr_len")],
+        )
+
+    def test_parenthesised_sum_times_variable(self):
+        from core.audit.condition_smt import _parse_size_expr
+        assert _parse_size_expr("(a + b) * c") == (
+            "mul", [("add", [("var", "a"), ("var", "b")]), ("var", "c")],
+        )
+
+    def test_hex_literal_with_suffix(self):
+        from core.audit.condition_smt import _parse_size_expr
+        assert _parse_size_expr("0x10u * count") == (
+            "mul", [("const", 16), ("var", "count")],
+        )
+
+    def test_sizeof_whitespace_normalised(self):
+        from core.audit.condition_smt import _parse_size_expr
+        node = _parse_size_expr("n * sizeof( struct  item )")
+        assert node == (
+            "mul", [("var", "n"), ("sizeof", "sizeof( struct item )")],
+        )
+
+    def test_unsupported_arithmetic_declines(self):
+        # Shifts, casts, subtraction, division and calls are outside
+        # the grammar — the model must decline, never approximate.
+        from core.audit.condition_smt import _parse_size_expr
+        assert _parse_size_expr("n << 2") is None
+        assert _parse_size_expr("(size_t)n * m") is None
+        assert _parse_size_expr("n - 1") is None
+        assert _parse_size_expr("total / 2") is None
+        assert _parse_size_expr("f(n) * 2") is None
+
+    def test_atom_budget_declines_pathological_expressions(self):
+        from core.audit.condition_smt import _parse_size_expr
+        assert _parse_size_expr("a * b * c * d * e * f") is not None
+        assert _parse_size_expr("a * b * c * d * e * f * g") is None
+
+    def test_degenerate_input_declines(self):
+        from core.audit.condition_smt import _parse_size_expr
+        assert _parse_size_expr("") is None
+        assert _parse_size_expr("   ") is None
+        assert _parse_size_expr("n +") is None
+        assert _parse_size_expr("(a + b") is None
+        assert _parse_size_expr(None) is None
+
+    def test_literal_beyond_64_bits_declines(self):
+        from core.audit.condition_smt import _parse_size_expr
+        assert _parse_size_expr(str(1 << 64)) is None
+        assert _parse_size_expr(str((1 << 64) - 1)) is not None
+
+
+class TestSinkSizeExpressions:
+    """Unit contract for the raw size-expression extractor."""
+
+    def test_malloc_single_expression(self):
+        from core.audit.condition_smt import _sink_size_expressions
+        assert _sink_size_expressions(
+            "malloc", ["n * sizeof(struct item)"],
+        ) == ["n * sizeof(struct item)"]
+
+    def test_calloc_both_arguments(self):
+        from core.audit.condition_smt import _sink_size_expressions
+        assert _sink_size_expressions(
+            "calloc", ["n", "elem_size"]) == ["n", "elem_size"]
+
+    def test_copy_sink_third_argument(self):
+        from core.audit.condition_smt import _sink_size_expressions
+        assert _sink_size_expressions(
+            "memcpy", ["dst", "src", "len + 2"]) == ["len + 2"]
+
+    def test_unknown_binding_semantics_match_identifiers(self):
+        from core.audit.condition_smt import _sink_size_expressions
+        assert _sink_size_expressions("memcpy", None) is None
+        assert _sink_size_expressions("memcpy", []) is None
+        assert _sink_size_expressions("memcpy", ["dst", "src"]) is None
+        assert _sink_size_expressions("system", ["cmd"]) is None
+
+
+class TestAllocWrapSourceBound:
+    """Source-bound allocation-wrap oracle: both directions, with the
+    false-proof shapes the pairwise model used to mint."""
+
+    def test_wrap_witness_flags_insufficient_guard(self):
+        # n <= 2**61 (two-sided) leaves room for n * 16 to reach
+        # 2**64 — the guard is provably insufficient, witness-backed.
+        pytest.importorskip("z3")
+        g = _guard(
+            "n >= 0 && n <= BIG",
+            resolvable=True, concrete_values={"BIG": str(1 << 61)},
+        )
+        sg = _sg("malloc", [g], sink_args=["n * 16"])
+        results = check_guard_sufficiency(sg)
+        assert len(results) == 1
+        r = results[0]
+        assert r.feasible is True
+        assert r.oracle == "alloc-wrap/source-bound"
+        assert r.witness and "n" in r.witness
+        # the witness must actually wrap: unsigned n * 16 >= 2**64
+        assert (r.witness["n"] % (1 << 64)) * 16 >= (1 << 64)
+
+    def test_bounded_arithmetic_proves_guard_sufficient(self):
+        pytest.importorskip("z3")
+        g = _guard(
+            "n >= 0 && n < CAP",
+            resolvable=True, concrete_values={"CAP": "1000"},
+        )
+        sg = _sg("malloc", [g], sink_args=["n * 16"])
+        results = check_guard_sufficiency(sg)
+        assert len(results) == 1
+        r = results[0]
+        assert r.feasible is False
+        assert r.guard_sufficient is True
+        assert r.oracle == "alloc-wrap/source-bound"
+        assert "cannot reach 2**64" in r.reasoning
+
+    def test_one_sided_guard_stays_insufficient(self):
+        # ``n <= 1000`` without a lower bound admits negative n, whose
+        # unsigned reading is huge — the wrap stays possible.
+        pytest.importorskip("z3")
+        g = _guard(
+            "n <= CAP", resolvable=True, concrete_values={"CAP": "1000"},
+        )
+        sg = _sg("malloc", [g], sink_args=["n * 16"])
+        results = check_guard_sufficiency(sg)
+        assert results[0].feasible is True
+
+    def test_triple_product_wrap_not_missed(self):
+        # RED-CHECK SHAPE: n, m, k each <= 2**22; every PAIR product
+        # stays under 2**44, so the pairwise model proved "cannot
+        # overflow" — but n * m * k reaches 2**66.  The source-bound
+        # encoding of the full expression finds the wrap.
+        pytest.importorskip("z3")
+        bound = str(1 << 22)
+        g = _guard(
+            "n >= 0 && n <= B && m >= 0 && m <= B && k >= 0 && k <= B",
+            resolvable=True, concrete_values={"B": bound},
+        )
+        sg = _sg("malloc", [g], sink_args=["n * m * k"])
+        results = check_guard_sufficiency(sg)
+        assert len(results) == 1
+        r = results[0]
+        assert r.feasible is True
+        assert r.oracle == "alloc-wrap/source-bound"
+        assert r.witness is not None
+
+    def test_calloc_bounded_product_proves_sufficient(self):
+        pytest.importorskip("z3")
+        g = _guard(
+            "n >= 0 && n < CAP && m >= 0 && m < CAP",
+            resolvable=True, concrete_values={"CAP": "4096"},
+        )
+        sg = _sg("calloc", [g], sink_args=["n", "m"])
+        results = check_guard_sufficiency(sg)
+        assert results[0].feasible is False
+        assert results[0].oracle == "alloc-wrap/source-bound"
+
+    def test_calloc_wide_bounds_wrap(self):
+        pytest.importorskip("z3")
+        g = _guard(
+            "n >= 0 && n <= B && m >= 0 && m <= B",
+            resolvable=True, concrete_values={"B": str(1 << 40)},
+        )
+        sg = _sg("calloc", [g], sink_args=["n", "m"])
+        results = check_guard_sufficiency(sg)
+        assert results[0].feasible is True
+        assert results[0].oracle == "alloc-wrap/source-bound"
+
+    def test_sizeof_proof_states_its_assumption(self):
+        pytest.importorskip("z3")
+        g = _guard(
+            "n >= 0 && n < CAP",
+            resolvable=True, concrete_values={"CAP": "1000"},
+        )
+        sg = _sg("malloc", [g], sink_args=["n * sizeof(struct item)"])
+        results = check_guard_sufficiency(sg)
+        r = results[0]
+        assert r.feasible is False
+        assert r.oracle == "alloc-wrap/source-bound"
+        assert "sizeof terms assumed" in r.reasoning
+
+    def test_sum_shape_decided_exactly(self):
+        pytest.importorskip("z3")
+        g = _guard(
+            "len >= 0 && len <= CAP && hdr >= 0 && hdr <= CAP",
+            resolvable=True, concrete_values={"CAP": "100"},
+        )
+        sg = _sg("malloc", [g], sink_args=["len + hdr"])
+        results = check_guard_sufficiency(sg)
+        assert results[0].feasible is False
+        assert results[0].oracle == "alloc-wrap/source-bound"
+
+    def test_single_term_size_has_no_wrap_question(self):
+        # malloc(n): a lone 64-bit value never reaches 2**64 — the
+        # oracle answers inconclusive, same consumer behaviour as the
+        # pre-oracle model (no vacuous proof either way).
+        pytest.importorskip("z3")
+        g = _guard(
+            "n >= 0 && n < CAP",
+            resolvable=True, concrete_values={"CAP": "1000"},
+        )
+        sg = _sg("malloc", [g], sink_args=["n"])
+        results = check_guard_sufficiency(sg)
+        assert results[0].feasible is None
+        assert results[0].guard_sufficient is None
+
+    def test_unparsed_expression_demotes_pairwise_proof(self):
+        # RED-CHECK SHAPE: the size argument carries a cast the
+        # grammar declines.  The pairwise model used to bound the two
+        # guard variables and mint "cannot overflow" — a proof about
+        # arithmetic it never saw.  Expressions present but unparsed
+        # demote that proof to inconclusive.
+        pytest.importorskip("z3")
+        g = _guard(
+            "n >= 0 && n < CAP && m >= 0 && m < CAP",
+            resolvable=True, concrete_values={"CAP": "100"},
+        )
+        sg = _sg("malloc", [g], sink_args=["(size_t)n * m"])
+        results = check_guard_sufficiency(sg)
+        r = results[0]
+        assert r.feasible is None
+        assert r.guard_sufficient is None
+        assert "outside the supported arithmetic model" in r.reasoning
+
+    def test_unbound_expression_variable_blocks_proof(self):
+        # The expression parses but ``size`` is never guard-bounded:
+        # UNSAT cannot happen with a free 64-bit variable here, but a
+        # bounded-times-free shape where the free var is multiplied by
+        # zero-able terms must not mint a proof from the gap path.
+        pytest.importorskip("z3")
+        from core.audit.condition_smt import (
+            BoundsConstraint,
+            _z3_alloc_overflow_check,
+        )
+        out = _z3_alloc_overflow_check(
+            [
+                BoundsConstraint("n", ">=", 0, "n >= 0"),
+                BoundsConstraint("n", "<=", 100, "n <= 100"),
+            ],
+            ["n", "size"],
+            ["n * 0 * size"],
+        )
+        assert out[0] is not False
+        if out[0] is None:
+            assert "unconstrained" in out[1]
+
+    def test_oracle_tag_in_to_dict(self):
+        pytest.importorskip("z3")
+        g = _guard(
+            "n >= 0 && n < CAP",
+            resolvable=True, concrete_values={"CAP": "1000"},
+        )
+        sg = _sg("malloc", [g], sink_args=["n * 16"])
+        d = check_guard_sufficiency(sg)[0].to_dict()
+        assert d.get("oracle") == "alloc-wrap/source-bound"

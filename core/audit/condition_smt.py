@@ -332,6 +332,10 @@ class SmtSufficiencyResult:
     concrete_values: dict[str, str] = field(default_factory=dict)
     witness: dict[str, int] | None = None
     error: str = ""
+    #: Which encoding produced the verdict (evidence-grade tag), e.g.
+    #: "alloc-wrap/source-bound". Empty for the legacy per-variable
+    #: and pairwise models.
+    oracle: str = ""
 
     @property
     def guard_sufficient(self) -> bool | None:
@@ -354,6 +358,8 @@ class SmtSufficiencyResult:
             d["witness"] = self.witness
         if self.error:
             d["error"] = self.error
+        if self.oracle:
+            d["oracle"] = self.oracle
         return d
 
 
@@ -935,6 +941,12 @@ def check_guard_sufficiency(
     size_idents = _sink_size_identifiers(
         sink_guard.sink_api, getattr(sink_guard, "sink_args", None),
     )
+    # The raw size-argument expression text(s) — the source-bound
+    # oracles encode the actual arithmetic the sink computes, instead
+    # of reasoning about each variable in isolation.
+    size_exprs = _sink_size_expressions(
+        sink_guard.sink_api, getattr(sink_guard, "sink_args", None),
+    )
 
     for guard in sink_guard.guards:
         if not guard.resolvable or not guard.concrete_values:
@@ -967,6 +979,7 @@ def check_guard_sufficiency(
             sink_api=sink_guard.sink_api,
             sink_context=sink_context,
             size_idents=size_idents,
+            size_exprs=size_exprs,
         )
         results.append(result)
 
@@ -980,6 +993,7 @@ def _check_constraints_vs_safety(
     sink_api: str,
     sink_context: dict[str, Any] | None,
     size_idents: list[str] | None = None,
+    size_exprs: list[str] | None = None,
 ) -> SmtSufficiencyResult:
     """Check if constraints are sufficient for the safety property.
 
@@ -987,15 +1001,19 @@ def _check_constraints_vs_safety(
     the buffer size?
     """
     # Try Z3 first
-    z3_result = _try_z3_check(constraints, buffer_size, sink_api, size_idents)
+    z3_result = _try_z3_check(
+        constraints, buffer_size, sink_api, size_idents, size_exprs,
+    )
     if z3_result is not None:
         witness = z3_result[2] if len(z3_result) > 2 else None
+        oracle = z3_result[3] if len(z3_result) > 3 else ""
         return SmtSufficiencyResult(
             guard_text=guard.text,
             feasible=z3_result[0],
             reasoning=z3_result[1],
             concrete_values=guard.concrete_values,
             witness=witness,
+            oracle=oracle,
         )
 
     # Fallback: simple arithmetic reasoning
@@ -1008,7 +1026,8 @@ def _try_z3_check(
     buffer_size: int | None,
     sink_api: str,
     size_idents: list[str] | None = None,
-) -> tuple[bool | None, str, dict[str, int] | None] | None:
+    size_exprs: list[str] | None = None,
+) -> tuple | None:
     """Try Z3 SMT check. Returns None if Z3 unavailable.
 
     Runs in a forked subprocess so Z3 assertion failures (segfaults in
@@ -1021,6 +1040,7 @@ def _try_z3_check(
         "buffer_size": buffer_size,
         "sink_api": sink_api,
         "size_idents": size_idents,
+        "size_exprs": size_exprs,
     })
     return _verdict_tuple_from_child(out)
 
@@ -1068,22 +1088,27 @@ def _result_from_child(cls, out):
 
 def _verdict_tuple_from_child(
     out,
-) -> tuple[bool | None, str, dict[str, int] | None] | None:
-    """Rebuild a (verdict, reasoning, witness) tuple from child JSON.
+) -> tuple | None:
+    """Rebuild a (verdict, reasoning, witness[, oracle]) tuple from
+    child JSON.
 
     ``verdict`` may be ``None`` — an inconclusive check (no sufficiency
     model applies, insufficient variables) that must produce neither a
-    "guard sufficient" nor a "guard insufficient" claim.
+    "guard sufficient" nor a "guard insufficient" claim. The optional
+    fourth element is the evidence-grade oracle tag; a malformed tag
+    degrades to the untagged tuple, never to a different verdict.
     """
-    if not isinstance(out, list) or len(out) != 3:
+    if not isinstance(out, list) or len(out) not in (3, 4):
         return None
-    verdict, reasoning, witness = out
+    verdict, reasoning, witness = out[0], out[1], out[2]
     if verdict is not None and not isinstance(verdict, bool):
         return None
     if not isinstance(reasoning, str):
         return None
     if witness is not None and not isinstance(witness, dict):
         witness = None
+    if len(out) == 4 and isinstance(out[3], str) and out[3]:
+        return (verdict, reasoning, witness, out[3])
     return (verdict, reasoning, witness)
 
 
@@ -1167,12 +1192,265 @@ def _sink_size_identifiers(
     return idents
 
 
+def _sink_size_expressions(
+    sink_api: str,
+    sink_args: list[str] | None,
+) -> list[str] | None:
+    """Raw size-argument expression text(s) of the sink call.
+
+    Same ``None`` semantics as :func:`_sink_size_identifiers` — the
+    binding is unknown.  The texts feed the source-bound oracles, which
+    encode the arithmetic the sink actually computes rather than each
+    variable in isolation.
+    """
+    if not sink_args:
+        return None
+    api_base = (
+        sink_api.rsplit(".", maxsplit=1)[-1] if "." in sink_api
+        else sink_api
+    )
+    positions = _SIZE_ARG_POSITIONS.get(api_base)
+    if positions is None:
+        return None
+    if len(sink_args) <= max(positions):
+        return None
+    exprs: list[str] = []
+    for pos in positions:
+        if not isinstance(sink_args[pos], str):
+            return None
+        exprs.append(sink_args[pos])
+    return exprs
+
+
+# ---------------------------------------------------------------------------
+# Source-bound size-expression model
+# ---------------------------------------------------------------------------
+
+#: Atom budget for the source-bound size-expression encoder.  Each atom
+#: (variable, integer literal, sizeof term) widens the exact bitvector
+#: domain by 64 bits; the cap bounds solver cost and makes the parser
+#: decline pathological expressions instead of guessing.
+_SIZE_EXPR_MAX_ATOMS = 6
+
+#: Upper bound (exclusive) assumed for sizeof(...) terms: a type's size
+#: is at least 1 and fits comfortably in 32 bits.  Stated in verdict
+#: reasoning whenever a sizeof atom participates.
+_SIZEOF_ATOM_MAX = 1 << 32
+
+_SIZE_EXPR_TOKEN_RE = re.compile(
+    r"\s*(?:"
+    r"(?P<sizeof>sizeof\s*\(\s*[^()]*?\s*\))"
+    r"|(?P<num>0[xX][0-9a-fA-F]+[uUlL]*|\d+[uUlL]*)"
+    r"|(?P<ident>[A-Za-z_]\w*)"
+    r"|(?P<op>[+*()])"
+    r")"
+)
+
+
+def _tokenize_size_expr(text: str) -> list[tuple[str, Any]] | None:
+    """Tokenize a size expression; ``None`` declines unsupported input.
+
+    Supported vocabulary: identifiers, integer literals (decimal / hex,
+    optional ``uUlL`` suffixes), ``sizeof(...)`` terms, ``+``, ``*``
+    and parentheses.  Anything else — casts, shifts, subtraction,
+    division, calls, type words outside a sizeof — declines the whole
+    expression: the wrap model must not guess at arithmetic it cannot
+    represent exactly.
+    """
+    tokens: list[tuple[str, Any]] = []
+    pos = 0
+    while pos < len(text):
+        m = _SIZE_EXPR_TOKEN_RE.match(text, pos)
+        if m is None:
+            if not text[pos:].strip():
+                break
+            return None
+        pos = m.end()
+        if m.lastgroup == "sizeof":
+            tokens.append(("sizeof", " ".join(m.group("sizeof").split())))
+        elif m.lastgroup == "num":
+            try:
+                value = int(m.group("num").rstrip("uUlL"), 0)
+            except ValueError:
+                return None
+            if not 0 <= value < (1 << 64):
+                return None
+            tokens.append(("const", value))
+        elif m.lastgroup == "ident":
+            name = m.group("ident")
+            if name in _SIZE_IDENT_NOISE:
+                # A type word outside sizeof(...) means a cast or a
+                # declaration shape the grammar does not model.
+                return None
+            tokens.append(("var", name))
+        else:
+            tokens.append(("op", m.group("op")))
+    return tokens or None
+
+
+def _parse_size_expr(text: str) -> tuple | None:
+    """Parse a size expression into the wrap model's AST, or ``None``.
+
+    AST nodes: ``("const", int)``, ``("var", name)``,
+    ``("sizeof", text)``, ``("add", [nodes])``, ``("mul", [nodes])``.
+    Declines (returns ``None``) on unsupported tokens, trailing input,
+    or more than ``_SIZE_EXPR_MAX_ATOMS`` atoms.
+    """
+    if not isinstance(text, str):
+        return None
+    tokens = _tokenize_size_expr(text)
+    if tokens is None:
+        return None
+    node, rest = _parse_size_sum(tokens)
+    if node is None or rest:
+        return None
+    if _size_expr_atoms(node) > _SIZE_EXPR_MAX_ATOMS:
+        return None
+    return node
+
+
+def _parse_size_sum(
+    tokens: list[tuple[str, Any]],
+) -> tuple[tuple | None, list[tuple[str, Any]]]:
+    node, rest = _parse_size_product(tokens)
+    if node is None:
+        return None, tokens
+    terms = [node]
+    while rest and rest[0] == ("op", "+"):
+        nxt, rest2 = _parse_size_product(rest[1:])
+        if nxt is None:
+            return None, tokens
+        terms.append(nxt)
+        rest = rest2
+    return (terms[0] if len(terms) == 1 else ("add", terms)), rest
+
+
+def _parse_size_product(
+    tokens: list[tuple[str, Any]],
+) -> tuple[tuple | None, list[tuple[str, Any]]]:
+    node, rest = _parse_size_atom(tokens)
+    if node is None:
+        return None, tokens
+    factors = [node]
+    while rest and rest[0] == ("op", "*"):
+        nxt, rest2 = _parse_size_atom(rest[1:])
+        if nxt is None:
+            return None, tokens
+        factors.append(nxt)
+        rest = rest2
+    return (factors[0] if len(factors) == 1 else ("mul", factors)), rest
+
+
+def _parse_size_atom(
+    tokens: list[tuple[str, Any]],
+) -> tuple[tuple | None, list[tuple[str, Any]]]:
+    if not tokens:
+        return None, tokens
+    kind, value = tokens[0]
+    if (kind, value) == ("op", "("):
+        node, rest = _parse_size_sum(tokens[1:])
+        if node is None or not rest or rest[0] != ("op", ")"):
+            return None, tokens
+        return node, rest[1:]
+    if kind in ("const", "var", "sizeof"):
+        return (kind, value), tokens[1:]
+    return None, tokens
+
+
+def _size_expr_atoms(node: tuple) -> int:
+    """Number of atom leaves in a parsed size expression."""
+    if node[0] in ("add", "mul"):
+        return sum(_size_expr_atoms(child) for child in node[1])
+    return 1
+
+
+def _size_expr_vars(node: tuple) -> set[str]:
+    """Variable names appearing in a parsed size expression."""
+    if node[0] in ("add", "mul"):
+        out: set[str] = set()
+        for child in node[1]:
+            out |= _size_expr_vars(child)
+        return out
+    return {node[1]} if node[0] == "var" else set()
+
+
+def _size_expr_sizeofs(node: tuple) -> list[str]:
+    """Unique sizeof(...) token texts, in first-appearance order."""
+    if node[0] in ("add", "mul"):
+        out: list[str] = []
+        for child in node[1]:
+            for text in _size_expr_sizeofs(child):
+                if text not in out:
+                    out.append(text)
+        return out
+    return [node[1]] if node[0] == "sizeof" else []
+
+
+def _size_expr_value(
+    node: tuple,
+    var_values: dict[str, int],
+    sizeof_values: dict[str, int],
+) -> int:
+    """Replay a parsed size expression over exact Python integers.
+
+    Atom semantics: every atom is an unsigned 64-bit quantity; the
+    arithmetic itself never wraps (the witness question is whether the
+    exact value reaches 2**64).
+    """
+    if node[0] == "const":
+        return node[1]
+    if node[0] == "var":
+        return var_values[node[1]]
+    if node[0] == "sizeof":
+        return sizeof_values[node[1]]
+    values = [
+        _size_expr_value(child, var_values, sizeof_values)
+        for child in node[1]
+    ]
+    if node[0] == "add":
+        return sum(values)
+    product = 1
+    for v in values:
+        product *= v
+    return product
+
+
+def _size_expr_encode(
+    node: tuple,
+    width: int,
+    var_bvs: dict[str, Any],
+    sizeof_bvs: dict[str, Any],
+    z3_mod: Any,
+) -> Any:
+    """Encode a parsed size expression as a width-bit Z3 bitvector.
+
+    ``width`` must be at least ``64 * atoms + atoms`` so the exact
+    (unwrapped) value of the expression always fits — the wide domain
+    has no overflow of its own.
+    """
+    if node[0] == "const":
+        return z3_mod.BitVecVal(node[1], width)
+    if node[0] == "var":
+        return z3_mod.ZeroExt(width - 64, var_bvs[node[1]])
+    if node[0] == "sizeof":
+        return z3_mod.ZeroExt(width - 64, sizeof_bvs[node[1]])
+    parts = [
+        _size_expr_encode(child, width, var_bvs, sizeof_bvs, z3_mod)
+        for child in node[1]
+    ]
+    expr = parts[0]
+    for part in parts[1:]:
+        expr = expr + part if node[0] == "add" else expr * part
+    return expr
+
+
 def _z3_dispatch(
     constraints: list[BoundsConstraint],
     buffer_size: int | None,
     sink_api: str,
     size_idents: list[str] | None = None,
-) -> tuple[bool | None, str, dict[str, int] | None] | None:
+    size_exprs: list[str] | None = None,
+) -> tuple | None:
     """Route to the appropriate Z3 check."""
     alloc_sinks = {
         "malloc", "calloc", "realloc", "kmalloc", "kzalloc",
@@ -1184,13 +1462,19 @@ def _z3_dispatch(
         # The JSON child protocol carries this field — a malformed
         # value means the binding is unknown, never a free pass.
         size_idents = None
+    if size_exprs is not None and (
+        not isinstance(size_exprs, list)
+        or not all(isinstance(s, str) for s in size_exprs)
+    ):
+        # Same doctrine as size_idents — malformed means unknown.
+        size_exprs = None
 
     api_base = sink_api.rsplit(".", maxsplit=1)[-1] if "." in sink_api else sink_api
 
     if api_base in _BUFFER_COPY_SINKS and buffer_size is not None:
         return _z3_overflow_check(constraints, buffer_size, size_idents)
     if api_base in alloc_sinks:
-        return _z3_alloc_overflow_check(constraints, size_idents)
+        return _z3_alloc_overflow_check(constraints, size_idents, size_exprs)
 
     return _z3_consistency_check(constraints)
 
@@ -1363,10 +1647,201 @@ def _z3_overflow_check(
     )
 
 
+def _add_signed_guard_atoms(
+    solver: Any,
+    constraints: list[BoundsConstraint],
+    vars_map: dict[str, Any],
+    z3_mod: Any,
+    width: int = _OVERFLOW_BV_WIDTH,
+) -> None:
+    """Assert guard atoms with SIGNED comparisons on ``width``-bit vars.
+
+    z3py's overloaded comparison operators on bitvectors are signed
+    (BVSLT/BVSLE/...), matching the doctrine that C guards must be
+    assumed signed absent declared-type evidence.
+    """
+    for c in constraints:
+        v = vars_map[c.variable]
+        bv_val = z3_mod.BitVecVal(c.bound_value, width)
+        if c.operator == "<":
+            solver.add(v < bv_val)
+        elif c.operator == "<=":
+            solver.add(v <= bv_val)
+        elif c.operator == ">":
+            solver.add(v > bv_val)
+        elif c.operator == ">=":
+            solver.add(v >= bv_val)
+        elif c.operator == "==":
+            solver.add(v == bv_val)
+        elif c.operator == "!=":
+            solver.add(v != bv_val)
+
+
+def _guards_hold_signed(
+    constraints: list[BoundsConstraint],
+    var_values: dict[str, int],
+) -> bool:
+    """Replay guard atoms under the signed interpretation, natively."""
+    import operator as op
+    comparisons = {"<": op.lt, "<=": op.le, ">": op.gt,
+                   ">=": op.ge, "==": op.eq, "!=": op.ne}
+    for c in constraints:
+        if c.variable not in var_values or c.operator not in comparisons:
+            return False
+        signed = _bv_signed(var_values[c.variable])
+        if not comparisons[c.operator](signed, c.bound_value):
+            return False
+    return True
+
+
+def _alloc_wrap_source_bound(
+    constraints: list[BoundsConstraint],
+    nodes: list[tuple],
+    size_exprs: list[str],
+) -> tuple:
+    """Source-bound allocation-wrap oracle over parsed size expression(s).
+
+    Encodes the EXACT arithmetic of the allocation's size argument(s)
+    in a wide bitvector domain (no wrap of its own) and asks whether
+    the mathematical value can reach 2**64 — i.e. whether the size_t
+    the allocator receives is a wrapped, too-small number.  Multiple
+    expressions (calloc's two arguments) multiply, matching the
+    allocator's semantics.
+
+    Atom semantics: guard-constrained variables share the signed guard
+    model's 64-bit bitvectors (read unsigned at the sink, matching the
+    copy-length model); free variables range over the full 64-bit
+    domain; sizeof terms are assumed in [1, 2**32).
+
+    Verdicts: SAT mints insufficiency (True) only after the witness
+    replays independently in exact Python arithmetic; UNSAT mints the
+    no-wrap proof (False) only when the expression actually contains
+    arithmetic (>= 2 atoms under an operator) and every expression
+    variable is guard-bounded — otherwise inconclusive.
+    """
+    display = " * ".join(size_exprs)
+    tree = nodes[0] if len(nodes) == 1 else ("mul", list(nodes))
+    atoms = _size_expr_atoms(tree)
+    if atoms > _SIZE_EXPR_MAX_ATOMS:
+        # Per-expression parses fit the cap but the calloc product of
+        # both arguments exceeds it — outside the supported model.
+        return (
+            None,
+            "size expression outside the supported arithmetic model "
+            "— sufficiency inconclusive",
+            None,
+        )
+    if tree[0] not in ("add", "mul"):
+        # A single atom has no arithmetic to wrap: a lone 64-bit value
+        # never reaches 2**64.  Sufficiency against the BUFFER is a
+        # different question this oracle does not answer.
+        return (
+            None,
+            f"allocation size ({display}) is a single term — no "
+            f"arithmetic to wrap; inconclusive",
+            None,
+        )
+
+    import z3
+
+    from core.smt_solver.session import check_solver, new_solver
+
+    width = 64 * atoms + atoms
+    solver = new_solver()
+
+    var_bvs: dict[str, Any] = {}
+    for c in constraints:
+        if c.variable not in var_bvs:
+            var_bvs[c.variable] = z3.BitVec(c.variable, 64)
+    _add_signed_guard_atoms(solver, constraints, var_bvs, z3)
+
+    expr_vars = sorted(_size_expr_vars(tree))
+    for name in expr_vars:
+        if name not in var_bvs:
+            var_bvs[name] = z3.BitVec(name, 64)
+
+    sizeof_texts = _size_expr_sizeofs(tree)
+    sizeof_bvs: dict[str, Any] = {}
+    for text in sizeof_texts:
+        sv = z3.BitVec(text, 64)
+        sizeof_bvs[text] = sv
+        solver.add(z3.UGE(sv, z3.BitVecVal(1, 64)))
+        solver.add(z3.ULT(sv, z3.BitVecVal(_SIZEOF_ATOM_MAX, 64)))
+    sizeof_note = (
+        " (sizeof terms assumed in [1, 2**32))" if sizeof_texts else ""
+    )
+
+    wide = _size_expr_encode(tree, width, var_bvs, sizeof_bvs, z3)
+    solver.add(
+        z3.Extract(width - 1, 64, wide) != z3.BitVecVal(0, width - 64),
+    )
+
+    result = check_solver(solver)
+    if result not in (z3.sat, z3.unsat):
+        return (
+            None,
+            "solver returned unknown — allocation overflow inconclusive",
+            None,
+        )
+    if result == z3.sat:
+        model = solver.model()
+        try:
+            var_values = {
+                name: model.eval(bv, model_completion=True).as_long()
+                for name, bv in var_bvs.items()
+            }
+            sizeof_values = {
+                text: model.eval(bv, model_completion=True).as_long()
+                for text, bv in sizeof_bvs.items()
+            }
+        except AttributeError:
+            return (None, "wrap witness could not be extracted — no claim", None)
+        value = _size_expr_value(tree, var_values, sizeof_values)
+        replay_ok = (
+            value >= (1 << 64)
+            and _guards_hold_signed(constraints, var_values)
+            and all(1 <= v < _SIZEOF_ATOM_MAX for v in sizeof_values.values())
+        )
+        if not replay_ok:
+            return (
+                None,
+                "wrap witness failed independent replay — no claim",
+                None,
+            )
+        witness: dict[str, int] = {
+            name: _bv_signed(v) for name, v in var_values.items()
+        }
+        witness.update(sizeof_values)
+        return (
+            True,
+            (
+                f"allocation size ({display}) can reach {value} — at "
+                f"least 2**64, so the size_t the allocator receives "
+                f"wraps to a too-small value{sizeof_note}"
+            ),
+            witness,
+            "alloc-wrap/source-bound",
+        )
+
+    gap = _size_binding_gap(expr_vars, {c.variable for c in constraints})
+    if gap is not None:
+        return (None, gap, None)
+    return (
+        False,
+        (
+            f"allocation arithmetic ({display}) cannot reach 2**64 "
+            f"under the guard bounds — no size_t wrap{sizeof_note}"
+        ),
+        None,
+        "alloc-wrap/source-bound",
+    )
+
+
 def _z3_alloc_overflow_check(
     constraints: list[BoundsConstraint],
     size_idents: list[str] | None = None,
-) -> tuple[bool | None, str, dict[str, int] | None]:
+    size_exprs: list[str] | None = None,
+) -> tuple:
     """Z3: Can an allocation size integer-overflow given the constraints?
 
     Guard atoms are encoded with SIGNED comparisons: source guards on
@@ -1384,9 +1859,24 @@ def _z3_alloc_overflow_check(
     safe without any constraint touching ``n`` or ``size``.  ``None``
     = binding unknown: wrap witnesses (True) may still be flagged,
     the no-overflow proof (False) demotes to inconclusive.
+
+    ``size_exprs`` carries the raw size-argument expression text(s).
+    When every expression parses into the supported arithmetic grammar,
+    the source-bound oracle (:func:`_alloc_wrap_source_bound`) answers
+    instead — it encodes the actual arithmetic, so ``malloc(n * m * k)``
+    and sum-of-products shapes are decided exactly rather than by the
+    pairwise heuristic below.  When expressions are PRESENT but outside
+    the grammar, the pairwise no-overflow proof demotes to inconclusive:
+    bounding variable pairs proves nothing about arithmetic the model
+    never saw.
     """
     if not _signed_guard_bounds_fit(constraints):
         return (None, "guard bounds do not fit the signed 64-bit model — inconclusive", None)
+
+    if size_exprs is not None:
+        nodes = [_parse_size_expr(text) for text in size_exprs]
+        if size_exprs and all(node is not None for node in nodes):
+            return _alloc_wrap_source_bound(constraints, nodes, size_exprs)
 
     import z3
 
@@ -1453,6 +1943,20 @@ def _z3_alloc_overflow_check(
         gap = _size_binding_gap(size_idents, set(vars_map))
         if gap is not None:
             return (None, gap, None)
+        if size_exprs is not None:
+            # The size argument's actual arithmetic is known but
+            # outside the supported grammar (casts, shifts, calls, or
+            # a sum the pairwise model never checks) — pairwise
+            # variable bounds are not a proof about that expression.
+            return (
+                None,
+                (
+                    "size expression outside the supported arithmetic "
+                    "model — pairwise bounds do not prove the "
+                    "allocation arithmetic safe; inconclusive"
+                ),
+                None,
+            )
         return (
             False,
             (
@@ -1568,7 +2072,7 @@ def _z3_dispatch_json(request: dict) -> Any:
         constraints = [BoundsConstraint(**c) for c in args["constraints"]]
         result = _z3_dispatch(
             constraints, args.get("buffer_size"), args.get("sink_api", ""),
-            args.get("size_idents"),
+            args.get("size_idents"), args.get("size_exprs"),
         )
         return list(result) if result is not None else None
     if tag == "path_feasibility":
