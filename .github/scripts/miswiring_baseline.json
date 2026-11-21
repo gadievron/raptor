@@ -427,6 +427,9 @@
     "artifacts:write_only_artifact::jazzer-corpus.json": {
       "note": "operator-facing run record: names the project's own Jazzer seed corpus (src/test/resources/<pkg>/<Class>Inputs, the jazzer JUnit convention) the campaign staged \u2014 same posture as crate-corpus.json / generated-corpus.json"
     },
+    "artifacts:write_only_artifact::joern.sarif": {
+      "note": "joern scan phase output (core/orchestration/joern_scan.run_joern_scan_phase): the written path is appended to the run's all_sarif_files list in raptor_agentic.py and consumed downstream by the SARIF normalisation/dedup/validation chain via that dynamic path list, never reopened by filename literal — same posture as the other scanner SARIFs the indexer cannot connect"
+    },
     "artifacts:write_only_artifact::knowledge-results.json": {
       "note": "Terminal operator diagnostic/export of knowledge-request processing, recorded context delivery/omission/failure, material bindings and cycle/call provenance. AuditKnowledgeRuntime.write_artifacts writes it at normal review-drain completion and executor/drain failure cleanup; events mirror to audit-log.jsonl. Live runtime objects drive scheduling. Deliberately not a resume/cache/checker input; role context_provenance_not_verification_evidence. Tests validate the export. No production reader is expected."
     },

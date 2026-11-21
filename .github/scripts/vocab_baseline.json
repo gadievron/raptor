@@ -1912,6 +1912,12 @@
     "count": 13,
     "kind": "literal"
   },
+  "core/orchestration/joern_scan.py::_TAINT_CATEGORIES": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Operator-curated sink-to-CWE taxonomy for Joern taint-flow categorisation: each entry maps a dangerous-sink call-name set (drawn from the packages/joern/lang_config profile sink lists; most, not all, profile sinks are categorised) to a SARIF rule id and CWE. Fixed classification seed mirroring the lang_config vocabularies, not a learned name vocabulary; uncategorised sinks fall through to the generic rule.",
+    "reviewed": "2026-11-21"
+  },
   "core/orchestration/understand_bridge.py::attack_path": {
     "count": 14,
     "kind": "literal",
@@ -3649,6 +3655,12 @@
     "kind": "literal",
     "note": "Pipeline final-report dict: per-phase artifact KEYS aggregated into the run report (persistence schema keys, not a name vocabulary); root-module universe addition.",
     "reviewed": "2026-09-21"
+  },
+  "raptor_agentic.py::scan_metrics": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Per-scanner metrics dict: artifact KEYS of the run's scan_metrics record (persistence schema keys, not a name vocabulary); crossed the 9-name seed threshold when the joern scan phase added its 'joern' key.",
+    "reviewed": "2026-11-21"
   },
   "raptor_agentic.py::summary": {
     "count": 15,

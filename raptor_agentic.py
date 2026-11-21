@@ -2129,6 +2129,20 @@ Examples:
              "marker (raptor project trust build).",
     )
     parser.add_argument("--no-visualizations", action="store_true", help="Disable dataflow visualizations for CodeQL findings")
+    # Joern CPG scan — mutually exclusive opt-in/opt-out pair. The
+    # enablement decision (including the C/C++ auto-enable when CodeQL
+    # produced no C/C++ coverage this run) is owned by
+    # core.orchestration.joern_scan.joern_scan_decision.
+    _joern_group = parser.add_mutually_exclusive_group()
+    _joern_group.add_argument(
+        "--joern-scan", action="store_true",
+        help="Run the Joern CPG scan phase (interprocedural taint sweep "
+             "+ structural C/C++ queries, no build required) regardless "
+             "of the C/C++ auto-enable rule")
+    _joern_group.add_argument(
+        "--no-joern-scan", action="store_true",
+        help="Disable the Joern CPG scan phase (including the C/C++ "
+             "auto-enable)")
     parser.add_argument(
         "--taint-crossfile-mad", action="store_true",
         help="Stage the taint seed packs (plus the project's "
@@ -2719,6 +2733,17 @@ def main() -> int:
             f"{_codeql_flag} requests CodeQL. Drop --openant-only to "
             f"keep CodeQL, drop {_codeql_flag} to run OpenAnt alone, "
             "or use --openant --codeql to run both."
+        )
+
+    # Same contradiction class for the Joern CPG scan: --openant-only
+    # replaces the pattern scanners, --joern-scan requests one.
+    if getattr(args, "openant_only", False) and getattr(args, "joern_scan", False):
+        parser.error(
+            "--openant-only cannot be combined with --joern-scan: "
+            "--openant-only disables the pattern scanners while "
+            "--joern-scan requests the Joern CPG scan. Drop "
+            "--openant-only to keep the Joern scan, or drop "
+            "--joern-scan to run OpenAnt alone."
         )
 
     if args.project is not None:
@@ -3889,6 +3914,73 @@ def main() -> int:
 
                 all_sarif_files.extend(Path(sarif) for sarif in sarif_files)
 
+    # ========================================================================
+    # PHASE 1a: JOERN CPG SCAN (taint sweep + structural C/C++ queries)
+    # ========================================================================
+    # Runs after CodeQL collection so the auto-enable rule can read the
+    # actual C/C++ coverage this run achieved, and before the
+    # source_scan_empty computation so Joern findings count as scan
+    # results. Never fatal: a degraded phase warns and the run
+    # continues on the other scanners' findings.
+    joern_scan_metrics: dict = {}
+    joern_findings_count = 0
+    try:
+        from core.orchestration.joern_scan import (
+            joern_scan_decision,
+            run_joern_scan_phase,
+        )
+        # Coverage means a cpp ANALYSIS completed, not that CodeQL
+        # merely detected C/C++: on a mixed repo whose cpp database
+        # build fails (the unbuildable-target case this phase exists
+        # for) the run still exits 0 with "cpp" in languages_detected.
+        _codeql_cpp_analysis = (
+            codeql_metrics.get("analyses_completed") or {}).get("cpp") or {}
+        _codeql_cpp_covered = bool(_codeql_cpp_analysis.get("success"))
+        _joern_decision = joern_scan_decision(
+            requested=getattr(args, "joern_scan", False),
+            disabled=getattr(args, "no_joern_scan", False),
+            skip_scan=skip_scan,
+            openant_only=_openant_only,
+            target_path=original_repo_path,
+            codeql_cpp_covered=_codeql_cpp_covered,
+        )
+        # Decision reasons are module-authored constants, but every
+        # value this writer prints goes through the terminal chokepoint.
+        _joern_reason = sanitise_for_terminal(_joern_decision.reason,
+                                              max_len=300)
+        if _joern_decision.run:
+            print(f"\n[*] Running Joern CPG scan ({_joern_reason})...")
+            joern_outcome = run_joern_scan_phase(original_repo_path, out_dir)
+            joern_scan_metrics = joern_outcome.metrics()
+            joern_findings_count = joern_outcome.finding_count
+            if joern_outcome.sarif_path is not None:
+                all_sarif_files.append(joern_outcome.sarif_path)
+            if joern_outcome.errors:
+                # Error text can quote scanned-repo code / Scala
+                # exception payloads — render inert before the terminal.
+                print("⚠️  Joern scan degraded: "
+                      f"{sanitise_for_terminal('; '.join(joern_outcome.errors), max_len=300)}",
+                      file=sys.stderr)
+            _joern_mark = ("⚠️  Joern scan completed degraded"
+                           if joern_outcome.degraded
+                           else "✓ Joern scan complete")
+            print(f"{_joern_mark}: {joern_outcome.finding_count} findings "
+                  f"({joern_outcome.taint_flow_count} taint flows, "
+                  f"{joern_outcome.structural_hit_count} structural hits, "
+                  f"{joern_outcome.elapsed_s:.1f}s)")
+        else:
+            if _joern_decision.requested:
+                # An explicitly requested phase that cannot run is an
+                # operator-visible condition, not a debug line.
+                print(f"⚠️  Joern scan skipped: {_joern_reason}",
+                      file=sys.stderr)
+            logger.debug("joern scan skipped: %s", _joern_decision.reason)
+    except Exception:
+        logger.warning("Joern scan phase failed; continuing without it",
+                       exc_info=True)
+        print("⚠️  Joern scan phase failed — continuing without it",
+              file=sys.stderr)
+
     # Check if we have any findings from source-code scanners.
     # SCA may still contribute findings even when Semgrep/CodeQL found nothing,
     # so we don't exit here — we proceed to the SCA phase first.
@@ -4335,6 +4427,7 @@ def main() -> int:
     imported_findings_count = import_result.stats.total_imported if import_result else 0
     total_findings = (semgrep_metrics.get('total_findings', 0)
                       + codeql_metrics.get('total_findings', 0)
+                      + joern_findings_count
                       + sca_findings_count
                       + openant_findings_count
                       + taint_findings_count
@@ -4346,6 +4439,7 @@ def main() -> int:
         'findings_by_severity': semgrep_metrics.get('findings_by_severity', {}),
         'semgrep': semgrep_metrics,
         'codeql': codeql_metrics,
+        'joern': joern_scan_metrics,
         'sca': sca_metrics,
         'openant': openant_metrics,
         'taint_crossfile': taint_metrics,
@@ -4365,6 +4459,8 @@ def main() -> int:
         print(f"  Semgrep: {semgrep_metrics.get('total_findings', 0)} findings")
     if codeql_metrics:
         print(f"  CodeQL: {codeql_metrics.get('total_findings', 0)} findings")
+    if joern_scan_metrics:
+        print(f"  Joern: {joern_findings_count} findings")
     if sca_findings_count:
         print(f"  SCA: {sca_findings_count} findings")
     if openant_findings_count:
