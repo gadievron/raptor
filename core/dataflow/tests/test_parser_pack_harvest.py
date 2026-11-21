@@ -232,6 +232,31 @@ def test_harvest_git_repo_log_timeout_recorded_not_raised(
     assert any("timed out" in e for e in result.errors)
 
 
+def test_run_git_retains_a_bounded_marked_prefix(
+    monkeypatch, tmp_path: Path,
+):
+    """The clone is untrusted, so ``git show`` output size is attacker-
+    chosen: ``_run_git`` must retain only a byte-bounded prefix with an
+    explicit truncation marker, never buffer the whole stream."""
+    import core.dataflow.parser_pack_harvest as pph
+
+    repo = tmp_path / "bigrepo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "big.txt").write_text("x" * 200_000)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "big blob")
+    # raising=False: the constant is part of the bounded-capture fix —
+    # on a pre-fix tree the setattr still succeeds and the unbounded
+    # capture makes the assertions below fail rather than error.
+    monkeypatch.setattr(pph, "_GIT_CAPTURE_BYTES", 4096, raising=False)
+    proc = pph._run_git(["-C", str(repo), "show", "HEAD:big.txt"])
+    assert proc.returncode == 0
+    assert "capture truncated at 4096 bytes" in proc.stdout
+    # Bounded prefix + one marker line — nothing like the 200 kB blob.
+    assert len(proc.stdout.encode("utf-8")) <= 4096 + 100
+
+
 def test_harvest_dispatch_requires_an_input():
     result = harvest(HarvestSource(library="x", api_patterns=("^x",)))
     assert result.errors

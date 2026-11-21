@@ -58,6 +58,7 @@ from core.git.clone import (
     safe_git_readonly_command,
 )
 from core.json import dumps_artifact, load_json
+from core.sandbox._capture import BoundedCommunicator
 
 #: Shipped pack location (the taxonomy loads it at import).
 PACK_PATH = (
@@ -90,6 +91,14 @@ _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 _C_FAMILY_EXTS = (".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh")
 
 _GIT_TIMEOUT = 60
+
+# Per-stream capture retention for _run_git. The clone is UNTRUSTED,
+# so ``git show`` diff size is attacker-chosen: two hostile commits can
+# differ by gigabytes within the timeout, and a plain
+# ``capture_output=True`` would buffer all of it in parent memory. The
+# harvester only reads hunk-header context lines, so a bounded prefix
+# loses nothing legitimate; 8 MiB dwarfs any real fix diff's headers.
+_GIT_CAPTURE_BYTES = 8 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -189,17 +198,32 @@ def _filter_api_names(
 
 def _run_git(
     args: list[str], *, allow_promisor_fetch: bool = False,
-) -> subprocess.CompletedProcess:
+) -> subprocess.CompletedProcess[str]:
     if allow_promisor_fetch:
         argv = safe_git_command(*args)
         env = get_safe_git_env(preserve_proxy=True)
     else:
         argv = safe_git_readonly_command(*args)
         env = get_safe_git_env()
-    return subprocess.run(
-        argv, capture_output=True, text=True, errors="replace",
-        timeout=_GIT_TIMEOUT, env=env, check=False,
+    # Byte-bounded capture (never plain ``capture_output=True`` here —
+    # the repo controls the output size). The child still runs to
+    # completion: overflow is drained and discarded, never blocking the
+    # pipe; retained output past the cap carries an explicit truncation
+    # marker. ``TimeoutExpired`` kills the child and propagates,
+    # matching the ``subprocess.run`` semantics the callers catch.
+    proc = subprocess.Popen(
+        argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, errors="replace", env=env,
     )
+    capture = BoundedCommunicator(_GIT_CAPTURE_BYTES)
+    capture.attach(proc)
+    try:
+        out, err = capture.communicate(timeout=_GIT_TIMEOUT)
+    except BaseException:
+        proc.kill()
+        proc.wait()
+        raise
+    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
 
 
 def _validate_max_commits(max_commits: int) -> None:

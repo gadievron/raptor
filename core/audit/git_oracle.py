@@ -72,6 +72,16 @@ _MAX_COMMITS_DEFAULT = 8
 _MAX_FILES_PER_COMMIT = 20
 _CACHE_CAP = 256
 
+# Per-stream capture retention for sandboxed git. The repo is hostile,
+# so log/diff output size is attacker-chosen — ``git log -L`` forces
+# patch output and ``git show`` in fix_history buffers whole fix diffs;
+# without a cap the parent buffers all of it before any parser sees it.
+# 8 MiB dwarfs legitimate corroboration/fix-mining output (bounded
+# commit counts, subject lines, name lists) while bounding a hostile
+# repo's memory leverage; over-cap output keeps a marked prefix and the
+# record/diff parsers simply see fewer records.
+_MAX_GIT_CAPTURE_BYTES = 8 * 1024 * 1024
+
 # Namespace for anything this module stamps.  Deliberately NOT in
 # evidence_grade.VALID_EVIDENCE_TOOLS / _TOOL_NAMESPACES — see module
 # docstring.  test_git_oracle.py pins this invariant.
@@ -216,6 +226,11 @@ def _run_git(
                 capture_output=True,
                 text=True,
                 timeout=_GIT_TIMEOUT_S,
+                # Byte-bound the capture: without this the sandbox
+                # buffers the child's whole output in the parent
+                # (BoundedCommunicator only engages when the kwarg is
+                # set) and a hostile repo picks the size.
+                max_capture_bytes=_MAX_GIT_CAPTURE_BYTES,
                 caller_label="audit-git-oracle",
             )
         except subprocess.TimeoutExpired:

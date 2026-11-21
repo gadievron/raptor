@@ -356,6 +356,24 @@ class TestHardenedInvocation:
             expected = safe_git_readonly_command()
             assert cmd[1:len(expected)] == expected[1:]
 
+    def test_every_git_run_is_capture_bounded(self, tmp_path, sandbox_spy):
+        """The repo is hostile, so log/diff output size is attacker-
+        chosen — every sandboxed git invocation must carry a byte
+        bound, or the parent buffers whatever the repo emits within
+        the timeout (``git log -L`` forces patch output; fix_history's
+        ``git show`` buffers whole fix diffs through this same
+        chokepoint)."""
+        repo = _make_repo(tmp_path)
+        corroborate_finding(
+            target_path=repo, file_path="src.c",
+            line_start=1, line_end=5, out_dir=tmp_path / "out",
+        )
+        assert sandbox_spy
+        for call in sandbox_spy:
+            assert call.get("max_capture_bytes") == \
+                git_oracle._MAX_GIT_CAPTURE_BYTES
+        assert git_oracle._MAX_GIT_CAPTURE_BYTES > 0
+
     def test_shared_posture_carries_spec_mandated_pins(self):
         """Guard against a silent weakening of the SHARED constant: the
         oracle's spec-mandated pins must still be present in what
