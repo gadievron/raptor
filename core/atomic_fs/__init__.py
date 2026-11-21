@@ -658,6 +658,39 @@ def open_hardened_read(path: str | Path) -> int:
     return fd
 
 
+def _chmod_dir_nofollow(entry: str, mode: int = 0o700) -> None:
+    """chmod a directory without ever following a symlink at ``entry``.
+
+    ``os.chmod`` follows symlinks and Linux has no lchmod, so any
+    check-then-chmod sequence (``islink`` → ``chmod``) leaves a window
+    where a racer swaps the directory for a symlink and the mode change
+    lands on the link's TARGET. Platforms with a real lchmod (macOS)
+    take ``follow_symlinks=False`` directly. Elsewhere pin the inode
+    with ``O_PATH | O_DIRECTORY | O_NOFOLLOW`` — ``O_PATH`` needs no
+    read permission, so a griefed mode-0 directory still opens, and a
+    swapped-in symlink or non-directory refuses at open time — then
+    apply the mode through the ``/proc/self/fd`` magic link, which
+    resolves to the pinned inode with no re-resolution window (the
+    ``core.sandbox._pathpin`` mount-targeting pattern; ``fchmod``
+    itself rejects O_PATH fds).
+
+    Raises ``OSError`` on refusal or failure; callers treat that as
+    "skip this entry", exactly like the chmod failures they already
+    tolerate.
+    """
+    if os.chmod in os.supports_follow_symlinks:
+        os.chmod(entry, mode, follow_symlinks=False)
+        return
+    fd = os.open(
+        entry,
+        os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+    )
+    try:
+        os.chmod(f"/proc/self/fd/{fd}", mode)
+    finally:
+        os.close(fd)
+
+
 def rmtree_hardened(path: str | Path) -> bool:
     """Remove a directory tree a sandboxed child may have griefed;
     return whether the path is actually gone.
@@ -674,9 +707,14 @@ def rmtree_hardened(path: str | Path) -> bool:
     symlink-to-directory in dirnames (it just doesn't descend), and
     ``os.chmod`` follows symlinks (Linux has no lchmod) — chmoding it
     would apply 0o700 to the symlink's TARGET, which a hostile child
-    can point anywhere outside its grant. Skip links: rmtree removes
-    the link itself without descending, and a link needs no
-    permission restore anyway. A symlink ROOT is refused outright
+    can point anywhere outside its grant. Every restore chmod
+    therefore goes through :func:`_chmod_dir_nofollow`, which refuses
+    a link ATOMICALLY at the chmod itself — a pre-fix ``islink`` check
+    followed by a path-based chmod left a window where a still-live
+    child swapped a directory for a link between the two calls.
+    Refused links are simply skipped: rmtree removes the link itself
+    without descending, and a link needs no permission restore
+    anyway. A symlink ROOT is refused outright
     (``False``, no side effects) BEFORE any chmod or walk:
     ``os.walk`` always follows its ``top`` argument — ``followlinks``
     only governs entries found during the descent — so walking a
@@ -718,17 +756,15 @@ def rmtree_hardened(path: str | Path) -> bool:
             or (current.st_dev, current.st_ino) != (original.st_dev, original.st_ino)):
         return False
     try:
-        os.chmod(p, 0o700)
+        _chmod_dir_nofollow(p)
     except OSError:
         pass
     try:
         for root, dirs, _files in os.walk(p):
             for name in dirs:
                 entry = os.path.join(root, name)
-                if os.path.islink(entry):
-                    continue
                 try:
-                    os.chmod(entry, 0o700)
+                    _chmod_dir_nofollow(entry)
                 except OSError:
                     pass
     except OSError:

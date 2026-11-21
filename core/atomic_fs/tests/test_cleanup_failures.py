@@ -109,6 +109,42 @@ def test_replaced_root_is_not_permission_restored(tmp_path, monkeypatch):
     assert len(calls) == 1
 
 
+def test_restore_walk_chmod_refuses_a_swapped_in_symlink(tmp_path, monkeypatch):
+    """Simulate the check-then-chmod swap inside the restore walk: the
+    link check sees a plain directory (as if a still-live child swapped
+    the entry right after the check). The restore chmod itself must
+    refuse the link — ``os.chmod`` follows symlinks (Linux has no
+    lchmod), so a path-based chmod after a separate ``islink`` check
+    would retarget 0o700 at the link's TARGET outside the tree."""
+    victim = tmp_path / "victim-tree"
+    victim.mkdir()
+    victim.chmod(0o755)
+
+    root = tmp_path / "scratch"
+    locked = root / "locked"
+    locked.mkdir(parents=True)
+    # The link lives INSIDE the mode-0 dir so the first plain rmtree
+    # pass cannot remove it — only the restore walk (which re-opens
+    # the dir by restoring 0o700) ever reaches it.
+    (locked / "linkdir").symlink_to(victim, target_is_directory=True)
+    locked.chmod(0)
+
+    # The lie stands in for the racer: any islink-style check the walk
+    # consults reports "not a link" for the planted entry.
+    patch_module_attribute(
+        monkeypatch, fs, "os.path", "islink", lambda _p: False,
+    )
+    try:
+        assert fs.rmtree_hardened(root) is True
+        assert not root.exists()
+        assert victim.lstat().st_mode & 0o777 == 0o755, (
+            "restore walk chmodded through a symlink to a directory"
+        )
+    finally:
+        if locked.exists():
+            locked.chmod(0o700)
+
+
 @pytest.mark.parametrize("phase", ["write", "fsync", "replace"])
 @pytest.mark.parametrize("error", [OSError, KeyboardInterrupt])
 def test_unlink_failure_does_not_mask_original_write_failure(
