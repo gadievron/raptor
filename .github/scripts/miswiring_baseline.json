@@ -658,6 +658,9 @@
     "dead:dead_class:packages/exploit_feasibility/constants.py:TargetPriority": {
       "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
     },
+    "dead:dead_class:packages/zkpox/envelope.py:EnvelopeRoundTripError": {
+      "note": "zkpox public API: raised on AES round-trip verification failure; consumed by downstream callers"
+    },
     "dead:dead_function:core/analysis/lifecycle_collector.py:collect_read_site": {
       "note": "kept: feature seed \u2014 lifecycle/UAF audit pass (guard-annotated read-site collector, pair of collect_write_site; roadmap decision 2026-08-17)"
     },
@@ -696,6 +699,9 @@
     },
     "dead:dead_function:packages/exploit_feasibility/analyzer.py:check_system_exploitability": {
       "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
+    },
+    "dead:dead_function:packages/zkpox/anchor.py:load_ed25519_secret_pem": {
+      "note": "zkpox public API: loads a persisted signing key for repeat anchoring; consumed by operator CLI"
     },
     "dead:dead_method:core/analysis/binary_oracle.py:_OwnedOutputReader.readinto": {
       "note": "RawIOBase protocol \u2014 called by Python IO layer, not by name"
@@ -814,26 +820,11 @@
     "plumbing:orphan_config_field:core/audit/fail_open_roles.py:SecurityFlag.safe_when": {
       "note": "pending wiring: safe_when is the fail-open channel's planned per-flag suppression predicate"
     },
-    "plumbing:orphan_config_field:core/audit/prepared_declaration_custody.py:DeclarationCapture.database_sha256": {
-      "note": "Retained public immutable capture-record metadata returned by capture_declaration/DeclarationOwner.capture and exposed through AcquiredDeclaration.selected.capture. The digest describes the retained whole database bytes for callers. Internal custody intentionally uses issued-object identity and exact bytes/intervals, not the digest as build authentication or authority; no internal serialized consumer is claimed."
-    },
-    "plumbing:orphan_config_field:core/build/build_detector.py:BuildSystem.detected_files": {
-      "note": "construction-time provenance: the detector stores which build files drove the detection (the same list its confidence score is computed from) on the result object for debugging and tests; nothing dereferences the field programmatically by design"
-    },
-    "plumbing:orphan_config_field:core/dataflow/string_type_evidence.py:ExactStringArgumentEvidence.guard_span": {
-      "note": "guard_span is an intentionally nullable source-premise location in the public ExactStringArgumentEvidence result; tier1_llm serializes the complete dataclass via asdict into Tier0Result.extras. Acceptance is established before serialization, not by reading this field. The cvefix bridge currently does not persist extras."
-    },
-    "plumbing:orphan_config_field:core/llm/tool_use/types.py:TurnStarted.input_token_estimate": {
-      "note": "kept: published observability API (2026-08-17 config-orphan pass). TurnStarted is a frozen event dataclass exported in core.llm.tool_use.__all__ for external subscribers; per-turn input-token telemetry is the point of the event. The in-repo hunt_dispatch subscriber deliberately skips TurnStarted; the value is computed regardless for the context-policy gate (loop.py)."
-    },
-    "plumbing:orphan_config_field:packages/source_intel/analyze.py:PrivilegeBackWalkEvidence.all_paths_gated": {
-      "note": "Retained legacy record-constructor field accepted by render_source_context(privilege_back_walk=...). Current capability-call records lack reviewed denial-exit enforcement, so rendering intentionally does not consume this flag as gating evidence. test_retained_backwalk_flags_do_not_prove_gated_or_ungated_paths preserves record/API compatibility without restoring gating authority."
-    },
-    "plumbing:orphan_config_field:packages/source_intel/analyze.py:PrivilegeBackWalkEvidence.gating_examples": {
-      "note": "Retained legacy record-constructor field accepted by render_source_context(privilege_back_walk=...). Current capability-call records lack reviewed denial-exit enforcement, so rendering intentionally does not consume these examples as gating evidence. test_retained_backwalk_flags_do_not_prove_gated_or_ungated_paths preserves record/API compatibility without restoring gating authority."
-    },
     "plumbing:orphan_config_field:core/audit/prepared_build_capture.py:BuildCaptureDescription.namespace_digest": {
       "note": "Explicit diagnostic description of the closed-search namespace digest returned by PreparedBuildCaptureOwner.describe. The same digest is bound during capture construction, while the production measurement source remains None. This field is not an independently measured namespace or build-authority grant; no current runtime consumer is claimed."
+    },
+    "plumbing:orphan_config_field:core/audit/prepared_declaration_custody.py:DeclarationCapture.database_sha256": {
+      "note": "Retained public immutable capture-record metadata returned by capture_declaration/DeclarationOwner.capture and exposed through AcquiredDeclaration.selected.capture. The digest describes the retained whole database bytes for callers. Internal custody intentionally uses issued-object identity and exact bytes/intervals, not the digest as build authentication or authority; no internal serialized consumer is claimed."
     },
     "plumbing:orphan_config_field:core/audit/prepared_image_envelope.py:EnvelopeOnly.block_bytes": {
       "note": "Validated raw superblock block-size declaration exposed by the bounded envelope API. Not a decoder selection, effective filesystem geometry or active namespace consumer; compressed metadata/filesystem walking remain unavailable."
@@ -853,8 +844,38 @@
     "plumbing:orphan_config_field:core/audit/prepared_image_root_directory.py:BasicRootDirectoryDeclaration.declared_start_block": {
       "note": "Raw basic-DIR start-block declaration exposed for diagnostic inspection after bounded region checks. No caller-provided stamp is promoted to physical SourceIdentity, directory ownership, complete membership or namespace authority."
     },
+    "plumbing:orphan_config_field:core/build/build_detector.py:BuildSystem.detected_files": {
+      "note": "construction-time provenance: the detector stores which build files drove the detection (the same list its confidence score is computed from) on the result object for debugging and tests; nothing dereferences the field programmatically by design"
+    },
+    "plumbing:orphan_config_field:core/dataflow/string_type_evidence.py:ExactStringArgumentEvidence.guard_span": {
+      "note": "guard_span is an intentionally nullable source-premise location in the public ExactStringArgumentEvidence result; tier1_llm serializes the complete dataclass via asdict into Tier0Result.extras. Acceptance is established before serialization, not by reading this field. The cvefix bridge currently does not persist extras."
+    },
+    "plumbing:orphan_config_field:core/llm/tool_use/types.py:TurnStarted.input_token_estimate": {
+      "note": "kept: published observability API (2026-08-17 config-orphan pass). TurnStarted is a frozen event dataclass exported in core.llm.tool_use.__all__ for external subscribers; per-turn input-token telemetry is the point of the event. The in-repo hunt_dispatch subscriber deliberately skips TurnStarted; the value is computed regardless for the context-policy gate (loop.py)."
+    },
     "plumbing:orphan_config_field:core/sandbox/context.py:_ExecutionObservation.exec_pid_delivered": {
       "note": "Parent-reported execution-status-channel diagnostic exposed only through the private exact selected-result/attempt observation. The producer CompletedProcess flag participates in existing status handling; this returned field is deliberately descriptive and grants neither independently observed child context nor authenticated build authority."
+    },
+    "plumbing:orphan_config_field:packages/source_intel/analyze.py:PrivilegeBackWalkEvidence.all_paths_gated": {
+      "note": "Retained legacy record-constructor field accepted by render_source_context(privilege_back_walk=...). Current capability-call records lack reviewed denial-exit enforcement, so rendering intentionally does not consume this flag as gating evidence. test_retained_backwalk_flags_do_not_prove_gated_or_ungated_paths preserves record/API compatibility without restoring gating authority."
+    },
+    "plumbing:orphan_config_field:packages/source_intel/analyze.py:PrivilegeBackWalkEvidence.gating_examples": {
+      "note": "Retained legacy record-constructor field accepted by render_source_context(privilege_back_walk=...). Current capability-call records lack reviewed denial-exit enforcement, so rendering intentionally does not consume these examples as gating evidence. test_retained_backwalk_flags_do_not_prove_gated_or_ungated_paths preserves record/API compatibility without restoring gating authority."
+    },
+    "plumbing:orphan_cli_flag:packages/zkpox/cli.py:--after-release": {
+      "note": "SP1 native tier flags: argparse surface declared ahead of implementation (prove/verify/inspect/open)"
+    },
+    "plumbing:orphan_cli_flag:packages/zkpox/cli.py:--circuit-cache": {
+      "note": "SP1 native tier flags: argparse surface declared ahead of implementation (prove/verify/inspect/open)"
+    },
+    "plumbing:orphan_cli_flag:packages/zkpox/cli.py:--rekor-key": {
+      "note": "SP1 native tier flags: argparse surface declared ahead of implementation (prove/verify/inspect/open)"
+    },
+    "plumbing:orphan_cli_flag:packages/zkpox/cli.py:--rekor-origin": {
+      "note": "SP1 native tier flags: argparse surface declared ahead of implementation (prove/verify/inspect/open)"
+    },
+    "plumbing:orphan_cli_flag:packages/zkpox/cli.py:--require-anchor": {
+      "note": "SP1 native tier flags: argparse surface declared ahead of implementation (prove/verify/inspect/open)"
     }
   },
   "version": 1

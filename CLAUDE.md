@@ -61,6 +61,7 @@ When a `/command` fires:
 /scorecard - Inspect per-model reliability across decision classes; ask natural-language questions about which model is good at what
 /ask - Send a prompt to any configured LLM model (routing below)
 /create-skill - Save approaches (alpha)
+/zkpox - Zero-knowledge proof of exploit — `libexec/raptor-zkpox <subcommand> [args]`
 /describe - Describe a target (language mix, build system, cost estimate) — `libexec/raptor-describe --target <path>`
 /binary - Black-box binary investigation (rank, map, fuzz, graph, report) — `libexec/raptor-binary <command> [args]`
 /ghidra - Ghidra RE bridge (attach, import, diff, decompile, export) — `libexec/raptor-ghidra <subcommand> [args]`

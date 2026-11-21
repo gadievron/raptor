@@ -58,7 +58,7 @@ This page is split into:
 
 ### Gate details and local reproduction
 
-- **Python lint gate** — [`lint.yml`](../.github/workflows/lint.yml) on `pull_request` and `merge_group`. Rules `F401`, `F811`, `F821`, `F841`; Python 3.13 target (config in `pyproject.toml`).
+- **Python lint gate** — [`lint.yml`](../.github/workflows/lint.yml) on `pull_request` and `merge_group`. Rules `F401`, `F811`, `F821`, `F841`; Python 3.12 target (config in `pyproject.toml`).
 
   **Run locally:**
 

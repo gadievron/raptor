@@ -205,7 +205,7 @@ def test_parser_group_is_selected_only_for_its_families(platform, families):
     assert args
     selected = ' '.join(_cache_expression(line, platform, families) if '${{' in line else line.strip()
                         for line in args[1].splitlines()).split()
-    base = '--extra binary --extra r2pipe --extra frida --extra llm --extra grammars --extra web'.split()
+    base = '--extra binary --extra r2pipe --extra frida --extra llm --extra grammars --extra web --extra zkpox'.split()
     assert selected == base + (['--group', 'sandbox-wrappers'] if needed else [])
     assert 'requirements-file:' not in workflow
     pruning = re.search(r'(?m)^          prune-cache: (.+)$', uv_step)[1]
