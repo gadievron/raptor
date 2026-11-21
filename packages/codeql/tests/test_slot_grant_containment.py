@@ -198,21 +198,51 @@ class TestPromoteFailureFallback:
         # Workspace reaped; only the kept DB remains.
         assert not list(slot.glob(".staging-*"))
 
-    def test_failed_detach_keeps_the_in_use_db_alive(
+    def test_failed_detach_refuses_grant_covered_db(
             self, db_manager, tmp_path):
-        # If the detach rename ALSO fails, the caller is handed the
-        # nested staging DB — the finally cleanup must not delete the
-        # very DB being returned.
+        # If the detach rename ALSO fails, the DB stays inside the
+        # staging workspace — inside the build grant's reach, where an
+        # orphaned build child can rewrite it after any check (and can
+        # force this leg deterministically via chmod, which Landlock
+        # does not mediate). The run must refuse rather than hand the
+        # analyser a path the build can still write.
         canonical = db_manager.db_root / "abc" / "python-db"
         kept_prefix = db_manager.db_root / "abc" / ".kept-"
         import packages.codeql.database_manager as dbm
         with patch.object(
                 dbm.os, 'rename',
                 side_effect=self._flaky_rename([canonical, kept_prefix])):
-            result, _captured, _slot = _create(db_manager, tmp_path)
-        assert result.success
-        final = Path(result.database_path)
-        assert (final / "db-info.json").exists()
+            result, _captured, slot = _create(db_manager, tmp_path)
+        assert result.success is False
+        assert result.database_path is None
+        assert any("output refused" in e for e in result.errors)
+        # The refused workspace is reaped, nothing lingers in the slot.
+        assert not list(slot.glob(".staging-*"))
+        assert not list(slot.glob(".kept-*"))
+
+    def test_readonly_workspace_fallback_refused(
+            self, db_manager, tmp_path):
+        # The deterministic steering attack: Landlock does not mediate
+        # chmod, so an orphan chmods the workspace 0o500 — every
+        # read-side check passes, every rename out of it fails — and
+        # pre-fix the detach fallback served the nested staging DB
+        # (still inside the write grant) with success=True.
+        def factory(captured: dict):
+            inner = _fake_sandbox_run(captured)
+
+            def fake_run(cmd, **kwargs):
+                r = inner(cmd, **kwargs)
+                if "database" in cmd and "create" in cmd:
+                    os.chmod(Path(cmd[3]).parent, 0o500)
+                return r
+
+            return fake_run
+
+        result, _captured, slot = _create(
+            db_manager, tmp_path, run_factory=factory)
+        assert result.success is False
+        assert result.database_path is None
+        assert not list(slot.glob(".kept-*"))
 
     def test_detach_slot_dir_places_kept_outside_the_workspace(
             self, db_manager, tmp_path):
@@ -376,14 +406,16 @@ class TestHostileStagingSwap:
         assert not os.path.lexists(staging_db)
         assert (victim / "precious").exists()
 
-    def test_detach_rename_failure_still_refuses_symlink(
+    def test_detach_rename_failure_refuses_even_a_real_directory(
             self, db_manager, tmp_path):
+        # Rename failure means the DB never left the build grant's
+        # reach — a real-directory verdict taken there is a raceable
+        # snapshot, so the detach refuses outright.
         slot = tmp_path / "slot"
         work = slot / ".staging-cpp-1234-abcd"
-        work.mkdir(parents=True)
-        victim = self._victim(tmp_path)
         staging_db = work / "cpp-db"
-        staging_db.symlink_to(victim, target_is_directory=True)
+        staging_db.mkdir(parents=True)
+        (staging_db / "codeql-database.yml").write_text("x")
 
         import packages.codeql.database_manager as dbm
         with patch.object(dbm.os, 'rename',
@@ -392,8 +424,7 @@ class TestHostileStagingSwap:
                 staging_db, "cpp", slot_dir=slot)
 
         assert kept is None
-        assert not os.path.lexists(staging_db)
-        assert (victim / "precious").exists()
+        assert not list(slot.glob(".kept-*"))
 
 
 class TestValidateSymlinkPosture:

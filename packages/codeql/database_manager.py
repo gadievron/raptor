@@ -1223,15 +1223,20 @@ class DatabaseManager:
         lift the DB OUT of the per-call workspace: a `.kept-*` name
         nested inside a `.staging-*` workspace would still die with
         the workspace's own 1h GC (or the create_database finally).
-        Defaults to the staging path's parent for flat layouts. On
-        rename failure the original path is returned: the GC race
-        remains for that run, but the caller still has a usable DB.
+        Defaults to the staging path's parent for flat layouts.
 
-        Returns ``None`` when the detached entry is not a real
-        directory: the returned path becomes the analysed database —
-        a symlink here would ride into ``database analyze``'s WRITABLE
-        sandbox bind, so a swapped dirent (a build orphan holds write
-        on the workspace hierarchy) is removed, never served.
+        Returns ``None`` — refusal — in two cases. (1) The detached
+        entry is not a real directory: the returned path becomes the
+        analysed database, and a symlink here would ride into
+        ``database analyze``'s WRITABLE sandbox bind, so a swapped
+        dirent (a build orphan holds write on the workspace hierarchy)
+        is removed, never served. (2) The rename itself fails: the DB
+        then stays INSIDE the workspace — inside the orphan's write
+        grant — where any lstat verdict is a raceable snapshot (the
+        orphan can even force this leg deterministically: Landlock
+        does not mediate chmod, so a 0o500 workspace fails every
+        rename out of it while passing every read-side check). A path
+        the grant can still reach is never returned.
         """
         kept = (
             slot_dir if slot_dir is not None else staging_path.parent
@@ -1239,14 +1244,12 @@ class DatabaseManager:
         try:
             os.rename(staging_path, kept)
         except OSError as e:
-            logger.warning(
-                "Could not move fallback DB out of staging-GC scope (%s); "
-                "%s remains subject to the 1h staging TTL", e, staging_path,
+            logger.error(
+                "✗ could not move the fallback %s DB out of the build "
+                "grant's reach (%s) — refusing to serve a database the "
+                "build's own processes can still rewrite", language, e,
             )
-            if not self._is_real_directory(staging_path):
-                self._remove_planted_dirent(staging_path, language)
-                return None
-            return staging_path
+            return None
         if not self._is_real_directory(kept):
             self._remove_planted_dirent(kept, language)
             return None
@@ -2221,8 +2224,9 @@ class DatabaseManager:
                                     success = False
                                     errors.append(
                                         f"{language} staging database "
-                                        "was swapped for a "
-                                        "non-directory — output refused"
+                                        "could not be safely detached "
+                                        "from the build grant — "
+                                        "output refused"
                                     )
                     else:
                         # Genuine I/O error (permissions, disk full); fall back
@@ -2240,9 +2244,9 @@ class DatabaseManager:
                         if final_path is None:
                             success = False
                             errors.append(
-                                f"{language} staging database was "
-                                "swapped for a non-directory — output "
-                                "refused"
+                                f"{language} staging database could "
+                                "not be safely detached from the "
+                                "build grant — output refused"
                             )
 
             # Count files in database (use whatever path won out above).
@@ -2382,10 +2386,12 @@ class DatabaseManager:
             # Workspace cleanup on every exit (success leaves the
             # emptied-of-DB workspace with the sandbox home; timeout /
             # unhandled exception paths bypass the branch cleanups
-            # above entirely). Skip only when the DB we are returning
-            # still LIVES inside the workspace (detach-rename failed
-            # and final_path is the nested staging DB) — otherwise
-            # we'd delete the very DB we're handing the caller. Use
+            # above entirely). _detach_staging_from_gc never returns a
+            # path inside the workspace any more (a DB the build grant
+            # can still reach is refused, final_path=None), so the
+            # containment guard below is defensive only — it keeps a
+            # future fallback that DOES hand out a nested path from
+            # having its DB deleted underneath the caller. Use
             # locals().get to handle the case where we never reached
             # the assignment (early exception before final_path set).
             _final = locals().get('final_path')
