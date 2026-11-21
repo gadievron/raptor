@@ -1958,7 +1958,10 @@ class TestSizeArgumentBinding:
 
     def test_unrelated_guard_cannot_prove_copy_safe(self):
         # Old behaviour: retries ≤ 8 ≤ 256 → "guard sufficient" for a
-        # memcpy whose length is len, never bounded anywhere.
+        # memcpy whose length is len, never bounded anywhere.  The
+        # source-bound oracle goes further than the binding-gap
+        # demotion: len is free, so the guard is PROVABLY insufficient.
+        pytest.importorskip("z3")
         g = _guard(
             "retries >= 0 && retries < MAXR",
             resolvable=True, concrete_values={"MAXR": "8"},
@@ -1966,13 +1969,17 @@ class TestSizeArgumentBinding:
         sg = _sg("memcpy", [g], sink_args=["dst", "src", "len"])
         results = check_guard_sufficiency(sg, buffer_size=256)
         assert len(results) >= 1
-        assert results[0].feasible is None
-        assert "len" in results[0].reasoning
+        r = results[0]
+        assert r.feasible is True
+        assert r.guard_sufficient is False
+        assert "len" in r.reasoning
 
-    def test_unrelated_guard_cannot_flag_copy_insufficient(self):
-        # With a KNOWN binding, a loose bound on a non-size variable
-        # must not mint an insufficiency finding either — retries can
-        # be 4095 > 256, but retries is not what memcpy copies.
+    def test_insufficiency_grounded_in_size_variable_not_guard_var(self):
+        # With a KNOWN binding, the insufficiency claim must be about
+        # what memcpy actually copies — retries can be 4095 > 256, but
+        # retries is not the copy length.  The verdict is True because
+        # len is unconstrained, and the claim names len, not retries.
+        pytest.importorskip("z3")
         g = _guard(
             "retries >= 0 && retries < MAXR",
             resolvable=True, concrete_values={"MAXR": "4096"},
@@ -1980,7 +1987,15 @@ class TestSizeArgumentBinding:
         sg = _sg("memcpy", [g], sink_args=["dst", "src", "len"])
         results = check_guard_sufficiency(sg, buffer_size=256)
         assert len(results) >= 1
-        assert results[0].feasible is None
+        r = results[0]
+        assert r.feasible is True
+        assert "copy length (len)" in r.reasoning
+        assert "retries" not in r.reasoning
+        # the witness overflows via len while retries still passes
+        # the guard
+        assert r.witness is not None
+        assert r.witness["len"] % (1 << 64) > 256
+        assert 0 <= r.witness["retries"] < 4096
 
     def test_bound_size_variable_keeps_sufficiency_proof(self):
         g = _guard(
@@ -2004,9 +2019,12 @@ class TestSizeArgumentBinding:
         assert results[0].feasible is True
         assert results[0].guard_sufficient is False
 
-    def test_partially_bound_size_expression_is_inconclusive(self):
+    def test_partially_bound_size_expression_overflow_found(self):
         # len is bounded but the copy length is len + hdr_len; a proof
-        # over len alone says nothing about the sum.
+        # over len alone says nothing about the sum.  The source-bound
+        # oracle decides the SUM: hdr_len is free, so the guard is
+        # provably insufficient — never "sufficient".
+        pytest.importorskip("z3")
         g = _guard(
             "len >= 0 && len < CAP",
             resolvable=True, concrete_values={"CAP": "128"},
@@ -2014,8 +2032,14 @@ class TestSizeArgumentBinding:
         sg = _sg("memcpy", [g], sink_args=["dst", "src", "len + hdr_len"])
         results = check_guard_sufficiency(sg, buffer_size=256)
         assert len(results) >= 1
-        assert results[0].feasible is None
-        assert "hdr_len" in results[0].reasoning
+        r = results[0]
+        assert r.feasible is True
+        assert r.oracle == "copy-bound/source-bound"
+        assert r.witness is not None
+        total = sum(
+            r.witness[name] % (1 << 64) for name in ("len", "hdr_len")
+        )
+        assert total % (1 << 64) > 256
 
     def test_literal_size_argument_is_inconclusive(self):
         g = _guard(
@@ -2312,3 +2336,195 @@ class TestAllocWrapSourceBound:
         sg = _sg("malloc", [g], sink_args=["n * 16"])
         d = check_guard_sufficiency(sg)[0].to_dict()
         assert d.get("oracle") == "alloc-wrap/source-bound"
+
+
+class TestCopyBoundSourceBound:
+    """Source-bound copy-length oracle: the sink's size expression is
+    decided as the arithmetic it computes, not variable by variable."""
+
+    def test_sum_overflow_not_missed(self):
+        # RED-CHECK SHAPE: len and hdr each fit the 128-byte buffer on
+        # their own, so the per-variable model proved the guard
+        # sufficient — but the sink copies len + hdr, which reaches
+        # 200.  The source-bound encoding finds the overflow.
+        pytest.importorskip("z3")
+        g = _guard(
+            "len >= 0 && len <= CAP && hdr >= 0 && hdr <= CAP",
+            resolvable=True, concrete_values={"CAP": "100"},
+        )
+        sg = _sg("memcpy", [g], sink_args=["dst", "src", "len + hdr"])
+        results = check_guard_sufficiency(sg, buffer_size=128)
+        assert len(results) == 1
+        r = results[0]
+        assert r.feasible is True
+        assert r.guard_sufficient is False
+        assert r.oracle == "copy-bound/source-bound"
+        assert r.witness is not None
+        # the witness sum must actually exceed the buffer
+        total = sum(
+            r.witness[name] % (1 << 64) for name in ("len", "hdr")
+        )
+        assert total > 128
+
+    def test_sum_within_capacity_proves_sufficient(self):
+        pytest.importorskip("z3")
+        g = _guard(
+            "len >= 0 && len <= CAP && hdr >= 0 && hdr <= CAP",
+            resolvable=True, concrete_values={"CAP": "100"},
+        )
+        sg = _sg("memcpy", [g], sink_args=["dst", "src", "len + hdr"])
+        results = check_guard_sufficiency(sg, buffer_size=256)
+        r = results[0]
+        assert r.feasible is False
+        assert r.guard_sufficient is True
+        assert r.oracle == "copy-bound/source-bound"
+
+    def test_wrapped_product_is_wrap_truthful(self):
+        # len * hdr can wrap modulo 2**64; the sink receives the
+        # WRAPPED value, and the oracle reasons about that value — a
+        # wrapped-small copy length is not reported as huge.
+        pytest.importorskip("z3")
+        g = _guard(
+            "len >= 0 && len <= B && hdr >= 0 && hdr <= B",
+            resolvable=True, concrete_values={"B": str(1 << 40)},
+        )
+        sg = _sg("memcpy", [g], sink_args=["dst", "src", "len * hdr"])
+        results = check_guard_sufficiency(sg, buffer_size=128)
+        r = results[0]
+        assert r.feasible is True
+        assert r.oracle == "copy-bound/source-bound"
+
+    def test_strncat_never_gets_a_sufficiency_proof(self):
+        # RED-CHECK SHAPE: n in [0, 100] against a 128-byte buffer
+        # used to prove "guard sufficient" — but strncat writes
+        # strlen(dst) + n + 1 bytes and the destination's existing
+        # content is outside the model.
+        pytest.importorskip("z3")
+        g = _guard(
+            "n >= 0 && n <= CAP",
+            resolvable=True, concrete_values={"CAP": "100"},
+        )
+        sg = _sg("strncat", [g], sink_args=["dst", "src", "n"])
+        results = check_guard_sufficiency(sg, buffer_size=128)
+        r = results[0]
+        assert r.feasible is None
+        assert r.guard_sufficient is None
+        assert "destination content" in r.reasoning
+
+    def test_strncat_terminator_counts_against_capacity(self):
+        # n can be exactly the buffer size; strncat's terminator makes
+        # the write n + 1 — overflow by one byte.
+        pytest.importorskip("z3")
+        g = _guard(
+            "n >= 0 && n <= CAP",
+            resolvable=True, concrete_values={"CAP": "128"},
+        )
+        sg = _sg("strncat", [g], sink_args=["dst", "src", "n"])
+        results = check_guard_sufficiency(sg, buffer_size=128)
+        r = results[0]
+        assert r.feasible is True
+        assert r.oracle == "copy-bound/source-bound"
+        assert "terminator" in r.reasoning
+
+    def test_bare_variable_expression_keeps_proof_and_gains_tag(self):
+        pytest.importorskip("z3")
+        g = _guard(
+            "len >= 0 && len < CAP",
+            resolvable=True, concrete_values={"CAP": "128"},
+        )
+        sg = _sg("memcpy", [g], sink_args=["dst", "src", "len"])
+        results = check_guard_sufficiency(sg, buffer_size=256)
+        r = results[0]
+        assert r.feasible is False
+        assert r.oracle == "copy-bound/source-bound"
+
+    def test_unparsed_expression_demotes_per_variable_proof(self):
+        # RED-CHECK SHAPE: a cast the grammar declines; the
+        # per-variable model used to prove sufficiency from bounds on
+        # len and hdr while the actual expression was never modelled.
+        pytest.importorskip("z3")
+        g = _guard(
+            "len >= 0 && len <= CAP && hdr >= 0 && hdr <= CAP",
+            resolvable=True, concrete_values={"CAP": "100"},
+        )
+        sg = _sg(
+            "memcpy", [g], sink_args=["dst", "src", "(size_t)len + hdr"],
+        )
+        results = check_guard_sufficiency(sg, buffer_size=128)
+        r = results[0]
+        assert r.feasible is None
+        assert r.guard_sufficient is None
+        assert "outside the supported arithmetic model" in r.reasoning
+
+    def test_insufficiency_hint_survives_unparsed_expression(self):
+        # The True direction stays available on unparsed expressions:
+        # a bound of 4096 on a size-argument variable against a
+        # 128-byte buffer is still an insufficiency signal.
+        pytest.importorskip("z3")
+        g = _guard(
+            "len >= 0 && len <= CAP",
+            resolvable=True, concrete_values={"CAP": "4096"},
+        )
+        sg = _sg(
+            "memcpy", [g], sink_args=["dst", "src", "(size_t)len + hdr"],
+        )
+        results = check_guard_sufficiency(sg, buffer_size=128)
+        assert results[0].feasible is True
+
+    def test_sizeof_scaled_copy_decided_with_stated_assumption(self):
+        pytest.importorskip("z3")
+        g = _guard(
+            "count >= 0 && count <= CAP",
+            resolvable=True, concrete_values={"CAP": "4"},
+        )
+        sg = _sg(
+            "memcpy", [g],
+            sink_args=["dst", "src", "count * sizeof(struct item)"],
+        )
+        results = check_guard_sufficiency(sg, buffer_size=128)
+        r = results[0]
+        # sizeof may be anything in [1, 2**32): 4 * sizeof can exceed
+        # 128, so the guard is insufficient under the stated assumption.
+        assert r.feasible is True
+        assert r.oracle == "copy-bound/source-bound"
+
+    def test_fallback_strncat_never_proves(self):
+        from core.audit.condition_smt import (
+            BoundsConstraint,
+            _arithmetic_check,
+        )
+        g = _guard("n <= CAP", resolvable=True, concrete_values={"CAP": "100"})
+        out = _arithmetic_check(
+            [
+                BoundsConstraint("n", ">=", 0, "n >= 0"),
+                BoundsConstraint("n", "<=", 100, "n <= 100"),
+            ],
+            g, 128, "strncat", ["n"], ["n"],
+        )
+        assert out.feasible is None
+        assert "destination content" in out.reasoning
+
+    def test_fallback_proof_requires_bare_variable_expression(self):
+        from core.audit.condition_smt import (
+            BoundsConstraint,
+            _arithmetic_check,
+        )
+        g = _guard(
+            "len <= CAP && hdr <= CAP",
+            resolvable=True, concrete_values={"CAP": "100"},
+        )
+        constraints = [
+            BoundsConstraint("len", ">=", 0, "len >= 0"),
+            BoundsConstraint("len", "<=", 100, "len <= 100"),
+            BoundsConstraint("hdr", ">=", 0, "hdr >= 0"),
+            BoundsConstraint("hdr", "<=", 100, "hdr <= 100"),
+        ]
+        summed = _arithmetic_check(
+            constraints, g, 128, "memcpy", ["len", "hdr"], ["len + hdr"],
+        )
+        assert summed.feasible is None
+        assert "outside the supported arithmetic model" in summed.reasoning
+        bare = _arithmetic_check(
+            constraints[:2], g, 128, "memcpy", ["len"], ["len"],
+        )
+        assert bare.feasible is False

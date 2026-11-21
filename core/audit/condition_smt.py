@@ -1018,7 +1018,7 @@ def _check_constraints_vs_safety(
 
     # Fallback: simple arithmetic reasoning
     return _arithmetic_check(constraints, guard, buffer_size, sink_api,
-                             size_idents)
+                             size_idents, size_exprs)
 
 
 def _try_z3_check(
@@ -1472,7 +1472,9 @@ def _z3_dispatch(
     api_base = sink_api.rsplit(".", maxsplit=1)[-1] if "." in sink_api else sink_api
 
     if api_base in _BUFFER_COPY_SINKS and buffer_size is not None:
-        return _z3_overflow_check(constraints, buffer_size, size_idents)
+        return _z3_overflow_check(
+            constraints, buffer_size, size_idents, size_exprs, api_base,
+        )
     if api_base in alloc_sinks:
         return _z3_alloc_overflow_check(constraints, size_idents, size_exprs)
 
@@ -1537,7 +1539,9 @@ def _z3_overflow_check(
     constraints: list[BoundsConstraint],
     buffer_size: int,
     size_idents: list[str] | None = None,
-) -> tuple[bool | None, str, dict[str, int] | None]:
+    size_exprs: list[str] | None = None,
+    sink_api: str = "",
+) -> tuple:
     """Z3: Can length still overflow given the guard constraints?
 
     Bitvector model with explicit signedness.  Guard atoms use SIGNED
@@ -1557,11 +1561,34 @@ def _z3_overflow_check(
     reaches the copy.  ``None`` = binding unknown: insufficiency
     (True) may still be flagged, sufficiency (False) demotes to
     inconclusive.
+
+    ``size_exprs`` carries the raw size-argument expression text.  When
+    it parses into the supported arithmetic grammar, the source-bound
+    oracle (:func:`_copy_bound_source_bound`) answers instead — it
+    encodes the arithmetic the sink actually computes, so
+    ``memcpy(dst, src, len + hdr)`` is decided on the SUM, not on each
+    variable alone.  When the expression is PRESENT but outside the
+    grammar, the per-variable proof demotes to inconclusive.
+    ``sink_api`` lets the model refuse sufficiency proofs for
+    ``strncat``, whose write size also depends on the existing
+    destination content this model does not track.
     """
     if not _signed_guard_bounds_fit(constraints):
         return (None, "guard bounds do not fit the signed 64-bit model — inconclusive", None)
     if type(buffer_size) is not int or not 0 <= buffer_size < (1 << _OVERFLOW_BV_WIDTH):
         return (None, "buffer size does not fit the unsigned 64-bit model — inconclusive", None)
+
+    api_base = (
+        sink_api.rsplit(".", maxsplit=1)[-1] if "." in sink_api
+        else sink_api
+    )
+
+    if size_exprs is not None and len(size_exprs) == 1:
+        node = _parse_size_expr(size_exprs[0])
+        if node is not None:
+            return _copy_bound_source_bound(
+                constraints, buffer_size, node, size_exprs[0], api_base,
+            )
 
     import z3
 
@@ -1636,6 +1663,21 @@ def _z3_overflow_check(
     gap = _size_binding_gap(size_idents, set(vars_map))
     if gap is not None:
         return (None, gap, None)
+    if api_base == "strncat":
+        return (None, _STRNCAT_NO_PROOF_REASON, None)
+    if size_exprs is not None:
+        # The size argument's actual arithmetic is known but outside
+        # the supported grammar — per-variable bounds are not a proof
+        # about an expression the model never saw.
+        return (
+            None,
+            (
+                "size expression outside the supported arithmetic "
+                "model — per-variable bounds do not prove the copy "
+                "length safe; inconclusive"
+            ),
+            None,
+        )
     return (
         False,
         (
@@ -1692,6 +1734,156 @@ def _guards_hold_signed(
         if not comparisons[c.operator](signed, c.bound_value):
             return False
     return True
+
+
+#: strncat's write size is strlen(dst) + n + 1 — the destination's
+#: existing content is outside every length-vs-capacity model here, so
+#: a bound on n alone never proves the write fits.
+_STRNCAT_NO_PROOF_REASON = (
+    "strncat appends to existing destination content the model does "
+    "not track — a bound on the length argument is no sufficiency "
+    "proof; inconclusive"
+)
+
+
+def _copy_bound_source_bound(
+    constraints: list[BoundsConstraint],
+    buffer_size: int,
+    node: tuple,
+    expr_text: str,
+    api_base: str,
+) -> tuple:
+    """Source-bound copy-length oracle over the parsed size expression.
+
+    Encodes the EXACT arithmetic of the sink's length argument in a
+    wide bitvector domain, truncates to the 64-bit value the sink
+    receives (wrap-truthful: arithmetic that wraps modulo 2**64 hands
+    the sink the wrapped, smaller value), and asks whether that value
+    can exceed the destination capacity.  For ``strncat`` the write is
+    modelled as length + 1 (the terminator) in a 65-bit domain, and a
+    no-overflow outcome never becomes a proof — the existing
+    destination content is outside the model.
+
+    Verdicts: SAT mints insufficiency (True) only after the witness
+    replays independently in exact Python arithmetic; UNSAT mints the
+    fits-the-buffer proof (False) only when every expression variable
+    is guard-bounded and the sink is not strncat.
+    """
+    import z3
+
+    from core.smt_solver.session import check_solver, new_solver
+
+    atoms = _size_expr_atoms(node)
+    width = 64 * atoms + atoms
+    solver = new_solver()
+
+    var_bvs: dict[str, Any] = {}
+    for c in constraints:
+        if c.variable not in var_bvs:
+            var_bvs[c.variable] = z3.BitVec(c.variable, 64)
+    _add_signed_guard_atoms(solver, constraints, var_bvs, z3)
+
+    expr_vars = sorted(_size_expr_vars(node))
+    for name in expr_vars:
+        if name not in var_bvs:
+            var_bvs[name] = z3.BitVec(name, 64)
+
+    sizeof_texts = _size_expr_sizeofs(node)
+    sizeof_bvs: dict[str, Any] = {}
+    for text in sizeof_texts:
+        sv = z3.BitVec(text, 64)
+        sizeof_bvs[text] = sv
+        solver.add(z3.UGE(sv, z3.BitVecVal(1, 64)))
+        solver.add(z3.ULT(sv, z3.BitVecVal(_SIZEOF_ATOM_MAX, 64)))
+    sizeof_note = (
+        " (sizeof terms assumed in [1, 2**32))" if sizeof_texts else ""
+    )
+
+    wide = _size_expr_encode(node, width, var_bvs, sizeof_bvs, z3)
+    arg64 = z3.Extract(63, 0, wide)
+    if api_base == "strncat":
+        # length + 1 for the terminator, exact in a 65-bit domain.
+        effective = z3.ZeroExt(1, arg64) + z3.BitVecVal(1, 65)
+        solver.add(z3.UGT(effective, z3.BitVecVal(buffer_size, 65)))
+    else:
+        solver.add(z3.UGT(arg64, z3.BitVecVal(buffer_size, 64)))
+
+    result = check_solver(solver)
+    if result not in (z3.sat, z3.unsat):
+        return (
+            None,
+            "solver returned unknown — guard sufficiency inconclusive",
+            None,
+        )
+    if result == z3.sat:
+        model = solver.model()
+        try:
+            var_values = {
+                name: model.eval(bv, model_completion=True).as_long()
+                for name, bv in var_bvs.items()
+            }
+            sizeof_values = {
+                text: model.eval(bv, model_completion=True).as_long()
+                for text, bv in sizeof_bvs.items()
+            }
+        except AttributeError:
+            return (
+                None,
+                "overflow witness could not be extracted — no claim",
+                None,
+            )
+        value = _size_expr_value(node, var_values, sizeof_values)
+        arg = value % (1 << 64)
+        effective_len = arg + 1 if api_base == "strncat" else arg
+        replay_ok = (
+            effective_len > buffer_size
+            and _guards_hold_signed(constraints, var_values)
+            and all(1 <= v < _SIZEOF_ATOM_MAX for v in sizeof_values.values())
+        )
+        if not replay_ok:
+            return (
+                None,
+                "overflow witness failed independent replay — no claim",
+                None,
+            )
+        witness: dict[str, int] = {
+            name: _bv_signed(v) for name, v in var_values.items()
+        }
+        witness.update(sizeof_values)
+        terminator_note = (
+            " including the appended terminator"
+            if api_base == "strncat" else ""
+        )
+        wrap_note = (
+            " — the source arithmetic wraps modulo 2**64"
+            if value != arg else ""
+        )
+        return (
+            True,
+            (
+                f"overflow possible: copy length ({expr_text}) can be "
+                f"{effective_len}{terminator_note} > buffer size "
+                f"{buffer_size}{wrap_note}{sizeof_note}"
+            ),
+            witness,
+            "copy-bound/source-bound",
+        )
+
+    gap = _size_binding_gap(expr_vars, {c.variable for c in constraints})
+    if gap is not None:
+        return (None, gap, None)
+    if api_base == "strncat":
+        return (None, _STRNCAT_NO_PROOF_REASON, None)
+    return (
+        False,
+        (
+            f"guard sufficient: copy length ({expr_text}) stays ≤ "
+            f"{buffer_size} under the guard bounds (unsigned "
+            f"interpretation, signed guard atoms){sizeof_note}"
+        ),
+        None,
+        "copy-bound/source-bound",
+    )
 
 
 def _alloc_wrap_source_bound(
@@ -2316,6 +2508,7 @@ def _arithmetic_check(
     buffer_size: int | None,
     sink_api: str,
     size_idents: list[str] | None = None,
+    size_exprs: list[str] | None = None,
 ) -> SmtSufficiencyResult:
     """Exact fallback for the native copy check's signed-64 guard model.
 
@@ -2329,6 +2522,13 @@ def _arithmetic_check(
     size-argument variables to be known, non-empty, and all bounded;
     insufficiency may still be flagged with an unknown binding, but
     only on variables that feed the size argument when it is known.
+
+    ``size_exprs`` tightens the proof direction further: when the size
+    expression is known, the per-variable "sufficient" verdict is only
+    honest if that expression IS a bare variable — any arithmetic
+    (sums, products, casts) is outside this per-variable model and
+    demotes the proof to inconclusive.  ``strncat`` never gets a proof:
+    its write also depends on the existing destination content.
     """
     def result(feasible, reasoning, witness=None):
         return SmtSufficiencyResult(
@@ -2371,6 +2571,17 @@ def _arithmetic_check(
     gap = _size_binding_gap(size_idents, set(variables))
     if gap is not None:
         return result(None, gap)
+    if sink_api.rsplit(".", 1)[-1] == "strncat":
+        return result(None, _STRNCAT_NO_PROOF_REASON)
+    if size_exprs is not None and (
+        len(size_exprs) != 1
+        or (_parse_size_expr(size_exprs[0]) or ("",))[0] != "var"
+    ):
+        return result(None, (
+            "size expression outside the supported arithmetic model — "
+            "per-variable bounds do not prove the copy length safe; "
+            "inconclusive"
+        ))
     return result(False, f"all size-argument copy-length values fit {buffer_size} in the signed-64 guard model")
 
 
