@@ -195,4 +195,9 @@ _SANDBOX_KWARGS = frozenset({
     # seam warning). Sandbox-context-level: the check runs once at
     # sandbox() setup.
     "output_run_root_ok",
+    # events_output — parent-side persistence dir for the egress audit
+    # stream, decoupled from output= for anonymous-workspace callers.
+    # Sandbox-context-level: both persist sites (per-spawn and the
+    # __exit__ block drain) read it from context state.
+    "events_output",
 })

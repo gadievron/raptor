@@ -93,7 +93,9 @@ Egress proxy (use_egress_proxy=True + proxy_hosts=[...]):
   returned in `result.sandbox_info["proxy_events"]`; a sandbox()
   context also accumulates every run()'s slice into `run.events`
   for a unified audit view. Events are persisted to
-  `{output}/proxy-events.jsonl`. The JSONL writer uses O_NOFOLLOW +
+  `{events_output or output}/proxy-events.jsonl` (`events_output=`
+  is the parent-side override for callers whose `output=` is a
+  throwaway anonymous workspace). The JSONL writer uses O_NOFOLLOW +
   O_NONBLOCK + fstat(S_ISREG) to defeat child-planted symlinks
   (would redirect the parent's append outside `output`) and FIFOs
   (would hang the parent forever).

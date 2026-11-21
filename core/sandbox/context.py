@@ -1875,6 +1875,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             require_proxy_netns: bool = False,
             rootfs: str | None = None,
             output_run_root_ok: bool = False,
+            events_output: str | None = None,
             job_budget: dict | None = None):
     """Context manager for sandboxed subprocess execution.
 
@@ -2044,6 +2045,20 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                  audit signal without a writable-path restriction.
                  When unset, audit falls back to output; audit mode
                  requires one of the two.
+        events_output: Parent-side persistence directory for the
+                 egress audit stream (`proxy-events.jsonl` plus its
+                 MAC'd `proxy-events.count.json` sidecar). Defaults
+                 to `output`. Purely a parent write destination —
+                 never bound into the sandbox, never readable or
+                 writable by the child. Exists for anonymous-workspace
+                 callers whose `output=` is a throwaway scratch dir
+                 destroyed when the call returns: the audit stream
+                 must outlive the workspace, and the per-event MACs
+                 bind the run identity to the basename of the dir the
+                 stream is persisted into (verifiers recompute the
+                 binding from the directory they actually read), so
+                 the stream has to be written straight into its
+                 durable home rather than copied out afterwards.
         observe: Observe mode — implies audit and audit_verbose,
                  writes to a separate observe JSONL, extends the trace
                  set with the stat family, and stamps a per-run
@@ -9059,13 +9074,16 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             )
 
             # Per-spawn persistence: write this subprocess's events
-            # to ``<output>/proxy-events.jsonl`` immediately. The
-            # block-level write at ``sandbox()`` ``__exit__`` covers
-            # events from non-subprocess code inside the with-block
-            # (e.g. ``agent.py``'s in-process ``analyse()``); both
-            # writers share the same safe-open helper + the target-
-            # pollution skip so the file format stays unified.
-            _persist_proxy_events(events, output=output, target=target)
+            # to ``<events_output or output>/proxy-events.jsonl``
+            # immediately. The block-level write at ``sandbox()``
+            # ``__exit__`` covers events from non-subprocess code
+            # inside the with-block (e.g. ``agent.py``'s in-process
+            # ``analyse()``); both writers share the same safe-open
+            # helper + the target-pollution skip so the file format
+            # stays unified.
+            _persist_proxy_events(
+                events, output=events_output or output, target=target,
+            )
 
         # Check for sandbox enforcement. Each category is only reported when
         # its layer is actually engaged for this call — prevents false
@@ -9340,7 +9358,9 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                     ]
                     if _block_only:
                         _persist_proxy_events(
-                            _block_only, output=output, target=target,
+                            _block_only,
+                            output=events_output or output,
+                            target=target,
                         )
 
         def _retire_context_audit() -> None:
@@ -9560,6 +9580,7 @@ def run(cmd: list[str], block_network=_UNSET, target: str | None = None,
         omit_etc_reads: bool = False,
         rootfs: str | None = None,
         output_run_root_ok: bool = False,
+        events_output: str | None = None,
         job_budget: dict | None = None,
         **kwargs) -> subprocess.CompletedProcess:
     """Run a single command in a sandbox. Convenience wrapper.
@@ -9618,6 +9639,7 @@ def run(cmd: list[str], block_network=_UNSET, target: str | None = None,
                 omit_etc_reads=omit_etc_reads,
                 rootfs=rootfs,
                 output_run_root_ok=output_run_root_ok,
+                events_output=events_output,
                 job_budget=job_budget))
         except SandboxSetupError as _construction_refusal:
             # Refusal PRIORITY at the one-shot boundary. Context
@@ -10728,6 +10750,12 @@ def run_untrusted(cmd: list[str], *, target: str | None = None, output: str | No
         # sandbox() seam check, not an isolation control — the
         # containment posture is identical either way.
         "output_run_root_ok",
+        # Durable home for the egress audit stream. Allowed through
+        # because it is a parent-side write destination only — never
+        # granted to the child — and anonymous-workspace callers
+        # (whose output= is a throwaway scratch dir) need it so
+        # proxy-events.jsonl outlives the workspace.
+        "events_output",
     })
     rejected = set(kwargs.keys()) - _UNTRUSTED_ALLOWED_KWARGS
     if rejected:
@@ -10949,6 +10977,12 @@ def run_untrusted_networked(
         # write the run's own artifacts by contract, so the seam
         # warning's ack must be expressible on this helper.
         "output_run_root_ok",
+        # Durable home for the egress audit stream (see the
+        # run_untrusted allowlist entry) — on this helper it matters
+        # most: every networked run produces proxy events, and an
+        # anonymous-workspace output= would otherwise take the whole
+        # egress audit record down with the scratch dir.
+        "events_output",
     })
     rejected = set(kwargs.keys()) - _NETWORKED_ALLOWED_KWARGS
     if rejected:

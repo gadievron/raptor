@@ -270,6 +270,49 @@ class TestSandboxContextBlockEventCapture(unittest.TestCase):
                 "api.osv.dev", "registry-1.docker.io",
             ])
 
+    def test_events_output_routes_stream_away_from_workspace(self):
+        """``events_output=`` must redirect the persisted stream: an
+        anonymous-workspace caller passes a throwaway scratch dir as
+        ``output=`` (destroyed when the call returns) and the durable
+        run dir as ``events_output=`` — the egress audit record has to
+        land in the run dir, and nothing may be written into the
+        workspace by the persist step."""
+        recorded = [
+            {"t": 21.0, "host": "api.osv.dev", "port": 443,
+             "result": "allowed"},
+        ]
+        fake = self._stub_proxy(recorded)
+        with TemporaryDirectory() as td_target, \
+                TemporaryDirectory() as td_workspace, \
+                TemporaryDirectory() as td_run:
+            with patch.object(proxy_mod, "get_proxy",
+                              return_value=fake):
+                with ctx.sandbox(
+                    target=td_target, output=td_workspace,
+                    events_output=td_run,
+                    use_egress_proxy=True,
+                    proxy_hosts=["api.osv.dev"],
+                    audit=True, audit_run_dir=td_run,
+                    caller_label="events-output-test",
+                ):
+                    pass
+
+            run_log = Path(td_run) / proxy_mod.PROXY_EVENTS_FILENAME
+            ws_log = Path(td_workspace) / proxy_mod.PROXY_EVENTS_FILENAME
+            self.assertTrue(
+                run_log.exists(),
+                f"proxy-events.jsonl missing in events_output dir; "
+                f"calls={fake.calls!r}",
+            )
+            self.assertFalse(
+                ws_log.exists(),
+                "proxy-events.jsonl leaked into the workspace despite "
+                "events_output=",
+            )
+            lines = run_log.read_text().splitlines()
+            self.assertEqual(len(lines), 1)
+            self.assertEqual(json.loads(lines[0])["host"], "api.osv.dev")
+
     def test_block_token_not_registered_without_audit(self):
         """Without ``audit=True`` the block token must NOT be
         registered — keeping the persistence opt-in via the audit
