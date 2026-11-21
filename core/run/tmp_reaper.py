@@ -354,14 +354,16 @@ _ANCHORED_DIR_PREFIXES = (
 # Neutral child-visible scratch names, de-branded so the target
 # cannot fingerprint the framework from its TMPDIR: the Landlock-only
 # private scratch (.scr-) and the persona home (.fp-), both minted by
-# core/sandbox/context.py, rmtree'd at context teardown, and
-# keepalive-registered while their context lives. Too short to claim
-# on prefix alone — an operator's ".scr-notes" must survive — so
-# these match only when the remainder is exactly a tempfile random
-# suffix.
+# core/sandbox/context.py, and the anonymous sandbox workspace (.ws-)
+# minted by core/run/workdir.py — each rmtree'd at context/manager
+# teardown and keepalive-registered while its owner lives. Too short
+# to claim on prefix alone — an operator's ".scr-notes" must survive
+# — so these match only when the remainder is exactly a tempfile
+# random suffix.
 _MKDTEMP_ANCHORED_DIR_PREFIXES = (
     ".scr-",
     ".fp-",
+    ".ws-",
 )
 
 # tempfile's random names draw eight characters from
@@ -792,6 +794,25 @@ _SYSTEM_TMP_ROOTS: tuple[str, ...] = ("/tmp",)
 _LANE_DIR_PREFIX = ".raptor-lane-"
 
 
+def _debranded_base() -> str:
+    """gettempdir() with the ``raptor-<euid>`` family stripped out.
+
+    core/run/workdir.py mints anonymous ``.ws-`` workspaces OUTSIDE the
+    branded launcher family (the whole point is a marker-free path for
+    a sandboxed child's writable bind), so under a custom
+    ``RAPTOR_WORK_DIR`` base a SIGKILLed owner strands them somewhere
+    neither gettempdir() nor _SYSTEM_TMP_ROOTS covers. Computed inline
+    — workdir.py imports this module, so the reverse import would
+    cycle. Empty string when gettempdir() is not family-branded (the
+    plain dir is already a root via _add's realpath dedup). Resolves
+    first, matching workdir's own base computation."""
+    parts = Path(tempfile.gettempdir()).resolve().parts
+    fam = f"raptor-{os.geteuid()}"
+    if fam in parts:
+        return str(Path(*parts[: parts.index(fam)]))
+    return ""
+
+
 def _lane_fallback_bases() -> tuple[str, ...]:
     """``make_lane_dir()``'s fixed short-path fallback bases that are
     not already full sweep roots (see core/sandbox/proxy.py: the lane
@@ -821,6 +842,7 @@ def _sweep_roots() -> list[tuple[Path, bool]]:
         roots.append((Path(base), lane_only))
 
     _add(tempfile.gettempdir(), False)
+    _add(_debranded_base(), False)
     for base in _SYSTEM_TMP_ROOTS:
         _add(base, False)
     for base in _lane_fallback_bases():

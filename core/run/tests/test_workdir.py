@@ -540,3 +540,66 @@ def test_allocation_swapped_during_registration_is_not_cached(_fresh, monkeypatc
     assert workdir.exec_workdir() is None
     assert (paths[0] / 'keep').read_text() == 'replacement'
     assert moved.is_dir()
+
+
+class TestAnonymousWorkspace:
+    """The inverse allocator: a sandboxed child's write grant must carry
+    no framework or session marker anywhere in its path — the mountinfo
+    root field of the writable bind re-leaks the full source path."""
+
+    def test_branded_tmpdir_allocates_outside_the_family(
+        self, _fresh, monkeypatch,
+    ):
+        session = _family(_fresh) / 'session-1-2'
+        session.mkdir(parents=True)
+        monkeypatch.setattr(_tempfile_owner.tempfile, 'tempdir', str(session))
+        with workdir.anonymous_workspace() as ws:
+            # Minted DIRECTLY at the de-branded base — the family and
+            # session components are stripped, not inherited, and no
+            # intermediate dir reintroduces a marker. (Only the part
+            # below the base is ours to assert on: under the launcher
+            # the pytest tmp root itself lies inside the REAL family.)
+            assert ws.parent == _fresh.resolve()
+            assert ws.relative_to(_fresh.resolve()) == Path(ws.name)
+            assert workdir._family_name() != ws.name
+            assert not ws.name.startswith('session-')
+            assert ws.is_dir()
+            kept = ws
+        assert not kept.exists()
+
+    def test_neutral_suffix_anchored_name_and_0700(self, _fresh, monkeypatch):
+        monkeypatch.setattr(_tempfile_owner.tempfile, 'tempdir', str(_fresh))
+        with workdir.anonymous_workspace() as ws:
+            # Exactly the reaper's anchored shape: `.ws-` + one
+            # tempfile random suffix (so the cross-process sweep can
+            # claim SIGKILL strays without touching `.ws-notes`).
+            from core.run.tmp_reaper import _mkdtemp_anchored_match
+            assert _mkdtemp_anchored_match(ws.name, workdir._WS_PREFIX)
+            assert ws.stat().st_mode & 0o777 == 0o700
+
+    def test_unbranded_tmpdir_is_used_directly(self, _fresh, monkeypatch):
+        monkeypatch.setattr(_tempfile_owner.tempfile, 'tempdir', str(_fresh))
+        with workdir.anonymous_workspace() as ws:
+            assert ws.parent == _fresh.resolve()
+
+    def test_keepalive_registered_while_live(self, _fresh, monkeypatch):
+        """Long campaigns (a multi-hour ffuf run) must not be
+        false-reaped by a concurrent process's age-floor sweep; the
+        registration must also come back off at exit."""
+        from core.run import scratch
+        monkeypatch.setattr(_tempfile_owner.tempfile, 'tempdir', str(_fresh))
+        with workdir.anonymous_workspace() as ws:
+            with scratch._keepalive_lock:
+                assert str(ws) in scratch._keepalive_paths
+        with scratch._keepalive_lock:
+            assert str(ws) not in scratch._keepalive_paths
+
+    def test_body_exception_still_removes_the_workspace(
+        self, _fresh, monkeypatch,
+    ):
+        monkeypatch.setattr(_tempfile_owner.tempfile, 'tempdir', str(_fresh))
+        with pytest.raises(RuntimeError, match='campaign failed'):
+            with workdir.anonymous_workspace() as ws:
+                kept = ws
+                raise RuntimeError('campaign failed')
+        assert not kept.exists()

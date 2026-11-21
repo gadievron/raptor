@@ -43,6 +43,7 @@ _OLD = time.time() - 25 * 3600  # past the 24h default age floor
 # test. None on a tree that predates the probe.
 _REAL_IN_CHILD_PID_NS = getattr(_reaper_module, "_in_child_pid_ns", None)
 _REAL_LIVE_CWDS = _reaper_module._live_cwds
+_REAL_DEBRANDED_BASE = _reaper_module._debranded_base
 
 
 @pytest.fixture(autouse=True)
@@ -84,6 +85,10 @@ def _pin_sweep_roots(monkeypatch):
     import core.run.tmp_reaper as reaper_mod
     monkeypatch.setattr(reaper_mod, "_SYSTEM_TMP_ROOTS", ())
     monkeypatch.setattr(reaper_mod, "_lane_fallback_bases", lambda: ())
+    # Under the launcher the (patched) pytest tmp root itself lies
+    # inside the REAL raptor-<euid> family, so the de-branded-base
+    # computation would re-add the real system base as a root.
+    monkeypatch.setattr(reaper_mod, "_debranded_base", lambda: "")
 
 
 @pytest.fixture(autouse=True)
@@ -180,6 +185,7 @@ class TestDirReaping:
             _make_old_dir(tmp_root, "raptor-persona-abc123"),
             _make_old_dir(tmp_root, ".scr-a1b2c3_d"),
             _make_old_dir(tmp_root, ".fp-zyx98_w0"),
+            _make_old_dir(tmp_root, ".ws-q4r5s6_t"),
         ]
         reaped = reap_stale_tmp()
         assert sorted(reaped) == sorted(dirs)
@@ -227,17 +233,19 @@ class TestDirReaping:
             assert d.is_dir()
 
     def test_neutral_prefixes_require_exact_mkdtemp_suffix(self, tmp_root):
-        """.scr-/.fp- are too short to claim on prefix alone."""
+        """.scr-/.fp-/.ws- are too short to claim on prefix alone."""
         kept = [
             _make_old_dir(tmp_root, ".scr-notes"),        # 5 chars
             _make_old_dir(tmp_root, ".scr-myoldbackup"),  # 11 chars
             _make_old_dir(tmp_root, ".scr-ABC123_x"),     # uppercase
             _make_old_dir(tmp_root, ".fp-x"),
             _make_old_dir(tmp_root, ".fp-12345678a"),     # 9 chars
+            _make_old_dir(tmp_root, ".ws-drafts"),        # 6 chars
         ]
         strays = [
             _make_old_dir(tmp_root, ".scr-8charsfx"),
             _make_old_dir(tmp_root, ".fp-_0a1b2c3"),
+            _make_old_dir(tmp_root, ".ws-0k1l2m3n"),
         ]
         reaped = reap_stale_tmp()
         assert sorted(reaped) == sorted(strays)
@@ -949,6 +957,7 @@ class TestSigkilledProcessStrays:
              "import core.run.tmp_reaper as t;"
              "t._SYSTEM_TMP_ROOTS = ();"
              "t._lane_fallback_bases = lambda: ();"
+             "t._debranded_base = lambda: '';"
              # No process retains a cwd in these owned fixtures: the
              # creator and its whole group were killed above. A desktop
              # lsof warning about an unrelated mount is not this test's
@@ -1179,6 +1188,29 @@ class TestMultiRootSweep:
             (str(session.parent / "absent"),))
         stray = _make_old_dir(session, "raptor-pytest-onlyhere")
         assert reap_stale_tmp() == [stray]
+
+    def test_debranded_base_swept_for_anonymous_workspace_strays(
+        self, roots, monkeypatch,
+    ):
+        """core/run/workdir.py mints `.ws-` workspaces OUTSIDE the
+        branded family on purpose — under a custom RAPTOR_WORK_DIR base
+        a SIGKILLed owner strands them where neither gettempdir() nor
+        the fixed system roots look. The de-branded base must be a full
+        sweep root of its own."""
+        from core.run import tmp_reaper as reaper_mod
+        session, _system, _runuser = roots
+        base = session.parent / "custom-work-base"
+        branded = base / f"raptor-{os.geteuid()}" / "session-1-2"
+        branded.mkdir(parents=True)
+        monkeypatch.setattr(
+            _tempfile_owner.tempfile, 'gettempdir', lambda: str(branded))
+        monkeypatch.setattr(
+            reaper_mod, "_debranded_base", _REAL_DEBRANDED_BASE)
+        stray = _make_old_dir(base, ".ws-a1b2c3d4")
+        kept = _make_old_dir(base, ".ws-keepers")   # not mkdtemp-shaped
+        assert reap_stale_tmp() == [stray]
+        assert not stray.exists()
+        assert kept.is_dir()
 
 
 class TestPidSuffixDirReaping:

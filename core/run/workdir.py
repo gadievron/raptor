@@ -31,6 +31,16 @@ This changes WHERE RAPTOR's own executed artifacts live, never what
 they do: sandbox containment, witness content, and execution semantics
 are untouched, and nothing here applies to code from scanned targets.
 
+The family name is deliberately attributable — that is the whole EDR
+point — which makes it exactly the WRONG home for a directory handed
+to a sandboxed child as its writable bind: the mountinfo root field of
+the bind re-leaks the full source path, so a child executing over
+untrusted input would read the framework name (and the session pid)
+straight out of ``/proc/self/mountinfo``. :func:`anonymous_workspace`
+is the inverse allocator for that case — a throwaway child write grant
+minted OUTSIDE the branded family with a neutral, suffix-anchored name
+(the ``.scr-``/``.fp-`` de-branding convention).
+
 Import-light by the same convention as :mod:`core.run.tmp_reaper` and
 :mod:`core.run.scratch` (no core.config / core.sandbox imports).
 """
@@ -44,15 +54,18 @@ import re
 import stat
 import tempfile
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from core.atomic_fs import rmtree_hardened
 from core.atomic_fs.cache_eviction import file_generation
+from core.run.scratch import scratch_dir
 from core.run.tmp_reaper import _dir_in_use, _live_cwds, _pid_alive
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["exec_workdir"]
+__all__ = ["anonymous_workspace", "exec_workdir"]
 
 #: Session-dir name shape shared with the ``bin/raptor`` launcher —
 #: its launch-time sweep matches ``^session-([0-9]+)-[0-9]+$`` and
@@ -286,3 +299,54 @@ def exec_workdir() -> Path | None:
                     _cached_identity = None
             _resolved = True
         return _cached
+
+
+#: Neutral child-visible workspace prefix. Suffix-anchored in the
+#: reaper (``_MKDTEMP_ANCHORED_DIR_PREFIXES``) like ``.scr-``/``.fp-``:
+#: too short to claim on prefix alone, so only exact mkdtemp-random
+#: names are ever reaped.
+_WS_PREFIX = ".ws-"
+
+
+def _debranded_tmp_base() -> Path:
+    """The temp base with the branded family stripped back out.
+
+    Under the ``bin/raptor`` launcher :func:`tempfile.gettempdir` is
+    the per-session ``TMPDIR`` — ``<base>/raptor-<euid>/session-…`` —
+    so anything minted "in the temp dir" inherits the framework name
+    and the session pid as path components. Returns ``<base>`` in that
+    case, and the plain temp dir when it is not family-branded.
+    """
+    base = Path(tempfile.gettempdir()).resolve()
+    parts = base.parts
+    fam = _family_name()
+    if fam in parts:
+        return Path(*parts[: parts.index(fam)])
+    return base
+
+
+@contextmanager
+def anonymous_workspace() -> Iterator[Path]:
+    """Throwaway write grant for a sandboxed child, free of markers.
+
+    The inverse of :func:`exec_workdir`: that family is deliberately
+    attributable (the EDR coexistence home for RAPTOR-executed
+    artifacts), while a directory bound INTO an untrusted sandbox as
+    the child's writable scope must carry no framework, session, or
+    run marker anywhere in its path — the mountinfo root field of the
+    writable bind, the fake-HOME path derived from it, and any argv
+    that names staged files inside it all hand the full source path to
+    the child, and the children in question execute over hostile input
+    (live web targets, prompt-injectable repos).
+
+    Allocates ``.ws-<random>`` directly under the de-branded temp base
+    (0700, fresh), yields it, and removes it on exit. SIGKILL strands
+    it; cross-process reclamation is the reaper's suffix-anchored
+    ``.ws-`` entry plus the de-branded base sweep root, and a
+    keepalive registration protects long campaigns from the age floor
+    while this process lives.
+    """
+    with scratch_dir(
+        _WS_PREFIX, dir=_debranded_tmp_base(), keepalive=True,
+    ) as workspace:
+        yield workspace
