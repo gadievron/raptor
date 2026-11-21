@@ -359,6 +359,8 @@ class TestAssemblyLoopLinear:
 
 
 class TestTimingHeapScope:
+    @pytest.mark.wall_budget(30)  # Full gc.collect() passes: seconds each
+    # on a battery worker's accumulated heap, though instant in isolation.
     def test_preexisting_unreachable_cycle_is_collected_before_work(self):
         import weakref
 
