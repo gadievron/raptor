@@ -483,6 +483,11 @@
     "kind": "literal",
     "note": "signed C/kernel integer type names for declared-signedness evidence (language taxonomy, not target API names)"
   },
+  "core/audit/condition_smt.py::_SIZE_IDENT_NOISE": {
+    "count": 25,
+    "kind": "literal",
+    "note": "closed C-language keyword set: type words and qualifiers that, appearing outside a sizeof(...) term, mean the size expression contains a cast or declaration shape the source-bound wrap grammar does not model, so the tokenizer declines the whole expression (decline is the safe direction - inconclusive, never a proof); fixed by the C standard, not a learned name vocabulary"
+  },
   "core/audit/condition_smt.py::_TOCTOU_C_CHECKS": {
     "count": 10,
     "kind": "alternation"
@@ -2972,10 +2977,10 @@
     "kind": "literal"
   },
   "packages/exploit_feasibility/smt_path.py::validate_path": {
-    "count": 15,
+    "count": 16,
     "kind": "literal",
-    "note": "SMT result serialization schema: feasibility, witness/model, unknown diagnostics, summary axioms and weakest-precondition metadata including wp_ordering. Fixed interchange fields, not a function-name vocabulary. Includes refutation_uses_call_terms, the call-dependent refutation provenance field; reviewed against all three matching 15-field serializers.",
-    "reviewed": "2026-11-07"
+    "note": "SMT result serialization schema: feasibility, witness/model, unknown diagnostics, summary axioms and weakest-precondition metadata including wp_ordering. Fixed interchange fields, not a function-name vocabulary. Includes refutation_uses_call_terms, the call-dependent refutation provenance field, and profile_role, the pinned/advisory/guess signedness-binding provenance field.",
+    "reviewed": "2026-11-21"
   },
   "packages/exploit_feasibility/smt_verbs.py::_result_to_dict": {
     "count": 15,
