@@ -1246,7 +1246,7 @@ _SIZE_EXPR_MAX_TOKENS = 64
 
 _SIZE_EXPR_TOKEN_RE = re.compile(
     r"\s*(?:"
-    r"(?P<sizeof>sizeof\s*\(\s*[\w \t*\[\]]*?\s*\))"
+    r"(?P<sizeof>sizeof\s*\([\w \t*\[\]]*?\))"
     r"|(?P<num>0[xX][0-9a-fA-F]+[uUlL]*|\d+[uUlL]*)"
     r"|(?P<ident>[A-Za-z_]\w*)"
     r"|(?P<op>[+*()])"
