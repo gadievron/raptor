@@ -1170,6 +1170,28 @@ class FfufRunner:
                 workspace / "ffuf_config.toml"
                 if config_content is not None else None
             )
+            if config.request_file is not None:
+                # Raw-request mode: the request file is often RAPTOR-
+                # generated inside the marker-bearing run dir (the API
+                # sweep), and both its argv string and a per-file
+                # readable_paths bind would re-leak that path to the
+                # child through /proc/<pid>/cmdline and the mountinfo
+                # root field. Stage the scope-checked text into the
+                # workspace and point ffuf at the staged copy — the
+                # child then reads exactly the bytes the origin check
+                # in build_command validated, closing the (pre-
+                # existing) normalisation gap between the checked text
+                # and the raw file as a side effect.
+                request_text = self._read_scoped_request_file(config)
+                staged_request = workspace / "ffuf.request"
+                fd = os.open(
+                    staged_request,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o600,
+                )
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    handle.write(request_text)
+                config = replace(config, request_file=staged_request)
             cmd = self.build_command(config, child_output, config_file=config_file)
             # build_command uses the operator-facing name; swap in the
             # resolved real path for the exec.
@@ -1205,10 +1227,11 @@ class FfufRunner:
                 # enforcement tiers support file paths (Landlock path_beneath
                 # rules on O_PATH fds; mount-ns per-file bind with stub
                 # creation).
+                # The staged request file needs no entry: it lives
+                # inside the workspace write grant.
                 wordlist_files = list(dict.fromkeys(
                     [str(config.wordlist)]
                     + [str(path) for path, _keyword in config.extra_wordlists]
-                    + ([str(config.request_file)] if config.request_file else [])
                 ))
                 completed = run_untrusted_networked(
                     cmd,
@@ -1220,6 +1243,12 @@ class FfufRunner:
                     # to output=, the egress audit record would be
                     # destroyed with the workspace.
                     events_output=str(work_dir),
+                    # Same decoupling for --audit evidence (audit
+                    # JSONL, degraded marker, floor-refusal records):
+                    # their default home is `audit_run_dir or output`,
+                    # and triage reads them from the same durable dir
+                    # as the proxy events.
+                    audit_run_dir=str(work_dir),
                     readable_paths=wordlist_files,
                     proxy_hosts=[target_host],
                     fake_home=True,
@@ -1255,15 +1284,20 @@ class FfufRunner:
                     harvest_regular_file(
                         config_file, work_dir / "ffuf_config.toml",
                     )
-            # Harvest the report — written on graceful exit, or partially
-            # flushed before the backstop kill — into its stable
-            # parent-side location. O_NOFOLLOW + S_ISREG on the source:
-            # the child could leave a symlink or FIFO at the report name,
-            # and following it would copy (or hang on) something that is
-            # not ffuf's report. The fresh-0600-inode destination write
-            # also displaces anything a pre-conversion child planted at
-            # the predictable work_dir name.
-            harvest_regular_file(child_output, output_file)
+                # Harvest the report — written on graceful exit, or
+                # partially flushed before the backstop kill or any
+                # other exception — into its stable parent-side
+                # location. In the finally so EVERY exit path keeps
+                # whatever ffuf flushed (pre-conversion, a partial
+                # report survived any exception on disk; the workspace
+                # teardown must not regress that). O_NOFOLLOW +
+                # S_ISREG on the source: the child could leave a
+                # symlink or FIFO at the report name, and following it
+                # would copy (or hang on) something that is not ffuf's
+                # report. The fresh-0600-inode destination write also
+                # displaces anything a pre-conversion child planted at
+                # the predictable work_dir name.
+                harvest_regular_file(child_output, output_file)
 
         results: list[dict[str, Any]] = []
         if output_file.exists():

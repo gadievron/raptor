@@ -749,9 +749,10 @@ def test_run_grants_file_granular_read_scope_to_wordlists(
         str(params.resolve()),
     ]
     assert captured["kwargs"].get("target") is None
-    # The write grant is the anonymous workspace, never the run-marker
-    # work_dir; the egress audit stream routes to work_dir parent-side.
-    assert captured["kwargs"]["output"] != str(tmp_path / "ffuf")
+    # The write grant is the anonymous workspace, never anywhere under
+    # the run dir; the egress audit stream routes to work_dir
+    # parent-side.
+    assert not Path(captured["kwargs"]["output"]).is_relative_to(tmp_path)
     assert captured["kwargs"]["events_output"] == str(tmp_path / "ffuf")
 
 
@@ -796,8 +797,12 @@ def test_run_binds_anonymous_workspace_and_harvests_report(
     # the run-marker name.
     assert not bound.is_relative_to(out_dir)
     assert "scan-acme-webapp-20260101" not in str(bound)
-    # The egress audit stream routes parent-side to the durable home.
+    # The egress audit stream routes parent-side to the durable home,
+    # and --audit evidence (audit JSONL, degraded marker, floor-refusal
+    # records — default home `audit_run_dir or output`) must not die
+    # with the workspace either.
     assert captured["kwargs"]["events_output"] == str(work_dir)
+    assert captured["kwargs"]["audit_run_dir"] == str(work_dir)
     # The workspace was torn down with the run...
     assert not bound.exists()
     assert not captured["child_output"].exists()
@@ -806,6 +811,40 @@ def test_run_binds_anonymous_workspace_and_harvests_report(
     assert results_file.exists()
     assert report["output_file"] == str(results_file)
     assert report["result_count"] == 1
+
+
+def test_run_harvests_partial_report_on_unexpected_exception(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Pre-conversion, ffuf wrote its report straight into work_dir, so
+    whatever it had flushed survived ANY exception on disk. The harvest
+    sits in the finally to keep that durability: a non-timeout failure
+    (sandbox enforcement error, SIGINT) must not let the workspace
+    teardown destroy the partial report."""
+    words = tmp_path / "words.txt"
+    words.write_text("admin\n", encoding="utf-8")
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _binary: '/usr/bin/ffuf')
+
+    def fake_run(cmd, **kwargs):
+        output_path = Path(cmd[cmd.index("-o") + 1])
+        output_path.write_text(
+            json.dumps({"results": [
+                {"url": "https://example.test/admin", "status": 200},
+            ]}),
+            encoding="utf-8",
+        )
+        raise RuntimeError("sandbox enforcement failure")
+
+    monkeypatch.setattr("packages.web.ffuf.run_untrusted_networked", fake_run)
+
+    runner = FfufRunner("https://example.test", tmp_path)
+    with pytest.raises(RuntimeError, match="sandbox enforcement failure"):
+        runner.run(FfufConfig(wordlist=words))
+
+    harvested = tmp_path / "ffuf" / "ffuf_results.json"
+    assert harvested.exists()
+    assert "example.test/admin" in harvested.read_text(encoding="utf-8")
 
 
 def test_run_resolves_symlinked_wordlists_for_argv_and_scope(
@@ -2345,29 +2384,52 @@ def test_raw_request_host_keyword_is_neutralized_in_scope_check(tmp_path: Path):
         )
 
 
-def test_run_grants_read_scope_to_request_file(
+def test_run_stages_request_file_into_workspace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ):
+    """The raw request file is often RAPTOR-generated inside the
+    marker-bearing run dir (the API sweep) — its path must never reach
+    the child, neither on the argv (/proc/<pid>/cmdline) nor as a
+    per-file readable_paths bind (mountinfo root field). The staged
+    workspace copy carries the same scope-checked text."""
+    out_dir = tmp_path / "scan-acme-webapp-20260101"
+    out_dir.mkdir()
     wordlist = tmp_path / "params.txt"
     wordlist.write_text("id\n", encoding="utf-8")
-    request = tmp_path / "req.txt"
-    request.write_text(
-        "GET /x HTTP/1.1\nHost: example.test\n\nFUZZ", encoding="utf-8",
-    )
+    request_text = "GET /x HTTP/1.1\nHost: example.test\n\nFUZZ"
+    request = out_dir / "api-sweep-00.request"
+    request.write_text(request_text, encoding="utf-8")
     patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _b: '/usr/bin/ffuf')
     seen: dict = {}
 
     def fake_run(cmd, **kwargs):
+        seen["cmd"] = list(cmd)
         seen["kwargs"] = kwargs
+        staged = Path(cmd[cmd.index("-request") + 1])
+        seen["staged"] = staged
+        seen["staged_text"] = staged.read_text(encoding="utf-8")
+        seen["staged_mode"] = staged.stat().st_mode & 0o777
         output_path = Path(cmd[cmd.index("-o") + 1])
         output_path.write_text(json.dumps({"results": []}), encoding="utf-8")
         return SimpleNamespace(returncode=0, stderr="")
 
     monkeypatch.setattr("packages.web.ffuf.run_untrusted_networked", fake_run)
-    runner = FfufRunner("https://example.test", tmp_path)
+    runner = FfufRunner("https://example.test", out_dir)
     runner.run(FfufConfig(wordlist=wordlist, request_file=request))
 
-    assert str(request.resolve()) in seen["kwargs"]["readable_paths"]
+    workspace = Path(seen["kwargs"]["output"])
+    assert seen["staged"].is_relative_to(workspace)
+    assert seen["staged_text"] == request_text
+    assert seen["staged_mode"] == 0o600
+    # Neither the argv nor the read allowlist carries the original
+    # run-dir path.
+    assert str(request) not in seen["cmd"]
+    assert str(request.resolve()) not in seen["kwargs"]["readable_paths"]
+    assert not any(
+        "scan-acme-webapp-20260101" in entry
+        for entry in seen["kwargs"]["readable_paths"]
+    )
+    assert not any("scan-acme-webapp-20260101" in arg for arg in seen["cmd"])
 
 
 def test_build_command_calibration_knobs_and_encoders(tmp_path: Path):
