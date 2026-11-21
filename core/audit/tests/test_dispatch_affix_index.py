@@ -1,5 +1,7 @@
 """Native affix indexing preserves routing and observable foreign callbacks."""
 
+import pytest
+
 from core.audit import dispatch_completeness as dispatch
 from core.testing.module_views import module_function_view
 
@@ -157,6 +159,8 @@ def test_fully_handled_table_never_builds_unused_index(monkeypatch):
     assert dispatch.find_dispatch_gaps({}, data) == []
 
 
+@pytest.mark.wall_budget(30)  # Four full gc.collect() passes: seconds each
+# on a battery worker's accumulated heap, though instant in isolation.
 def test_foreign_affix_result_keeps_original_temporary_lifetime(monkeypatch):
     import gc
 
