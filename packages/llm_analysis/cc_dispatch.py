@@ -165,7 +165,10 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
         # binding out_dir let a prompt-injected child attribute the
         # analysis run. Nothing is staged into or harvested from the
         # workspace — the prompt rides stdin and the result rides
-        # stdout; out_dir stays a parent-side location (write_debug).
+        # stdout; out_dir stays a parent-side location (write_debug,
+        # and events_output= below: the egress audit stream must
+        # outlive the workspace, and the sandbox persists it
+        # parent-side so the run dir path never reaches the child).
         from core.run.workdir import exec_workdir
         with system_prompt_file_for(config) as _sys_prompt_path, \
                 tempfile.TemporaryDirectory(
@@ -186,6 +189,11 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
                 env=cc_subprocess_env(mint_aws_credentials=True),
                 readable_paths=readable_paths,
                 proxy_hosts=proxy_hosts_for_cc_dispatch(claude_bin),
+                # Durable home for proxy-events.jsonl + its count
+                # sidecar — with output= pointing at the throwaway
+                # workspace, the default destination would be
+                # destroyed with it.
+                events_output=str(out_dir),
                 caller_label="claude-sub-agent",
             )
     except subprocess.TimeoutExpired:

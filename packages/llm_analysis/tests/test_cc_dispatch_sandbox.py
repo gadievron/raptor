@@ -253,6 +253,11 @@ def test_invoke_cc_simple_binds_anonymous_workspace_not_out_dir(tmp_path):
     assert captured[0]["workspace_existed"]
     assert not workspace.exists()
 
+    # The egress audit stream (proxy-events.jsonl + count sidecar)
+    # must NOT die with the workspace: its durable home is out_dir,
+    # declared via the parent-side-only events_output kwarg.
+    assert kwargs["events_output"] == str(out_dir)
+
 
 def test_invoke_cc_simple_caller_label_set(captured_helper_kwargs, tmp_path):
     """``caller_label="claude-sub-agent"`` is what egress-proxy events
