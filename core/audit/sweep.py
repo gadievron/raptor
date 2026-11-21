@@ -5778,10 +5778,27 @@ def run_symbolic_sweep(
         f"bytes) reaches {function_name} at {address:#x}"
     )
 
+    meta = getattr(result, "metadata", None) or {}
+    canary_caveat = None
+    if hijack and meta.get("canary_present"):
+        # The engine's stack guard is a free symbolic value the
+        # solver chooses — no real attacker can. A protector build
+        # must never mint an uncaveated pc-hijack confirmation.
+        from packages.exploitability_validation.symbolic_witness import (
+            CANARY_CAVEAT,
+        )
+        canary_caveat = CANARY_CAVEAT
+        details["canary_caveat"] = canary_caveat
+        message += (
+            " — caveat: target has a stack protector; the model "
+            "chose the guard value (pc control is model-optimistic)"
+        )
+
     stored = _store_sweep_witness(
         binary, result.concrete_input, out_dir,
         function_name=function_name, address=address,
         cwe=cwe, file_path=file_path, replay=replay,
+        canary_caveat=canary_caveat,
     )
     if stored:
         details.update(stored)
@@ -5814,7 +5831,6 @@ def run_symbolic_sweep(
         # minted in some other frame proves PC control exists, not
         # that THIS function's finding is real.
         from core.security.log_sanitisation import escape_nonprintable
-        meta = getattr(result, "metadata", None) or {}
         sites = [
             s for s in (meta.get("hijack_sites") or [])
             if isinstance(s, dict)
@@ -5906,6 +5922,7 @@ def _checklist_address(out_dir, file_path, function_name):
 def _store_sweep_witness(
     binary, witness_bytes, out_dir, *,
     function_name, address, cwe, file_path, replay,
+    canary_caveat=None,
 ):
     """Store the solved bytes; optionally replay (dynamic-gated)."""
     try:
@@ -5919,6 +5936,11 @@ def _store_sweep_witness(
             "target_address": address,
             "_input_bytes": witness_bytes,
         }
+        if canary_caveat:
+            # Parity with the Stage E witness producer: the stored
+            # record says the guard was solver-chosen, so later runs
+            # reading the store inherit the caveat too.
+            record["canary_caveat"] = canary_caveat
         if replay:
             record.update(replay_witness(Path(binary), witness_bytes))
         else:

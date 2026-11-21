@@ -231,3 +231,135 @@ class TestRunnerErrors:
         reason = (res.details or {}).get("reason", "")
         assert "\x1b" not in reason
         assert "evil" in reason
+
+
+class TestCanaryCaveat:
+    """A hijack witness against a stack-protector build is
+    model-optimistic — the solver chose the guard value, which a real
+    attacker cannot. A confirmed symbolic-pc-hijack must never ship
+    without the caveat on such a build."""
+
+    def _hijack_sweep(self, tmp_path, result_cls, store_capture=None):
+        binary = tmp_path / "b"
+        binary.write_bytes(b"\x7fELF" + b"\x00" * 60)
+
+        def _capture(finding, record, binary_path, out_dir):
+            if store_capture is not None:
+                store_capture.update(record)
+            return "0" * 64
+
+        with (
+            patch(
+                "core.symbolic._availability.angr_available",
+                return_value=True,
+            ),
+            patch("core.symbolic.load_binary", return_value=_Info()),
+            patch(
+                "core.symbolic.find_overflow_reaching_input",
+                return_value=result_cls(),
+            ),
+            patch(
+                "packages.exploitability_validation.symbolic_witness"
+                ".store_witness",
+                side_effect=_capture,
+            ),
+        ):
+            return run_symbolic_sweep(
+                target_path=binary, file_path="binary:b",
+                function_name="f", out_dir=tmp_path,
+                address=0x1000, cwe="CWE-121",
+            )
+
+    @staticmethod
+    def _result(canary):
+        class _R:
+            succeeded = True
+            concrete_input = b"A" * 32
+            reason = ""
+            wall_seconds = 1.0
+            metadata = {
+                "hijack_sites": [{"address": 0x1040, "symbol": "f"}],
+                "canary_present": canary,
+            }
+        return _R
+
+    def test_protector_build_confirmation_carries_caveat(self, tmp_path):
+        from packages.exploitability_validation.symbolic_witness import (
+            CANARY_CAVEAT,
+        )
+        res = self._hijack_sweep(tmp_path, self._result(True))
+        assert res.outcome == "confirmed"
+        assert res.rule_id == "symbolic-pc-hijack"
+        assert (res.details or {}).get("canary_caveat") == CANARY_CAVEAT
+        assert "stack protector" in res.matches[0]["message"]
+        assert "model-optimistic" in res.matches[0]["message"]
+
+    def test_protector_caveat_reaches_stored_witness_record(self, tmp_path):
+        captured = {}
+        self._hijack_sweep(tmp_path, self._result(True),
+                           store_capture=captured)
+        assert "stack protector" in captured.get("canary_caveat", "")
+
+    def test_unprotected_build_has_no_caveat(self, tmp_path):
+        captured = {}
+        res = self._hijack_sweep(tmp_path, self._result(False),
+                                 store_capture=captured)
+        assert res.outcome == "confirmed"
+        assert "canary_caveat" not in (res.details or {})
+        assert "stack protector" not in res.matches[0]["message"]
+        assert "canary_caveat" not in captured
+
+    def test_inconclusive_hijack_still_carries_caveat(self, tmp_path):
+        # Site attribution fails (control lost elsewhere) — the kept
+        # witness details must still say the guard was solver-chosen.
+        class _R:
+            succeeded = True
+            concrete_input = b"A" * 32
+            reason = ""
+            wall_seconds = 1.0
+            metadata = {
+                "hijack_sites": [{"address": 0x2040,
+                                  "symbol": "other_func"}],
+                "canary_present": True,
+            }
+
+        res = self._hijack_sweep(tmp_path, _R)
+        assert res.outcome == "inconclusive"
+        assert "stack protector" in (res.details or {}).get(
+            "canary_caveat", "")
+
+    def test_reach_mode_never_caveats(self, tmp_path):
+        # canary_present is hijack metadata; plain reachability on a
+        # protector build is not model-optimistic.
+        binary = tmp_path / "b"
+        binary.write_bytes(b"\x7fELF" + b"\x00" * 60)
+
+        class _R:
+            succeeded = True
+            concrete_input = b"A" * 32
+            reason = ""
+            wall_seconds = 1.0
+            metadata = {"canary_present": True}
+
+        with (
+            patch(
+                "core.symbolic._availability.angr_available",
+                return_value=True,
+            ),
+            patch("core.symbolic.load_binary", return_value=_Info()),
+            patch(
+                "core.symbolic.find_reaching_input", return_value=_R(),
+            ),
+            patch(
+                "packages.exploitability_validation.symbolic_witness"
+                ".store_witness",
+                return_value="0" * 64,
+            ),
+        ):
+            res = run_symbolic_sweep(
+                target_path=binary, file_path="binary:b",
+                function_name="f", out_dir=tmp_path,
+                address=0x1000, cwe="CWE-79",
+            )
+        assert res.outcome == "confirmed"
+        assert "canary_caveat" not in (res.details or {})
