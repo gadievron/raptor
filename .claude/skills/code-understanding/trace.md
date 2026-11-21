@@ -69,7 +69,7 @@ For each condition, also record the `step_index` it gates so consumers can corre
 
 **Avoid:** function calls (`strlen(input)`), type casts (`(uint32_t)x`), struct/array access (`obj.field`, `arr[0]`), pointer deref (`*p`) — the SMT parser can't encode these. Either simplify into a bitvector predicate or omit; "missing" is far better than "wrong shape".
 
-Also pick a `path_profile` describing the dominant C type along the path — `"uint32"` for `int`/`unsigned int` arithmetic, `"uint64"` for `size_t`/`uint64_t`/pointers (default), `"int32"` for signed-overflow UB reasoning. Pre-made profiles: `uint8`, `int8`, `uint16`, `int16`, `uint32`, `int32`, `uint64`, `int64`. Pick one that matches the dominant arithmetic type on the path.
+Also pick a `path_profile` describing the dominant C type along the path — signedness matters: `"int32"` for `int` arithmetic (C `int` is signed; also the profile for signed-overflow UB reasoning), `"uint32"` for `unsigned int`, `"uint64"` for `size_t`/`uint64_t`/pointers (default), `"int64"` for `long`/`ssize_t`. Pre-made profiles: `uint8`, `int8`, `uint16`, `int16`, `uint32`, `int32`, `uint64`, `int64`. When the dominant type is unclear or the path mixes signedness, OMIT `path_profile` — downstream solvers treat a traced profile as a width hint (refutations still require both signedness profiles to agree), so a missing profile is safe and a wrong one wastes the hint.
 
 **[TRACE-4] Sink Analysis**
 

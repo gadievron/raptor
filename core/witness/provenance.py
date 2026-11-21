@@ -483,6 +483,12 @@ def smt_feasibility_fields(
     if record.get("oracle_scope") == "supplied-predicates":
         fields.update(oracle_scope="supplied-predicates",
                       profile=str(record.get("profile") or ""))
+        # How the profile bound the verdict (pinned vs advisory) is
+        # cache-trust-relevant: bind it so a record cannot be
+        # relabelled advisory after stamping. Legacy records carry no
+        # role and keep their historical shape.
+        if record.get("profile_role") is not None:
+            fields["profile_role"] = str(record["profile_role"])
     return fields
 
 

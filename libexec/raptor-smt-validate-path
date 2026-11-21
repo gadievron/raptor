@@ -249,13 +249,18 @@ def main() -> int:
 
     # Profile precedence: explicit --profile > trace's path_profile >
     # None (guessed uint64 — validate_path then honors an infeasible
-    # verdict only when both signedness profiles agree).
+    # verdict only when both signedness profiles agree). An operator's
+    # --profile pins the signedness as KNOWN; a trace's path_profile
+    # is LLM-inferred, so it rides as an advisory width hint and a
+    # refutation still needs cross-signedness agreement.
     profile = args.profile or trace_profile
+    profile_advisory = args.profile is None and trace_profile is not None
 
     try:
         result = validate_path(
             conditions, profile=profile, timeout_ms=args.timeout_ms,
             prefer_witness=args.prefer_witness,
+            profile_advisory=profile_advisory,
         )
     except (TypeError, ValueError) as e:
         return _err(str(e))
