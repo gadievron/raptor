@@ -12,6 +12,7 @@ import copy
 import logging
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,12 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
     """CC invocation with pre-built prompt. Returns DispatchResult.
 
     Used as a dispatch_fn callable by dispatch_task().
+
+    ``out_dir`` is a parent-side location only (failure debug
+    artifacts via ``write_debug``); it is never bound into the child's
+    sandbox — the child gets an anonymous scratch workspace as its
+    write grant so run/project markers in the run dir's path cannot
+    leak to a prompt-injected child via mountinfo or ``$HOME`` paths.
 
     ``system_prompt`` routes through CCDispatchConfig.system_prompt
     (the ``--system-prompt-file`` channel) — never fold it into ``prompt``:
@@ -98,14 +105,13 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
         effective_schema = _normalize_schema(effective_schema)
     config = CCDispatchConfig(
         claude_bin=claude_bin,
-        # Read-only tool allowlist — LOAD-BEARING beyond least
-        # privilege: this child receives the agent's out_dir
-        # (autonomous/) as its OS-level write grant below, and
-        # autonomous/ is a trusted review-record home at the coverage
-        # load chokepoint (core/coverage/record.py,
-        # _REVIEW_RECORD_SUBDIRS). No Write/Edit/Bash means the child
-        # cannot mint coverage records there; widening this allowlist
-        # requires moving that entry behind the refusal first. Pinned
+        # Read-only tool allowlist — least privilege for a per-finding
+        # reviewer, and belt-and-braces for the coverage chokepoint:
+        # the run dir (autonomous/) is a trusted review-record home
+        # (core/coverage/record.py, _REVIEW_RECORD_SUBDIRS) and is no
+        # longer bound into this sandbox at all (the child's write
+        # grant is an anonymous scratch workspace below), so a child
+        # cannot mint coverage records there by either channel. Pinned
         # by core/coverage/tests/test_record_subdir_policy.py.
         tools="Read,Grep,Glob",
         add_dirs=(str(repo_path),),
@@ -152,7 +158,18 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
         # sandbox's read allowlist (the mount-ns backend bind-mounts
         # file entries at their original paths, Landlock adds a
         # per-file read rule).
-        with system_prompt_file_for(config) as _sys_prompt_path:
+        # Anonymous workspace: the child's OS-level write grant is a
+        # fresh throwaway scratch dir, never the run's out_dir. The
+        # run dir name carries run/project markers and the mountinfo
+        # root field re-leaks any bind source path to the child, so
+        # binding out_dir let a prompt-injected child attribute the
+        # analysis run. Nothing is staged into or harvested from the
+        # workspace — the prompt rides stdin and the result rides
+        # stdout; out_dir stays a parent-side location (write_debug).
+        from core.run.workdir import exec_workdir
+        with system_prompt_file_for(config) as _sys_prompt_path, \
+                tempfile.TemporaryDirectory(
+                    prefix="ws-", dir=exec_workdir()) as _workspace:
             cmd = build_cc_command(
                 config, system_prompt_file=_sys_prompt_path,
             )
@@ -161,7 +178,7 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
                 readable_paths = [*readable_paths, str(_sys_prompt_path)]
             proc = run_untrusted_networked(
                 cmd, input=prompt, capture_output=True, text=True,
-                timeout=timeout, target=str(repo_path), output=str(out_dir),
+                timeout=timeout, target=str(repo_path), output=_workspace,
                 # mint_aws_credentials: sandboxed child — Landlock denies
                 # ~/.aws, egress denies IMDS; on IAM-role Bedrock hosts its
                 # own AWS chain is dead. The parent attaches frozen session
@@ -170,10 +187,6 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
                 readable_paths=readable_paths,
                 proxy_hosts=proxy_hosts_for_cc_dispatch(claude_bin),
                 caller_label="claude-sub-agent",
-                # out_dir is frequently a run-dir root, and that is
-                # this lane's contract: the dispatched agent's job is
-                # to write the run's own analysis artifacts there.
-                output_run_root_ok=True,
             )
     except subprocess.TimeoutExpired:
         return DispatchResult(result={"error": f"timeout after {timeout}s"})

@@ -195,6 +195,65 @@ def test_invoke_cc_simple_includes_claude_paths_in_readable(
         )
 
 
+def test_invoke_cc_simple_binds_anonymous_workspace_not_out_dir(tmp_path):
+    """The child's OS-level write grant must be an anonymous scratch
+    workspace, never the run's out_dir: the run dir's name carries
+    run/project markers and the mountinfo root field re-leaks any bind
+    source path, so binding out_dir let a prompt-injected child
+    attribute the analysis run. The workspace must exist at spawn time
+    (Landlock needs a real dir) and be gone once the dispatch returns
+    (nothing is harvested from it)."""
+    from packages.llm_analysis.cc_dispatch import invoke_cc_simple
+
+    out_dir = tmp_path / "run-marker-out"
+    out_dir.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    captured: list[dict] = []
+
+    def _capture(cmd, *args, **kwargs):
+        captured.append({
+            "kwargs": kwargs,
+            # Snapshot at spawn time — the workspace is torn down when
+            # the dispatch context exits, so existence must be recorded
+            # here, exactly as a real child would observe it.
+            "workspace_existed": Path(kwargs["output"]).is_dir(),
+        })
+        return MagicMock(returncode=0, stdout="{}", stderr="")
+
+    with patch("core.sandbox.run_untrusted_networked",
+               side_effect=_capture), \
+         patch("packages.llm_analysis.cc_dispatch.run_untrusted_networked",
+               side_effect=_capture, create=True):
+        invoke_cc_simple(
+            prompt="ignored", schema=None,
+            repo_path=str(repo), claude_bin="/usr/bin/true",
+            out_dir=str(out_dir), timeout=5,
+        )
+
+    assert len(captured) == 1
+    kwargs = captured[0]["kwargs"]
+    workspace = Path(kwargs["output"])
+
+    # Not the run dir, not inside it, and the marker-carrying name
+    # never appears anywhere in the bound path.
+    assert str(workspace) != str(out_dir)
+    assert not workspace.is_relative_to(out_dir)
+    assert "run-marker-out" not in str(workspace)
+
+    # The scanned repo stays the read-only target.
+    assert kwargs["target"] == str(repo)
+
+    # out_dir is no longer a run-root bind, so the run-root waiver
+    # must not be passed.
+    assert "output_run_root_ok" not in kwargs
+
+    # Real at spawn, gone after dispatch: a throwaway workspace.
+    assert captured[0]["workspace_existed"]
+    assert not workspace.exists()
+
+
 def test_invoke_cc_simple_caller_label_set(captured_helper_kwargs, tmp_path):
     """``caller_label="claude-sub-agent"`` is what egress-proxy events
     are tagged with. Drops in audit log forensics if removed."""
