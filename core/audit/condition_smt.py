@@ -537,6 +537,13 @@ def constraints_for_guard(
 #: ``unsigned int`` rank and above.
 _UNSIGNED_REREAD_WIDTHS = (32, 64)
 
+# Smallest literal that can carry an unsigned C type: C integer
+# promotions keep every comparison at int rank or above, so only a
+# literal above INT32_MAX can drag a signed variable's comparison to
+# an unsigned type (hex/octal constants alternate signed/unsigned
+# ranks; decimal constants stay signed but are width-ambiguous here).
+_INT32_MAX = (1 << 31) - 1
+
 
 def _var_interval_satisfiable(
     cs: list[BoundsConstraint],
@@ -587,11 +594,69 @@ def _var_interval_satisfiable(
     return (upper - lower + 1) > in_range
 
 
+def _var_interval_satisfiable_mixed(
+    cs: list[BoundsConstraint],
+    width: int,
+) -> bool | None:
+    """Exact satisfiability for a SIGNED ``width``-bit variable whose
+    comparisons take per-literal C conversions.
+
+    A literal above the signed maximum but inside the unsigned range
+    (an ``unsigned``-typed hex constant) drags the comparison to the
+    unsigned type, where the variable's negative values re-read as
+    ``value + 2**width``; every other literal compares at the signed
+    (or wider) type with the value as written. So one constraint set
+    can mix unsigned and signed comparisons on the SAME variable —
+    neither the all-signed nor the all-unsigned reading covers it.
+
+    Returns None when an operator is outside the model.
+    """
+    modulus = 1 << width
+    top = modulus // 2 - 1
+    bottom = -(modulus // 2)
+    # Split on the sign of the variable's value: the unsigned re-read
+    # is the value itself for non-negatives and value + modulus for
+    # negatives, making each branch pure interval arithmetic.
+    for branch_lo, branch_hi, offset in (
+        (0, top, 0), (bottom, -1, modulus),
+    ):
+        lower, upper = branch_lo, branch_hi
+        excluded: set[int] = set()
+        unmodeled = False
+        for c in cs:
+            literal = c.bound_value
+            if top < literal < modulus:
+                bound = literal - offset
+            else:
+                bound = literal
+            if c.operator in ("<", "<="):
+                ub = bound - 1 if c.operator == "<" else bound
+                upper = min(upper, ub)
+            elif c.operator in (">", ">="):
+                lb = bound + 1 if c.operator == ">" else bound
+                lower = max(lower, lb)
+            elif c.operator == "==":
+                lower = max(lower, bound)
+                upper = min(upper, bound)
+            elif c.operator == "!=":
+                excluded.add(bound)
+            else:
+                unmodeled = True
+                break
+        if unmodeled:
+            return None
+        in_range = sum(1 for value in excluded if lower <= value <= upper)
+        if lower <= upper and (upper - lower + 1) > in_range:
+            return True
+    return False
+
+
 def _refutation_survives_unsigned_reading(
     constraints: list[BoundsConstraint],
 ) -> bool:
     """True when some variable's constraint set is unsatisfiable under
-    the signed reading AND every unsigned re-reading.
+    the signed reading, every unsigned re-reading, and every mixed
+    signed-variable re-reading.
 
     Constraints relate one variable to one integer literal, so joint
     feasibility decomposes per variable: the conjunction is dead under
@@ -609,6 +674,7 @@ def _refutation_survives_unsigned_reading(
             continue
         if all(
             _var_interval_satisfiable(cs, (1 << width) - 1) is False
+            and _var_interval_satisfiable_mixed(cs, width) is False
             for width in _UNSIGNED_REREAD_WIDTHS
         ):
             return True
@@ -669,22 +735,27 @@ def check_path_feasibility(
     if unmodeled and result.feasible is True:
         result.feasible = None
         result.reasoning = "encoded guard subset is satisfiable; unmodeled guards — inconclusive"
-    # The guards are TYPELESS: a dead-path proof that needs the signed
-    # reading of a negative literal (``x > 10 && x < -1`` is unsat over
-    # the integers but live for unsigned ``x``, where ``-1`` converts
-    # to the type maximum) is a guess about declared types this model
-    # cannot see. Keep the refutation only when some variable is dead
-    # under the signed reading and every unsigned re-reading.
+    # The guards are TYPELESS: a dead-path proof that needs one
+    # declared-type reading of the literals is a guess about types this
+    # model cannot see. A negative literal re-reads as the type maximum
+    # against an unsigned variable (``x > 10 && x < -1`` is live), and
+    # a literal above the signed maximum can be an unsigned-typed hex
+    # constant dragging a signed variable's comparison to the unsigned
+    # type (``x > 0xFFFFFFF0 && x < 5`` is live at ``int x = -1``).
+    # Keep the refutation only when some variable is dead under the
+    # signed reading and every unsigned and mixed re-reading.
     if result.feasible is False and any(
-        type(c.bound_value) is int and c.bound_value < 0
+        type(c.bound_value) is int
+        and (c.bound_value < 0 or c.bound_value > _INT32_MAX)
         for c in all_constraints
     ) and not _refutation_survives_unsigned_reading(all_constraints):
         result.feasible = None
         result.reasoning = (
-            "signedness-ambiguous: the infeasibility depends on the signed "
-            "reading of negative literal(s) against typeless variables — an "
-            "unsigned reading leaves the path live; refusing the dead-path "
-            "proof"
+            "signedness-ambiguous: the infeasibility depends on one "
+            "declared-type reading of the literal(s) against typeless "
+            "variables — another C reading (unsigned variable, or a "
+            "large literal forcing an unsigned comparison) leaves the "
+            "path live; refusing the dead-path proof"
         )
         result.witness = None
     return result
