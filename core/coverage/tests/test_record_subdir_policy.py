@@ -195,10 +195,11 @@ def test_nested_candidate_cap_bounds_the_read_class(tmp_path,
 
 
 def test_child_grant_subdirs_are_untrusted(tmp_path):
-    # The hostile-input children's write grants are dedicated subdirs
-    # (openant_scan/, the web scanner's ffuf/, the semgrep child's
-    # semgrep-child/) — none is a trusted record home, so a record
-    # planted in any of them refuses at the PATH tier.
+    # Dedicated hostile-input subdirs (openant_scan/, the web
+    # scanner's ffuf/, the semgrep child's semgrep-child/) — some were
+    # child write grants before the anonymous-workspace conversion and
+    # may hold legacy plants; none is a trusted record home, so a
+    # record planted in any of them refuses at the PATH tier.
     run = _run_dir(tmp_path)
     for sub in ("openant_scan", "ffuf", "semgrep-child"):
         _forge(run, sub, "llm")
@@ -211,10 +212,11 @@ def test_child_grant_subdirs_are_untrusted(tmp_path):
 
 def test_cc_dispatch_tools_exclude_write_capable_tools():
     # autonomous/ is a trusted review-record home at this module's
-    # load chokepoint, and the llm_analysis agent's per-finding
-    # `claude -p` sub-agent receives autonomous/ as its OS-level
-    # write grant — the ACTUAL guard is that child's CLI tool
-    # allowlist. This tie pins it: widening the allowlist with any
+    # load chokepoint. The llm_analysis agent's per-finding
+    # `claude -p` sub-agent now writes into an anonymous throwaway
+    # workspace rather than autonomous/ itself, but its CLI tool
+    # allowlist remains the guard against the sub-agent writing
+    # ANYWHERE parent-trusted. This tie pins it: widening it with any
     # write-capable tool means a hostile-repo-steered sub-agent can
     # mint review-grade coverage records in a trusted home, so the
     # _REVIEW_RECORD_SUBDIRS entry must move behind the refusal

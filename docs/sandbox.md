@@ -674,7 +674,9 @@ over-budget responses produce a 502 and an `upstream_failed` event.
 ### Proxy events
 
 Every CONNECT attempt is recorded and persisted to
-`{output}/proxy-events.jsonl`:
+`{events_output or output}/proxy-events.jsonl` (`events_output=` is the
+parent-side override for callers whose `output=` is a throwaway
+anonymous workspace):
 
 ```json
 {
