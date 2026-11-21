@@ -314,7 +314,7 @@ def _flagged_calls(text: str) -> list[tuple[ast.Call, str]]:
 # opener supplies core.atomic_fs nofollow/nonblock/regular-file admission.
 _TELEMETRY_APPEND_SOURCE = "12f53d3095eb4b1971939681425c4620c6e8ac87db567f7f1d06fecbd5823702"
 _TELEMETRY_APPEND_AST = "b92265c762a9e73fe57289b1fef587567d627fd6c02ae028392fae6cb0b70861"
-_TELEMETRY_APPEND_DEPENDENCY = "1321d4a8a54c21fbb7c6a50778c3ce6e14c7c753385b40a3cfdf228b5039650a"
+_TELEMETRY_APPEND_DEPENDENCY = "78d2b9049b4e73f926eaca3c536af8d1d1abc5304c8ed5fad44b5dc3da204b23"
 
 
 def _reviewed_hardened_append(rel, source, node, root):
