@@ -434,8 +434,14 @@ class TestHostileRows:
         # reads (a sibling suite's sys.modules purge can detach them).
         import core.json.utils as json_utils
         monkeypatch.setattr(json_utils, "_orjson", None)
-        monkeypatch.setitem(
-            journal_compact.loads.__globals__, "_orjson", None)
+        # Patch the function globals only when actually detached: when they
+        # are the live module's dict the second (setitem) patch captures the
+        # already-nulled value, and MonkeyPatch.undo replays setattr entries
+        # before setitem entries, so the stale None would be restored last
+        # and leak a disabled orjson binding to the rest of the worker.
+        if journal_compact.loads.__globals__ is not vars(json_utils):
+            monkeypatch.setitem(
+                journal_compact.loads.__globals__, "_orjson", None)
 
     def test_inf_cost_plant_cannot_mask_forged_carrier(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,

@@ -519,7 +519,12 @@ def test_compact_refuses_non_serializable_preserved_row(
     # sibling suite purges core.json.* from sys.modules read a
     # detached module the sys.modules-only patch misses.
     monkeypatch.setattr(json_utils, "_orjson", None)
-    monkeypatch.setitem(journal_mod.loads.__globals__, "_orjson", None)
+    # Only when actually detached: patching the live module's own dict twice
+    # makes the setitem capture the already-nulled value, and MonkeyPatch.undo
+    # replays setattr entries before setitem entries, restoring the stale
+    # None last and leaking a disabled orjson binding to the worker.
+    if journal_mod.loads.__globals__ is not vars(json_utils):
+        monkeypatch.setitem(journal_mod.loads.__globals__, "_orjson", None)
     project = tmp_path / "proj"
     project.mkdir()
     planted = (
