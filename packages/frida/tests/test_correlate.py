@@ -52,6 +52,43 @@ class TestCorrelateRun:
         assert manifest["match_count"] == 0
         assert not (tmp_path / "io-correlation.json").exists()
 
+    def test_match_manifest_carries_verification_receipt(self, tmp_path):
+        # The io-correlation receipt is the ATTRIBUTED execution fact
+        # of the frida family: ingest bytes reappeared in a later
+        # sink/exec argument of the same run. Its grade is read live
+        # from the evidence_grade exact-spelling registry so every
+        # consumer sees one vocabulary.
+        from core.audit import evidence_grade as eg
+
+        _write(tmp_path, [
+            _event(1.0, _ingest(b"GET /run?cmd=sentinel-token-xyz&x=1")),
+            _event(2.0, _exec(["/bin/sh", "-c", "sentinel-token-xyz"])),
+        ])
+        manifest = correlate_run(tmp_path)
+        assert manifest["match_count"] == 1
+        assert manifest["receipt_stamp"] == "frida:token-at-sink"
+        assert manifest["evidence_role"] == "verification"
+        assert manifest["evidence_role"] == (
+            eg.registered_spelling_role(manifest["receipt_stamp"]))
+        assert eg.is_verification_evidence(manifest["receipt_stamp"])
+        # The written artifact carries the same grade.
+        on_disk = json.loads(
+            (tmp_path / "io-correlation.json").read_text(encoding="utf-8"))
+        assert on_disk["receipt_stamp"] == "frida:token-at-sink"
+
+    def test_matchless_run_mints_no_stamp(self, tmp_path):
+        # Direction two of the receipt discipline: a run that proved
+        # no flow has NO grade keys at all — there is no spelling for
+        # "no flow observed", so an absence claim is unrepresentable.
+        _write(tmp_path, [
+            _event(1.0, _ingest(b"just-input-here-nothing")),
+            _event(2.0, _exec(["/bin/ls", "-la"])),
+        ])
+        manifest = correlate_run(tmp_path)
+        assert manifest["match_count"] == 0
+        assert "receipt_stamp" not in manifest
+        assert "evidence_role" not in manifest
+
     def test_short_overlaps_do_not_match(self, tmp_path):
         # Sub-threshold shared substrings are coincidence.
         _write(tmp_path, [

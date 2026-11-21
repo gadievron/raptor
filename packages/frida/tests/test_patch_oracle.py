@@ -101,6 +101,36 @@ class TestVerdicts:
         assert report["verdict"] == "inconclusive"
         assert report["confidence"] is None
 
+    def test_report_evidence_role_is_detection_or_none(
+            self, tmp_path, binaries, monkeypatch):
+        """Grade discipline (shared evidence_grade vocabulary):
+        "closed" rests on an absence observation and "still_fires" on
+        unattributed sink-watch presence — both detection role, never
+        a proof-grade verdict a consumer could convict or refute on
+        alone. "inconclusive" demonstrated nothing and carries no
+        role at all."""
+        before, after = binaries
+        cases = {
+            "closed": {"before": [_sink_event("system", before.name)],
+                       "after": []},
+            "still_fires": {"before": [_sink_event("system", before.name)],
+                            "after": [_sink_event("system", after.name)]},
+            "inconclusive": {"before": [], "after": []},
+        }
+        for i, (verdict, events) in enumerate(cases.items()):
+            monkeypatch.setattr(patch_oracle, "_run_side",
+                                _fake_run_side(events))
+            report = verify_patch(before, after, ["system"],
+                                  tmp_path / f"out{i}")
+            assert report["verdict"] == verdict
+            expected = ("detection"
+                        if verdict in ("closed", "still_fires") else None)
+            assert report["evidence_role"] == expected, verdict
+            # Structural: no verdict may ever claim verification grade
+            # — a "closed" patch-oracle verdict is an absence claim
+            # and must never serve as a proof-grade refuter.
+            assert report["evidence_role"] != "verification", verdict
+
     def test_unattributed_sink_does_not_count(self, tmp_path, binaries,
                                               monkeypatch):
         """A sink firing from a foreign module is not evidence."""

@@ -273,6 +273,18 @@ def verify_patch(
         "verdict": verdict,
         "confidence": confidence,
         "reason": reason,
+        # Evidence role in the shared evidence_grade vocabulary.
+        # "closed" rests on an ABSENCE observation (the sink did not
+        # fire post-patch) and "still_fires" is an unattributed
+        # sink-watch presence fact, so both are detection role:
+        # corroboration for a patch review, never a proof-grade
+        # verdict — dynamic evidence proves presence, never absence,
+        # so no patch-oracle report may refute (or confirm the fix
+        # of) a finding on its own. "inconclusive" carries no role
+        # at all: nothing was demonstrated.
+        "evidence_role": ("detection"
+                          if verdict in ("closed", "still_fires")
+                          else None),
         "sinks": list(sinks),
         "poc": str(poc) if poc is not None else None,
         "finding_location": (

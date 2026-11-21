@@ -190,6 +190,19 @@ def correlate_run(run_dir: Path | str) -> dict[str, Any]:
         "min_match_len": _MIN_MATCH,
     }
     if matches:
+        # Grade in the evidence_grade exact-spelling vocabulary: ingest
+        # bytes reappearing in a later sink/exec argument of the same
+        # instrumented run is an ATTRIBUTED execution fact —
+        # verification role, the one frida receipt family that can back
+        # a recorded finding. A match-less run writes no manifest and
+        # mints no stamp: the correlation proved nothing, and there is
+        # no spelling for "no flow observed" (presence, never absence).
+        from core.audit.evidence_grade import registered_spelling_role
+
+        manifest["receipt_stamp"] = "frida:token-at-sink"
+        manifest["evidence_role"] = registered_spelling_role(
+            manifest["receipt_stamp"])
+
         from core.json import save_json
 
         save_json(run_dir / "io-correlation.json", manifest)
