@@ -150,8 +150,17 @@ def test_native_capture_finalization_reaches_current_reader(tmp_path, monkeypatc
     assert result.returncode == 0, result.stderr
     assert observed
     assert summary.get_evidence_write_failure(run) is failed_verification
-    profile = observe_profile.parse_observe_log(
+    untrusted = observe_profile.parse_observe_log(
         run, expected_nonce=nonce, sandbox_info={'nonce_delivery': 'anonymous_fd'},
+        current_run=True,
+    )
+    assert untrusted.nonce_trusted is False
+    assert untrusted.capture_incomplete is failed_verification
+    # Both native setups above enforce the supplied read allowlist. Report
+    # that posture as well as the protected handoff to the current reader.
+    profile = observe_profile.parse_observe_log(
+        run, expected_nonce=nonce,
+        sandbox_info={'nonce_delivery': 'anonymous_fd', 'restrict_reads': True},
         current_run=True,
     )
     assert profile.nonce_trusted is True
