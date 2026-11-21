@@ -749,7 +749,63 @@ def test_run_grants_file_granular_read_scope_to_wordlists(
         str(params.resolve()),
     ]
     assert captured["kwargs"].get("target") is None
-    assert captured["kwargs"]["output"] == str(tmp_path / "ffuf")
+    # The write grant is the anonymous workspace, never the run-marker
+    # work_dir; the egress audit stream routes to work_dir parent-side.
+    assert captured["kwargs"]["output"] != str(tmp_path / "ffuf")
+    assert captured["kwargs"]["events_output"] == str(tmp_path / "ffuf")
+
+
+def test_run_binds_anonymous_workspace_and_harvests_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The child's OS-level write grant must be a throwaway scratch dir
+    whose path carries no run/project marker — the mountinfo root field
+    of the writable bind and the fake-HOME path re-leak the bind source
+    to the sandboxed child, and ffuf talks to a live, possibly hostile
+    web target. The report is harvested into the durable work_dir
+    afterwards and the workspace is gone when run() returns."""
+    out_dir = tmp_path / "scan-acme-webapp-20260101"
+    out_dir.mkdir()
+    words = tmp_path / "words.txt"
+    words.write_text("admin\n", encoding="utf-8")
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _binary: '/usr/bin/ffuf')
+
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["kwargs"] = kwargs
+        output_path = Path(cmd[cmd.index("-o") + 1])
+        captured["child_output"] = output_path
+        output_path.write_text(
+            json.dumps({"results": [
+                {"url": "https://example.test/admin", "status": 200},
+            ]}),
+            encoding="utf-8",
+        )
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr("packages.web.ffuf.run_untrusted_networked", fake_run)
+
+    runner = FfufRunner("https://example.test", out_dir)
+    report = runner.run(FfufConfig(wordlist=words))
+
+    work_dir = out_dir / "ffuf"
+    bound = Path(captured["kwargs"]["output"])
+    # The write grant lies outside the run dir and carries no trace of
+    # the run-marker name.
+    assert not bound.is_relative_to(out_dir)
+    assert "scan-acme-webapp-20260101" not in str(bound)
+    # The egress audit stream routes parent-side to the durable home.
+    assert captured["kwargs"]["events_output"] == str(work_dir)
+    # The workspace was torn down with the run...
+    assert not bound.exists()
+    assert not captured["child_output"].exists()
+    # ...after the report was harvested to its stable location.
+    results_file = work_dir / "ffuf_results.json"
+    assert results_file.exists()
+    assert report["output_file"] == str(results_file)
+    assert report["result_count"] == 1
 
 
 def test_run_resolves_symlinked_wordlists_for_argv_and_scope(

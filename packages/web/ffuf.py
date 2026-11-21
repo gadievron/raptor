@@ -12,7 +12,9 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
+import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -21,6 +23,7 @@ from urllib.parse import urljoin, urlparse
 from core.json import save_json
 from core.json.bounded import load_json_bounded
 from core.logging import get_logger
+from core.run.workdir import exec_workdir
 from core.sandbox import run_untrusted_networked
 from core.security.redaction import is_secret_field_name, redact_secrets
 
@@ -1122,14 +1125,14 @@ class FfufRunner:
             )
 
         self.out_dir.mkdir(parents=True, exist_ok=True)
-        # The child's artifacts (and its sandbox WRITE GRANT below)
-        # live in a dedicated subdir, never the run root: the run root
+        # Parent-tier artifact subdir, never the run root: the run root
         # holds parent-tier state — coverage-*.json records above all,
         # which the coverage load chokepoint trusts at parent tier
-        # (core/coverage/record.py) — and ffuf parses hostile server
-        # bytes; a root-granted child could plant a top-level
-        # coverage-llm.json and mint review credit. Same subdir-grant
-        # pattern as the nuclei/AFL/crash-replay lanes.
+        # (core/coverage/record.py). Since the anonymous-workspace
+        # conversion below the child never writes here at all; the dir
+        # keeps the harvested report, the persisted egress audit
+        # stream, and (under reveal_secrets) the debugging copy of the
+        # config TOML.
         work_dir = self.out_dir / "ffuf"
         work_dir.mkdir(parents=True, exist_ok=True)
         output_file = work_dir / "ffuf_results.json"
@@ -1139,16 +1142,6 @@ class FfufRunner:
         # error and backstop-timeout paths.
         output_file.unlink(missing_ok=True)
         config_content = self.build_config_file_content(config)
-        config_file = (
-            work_dir / "ffuf_config.toml" if config_content is not None else None
-        )
-        cmd = self.build_command(config, output_file, config_file=config_file)
-        # build_command uses the operator-facing name; swap in the
-        # resolved real path for the exec.
-        cmd[0] = binary_path
-        redacted_cmd = self._redact_command(cmd)
-        logger.info("Running sandboxed ffuf: %s", ' '.join(redacted_cmd))
-
 
         # ffuf's own -maxtime (== max_runtime) is the real cap; the
         # subprocess timeout is a backstop for a wedged process. It gets
@@ -1158,77 +1151,119 @@ class FfufRunner:
         timed_out = False
         returncode: int | None = None
         stderr_text = ""
-        try:
-            if config_file is not None and config_content is not None:
-                # work_dir is the sandbox's WRITABLE scope, so a hostile
-                # child from a PREVIOUS run could have left this path
-                # behind as a symlink aimed anywhere on disk; O_EXCL
-                # after the unlink refuses to follow anything and
-                # guarantees a fresh 0600 inode for the credentials.
-                # Residuals accepted by design: the child itself must be
-                # able to read its own config (same UID, inside the
-                # writable scope), and 0600 never defends against
-                # same-UID processes — the channel this closes is the
-                # world-readable /proc/<pid>/cmdline.
-                config_file.unlink(missing_ok=True)
-                fd = os.open(
-                    config_file,
-                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                    0o600,
-                )
-                with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                    handle.write(config_content)
-                logger.info(
-                    "ffuf credential-bearing options delivered via %s (0600): %s",
-                    config_file.name,
-                    self._describe_delivered(config),
-                )
-            # File-granular read scope: the sandbox needs the wordlist
-            # FILES, not their parent directories — a wordlist under
-            # /etc must not put all of /etc in the read allowlist. Both
-            # enforcement tiers support file paths (Landlock path_beneath
-            # rules on O_PATH fds; mount-ns per-file bind with stub
-            # creation).
-            wordlist_files = list(dict.fromkeys(
-                [str(config.wordlist)]
-                + [str(path) for path, _keyword in config.extra_wordlists]
-                + ([str(config.request_file)] if config.request_file else [])
-            ))
-            completed = run_untrusted_networked(
-                cmd,
-                # The child's write grant is its work subdir, NOT the
-                # run root (see work_dir above).
-                output=str(work_dir),
-                readable_paths=wordlist_files,
-                proxy_hosts=[target_host],
-                fake_home=True,
-                tool_paths=[str(Path(binary_path).parent)],
-                caller_label="web-ffuf",
-                timeout=config.max_runtime + grace,
-                capture_output=True,
-                text=True,
+        # Anonymous workspace: the child's OS-level write grant is a
+        # fresh throwaway scratch dir, never work_dir. work_dir's path
+        # carries the run/project marker name, and both the mountinfo
+        # root field of the writable bind and the fake-HOME path in the
+        # child's environment re-leak the bind source path — ffuf runs
+        # against a live, possibly hostile web target, and a
+        # fingerprinting target could attribute the analysis run from
+        # either. The config TOML is STAGED into the workspace, the
+        # report is HARVESTED out of it afterwards, and the egress
+        # audit stream goes straight to work_dir parent-side via
+        # events_output=.
+        with tempfile.TemporaryDirectory(
+                prefix="ws-", dir=exec_workdir()) as _ws:
+            workspace = Path(_ws)
+            child_output = workspace / "ffuf_results.json"
+            config_file = (
+                workspace / "ffuf_config.toml"
+                if config_content is not None else None
             )
-            returncode = completed.returncode
-            stderr_text = completed.stderr or ""
-        except subprocess.TimeoutExpired as exc:
-            timed_out = True
-            stderr_raw = exc.stderr
-            if isinstance(stderr_raw, bytes):
-                stderr_text = stderr_raw.decode("utf-8", errors="replace")
-            else:
-                stderr_text = stderr_raw or ""
-            logger.warning(
-                "ffuf did not exit at -maxtime %ds; killed after %ds grace — "
-                "the report reflects only what ffuf flushed before the kill",
-                config.max_runtime,
-                grace,
-            )
-        finally:
-            # Credentials should not persist at rest beyond the run; the
-            # redacted log line above records what was delivered.
-            # reveal_secrets keeps the file for local debugging.
-            if config_file is not None and not self.reveal_secrets:
-                config_file.unlink(missing_ok=True)
+            cmd = self.build_command(config, child_output, config_file=config_file)
+            # build_command uses the operator-facing name; swap in the
+            # resolved real path for the exec.
+            cmd[0] = binary_path
+            redacted_cmd = self._redact_command(cmd)
+            logger.info("Running sandboxed ffuf: %s", ' '.join(redacted_cmd))
+
+            try:
+                if config_file is not None and config_content is not None:
+                    # The workspace is fresh and parent-created, so no
+                    # prior-run child can have planted anything at this
+                    # path; O_EXCL + O_NOFOLLOW keeps that an invariant
+                    # rather than an assumption. 0600 closes the
+                    # world-readable /proc/<pid>/cmdline channel the
+                    # -config delivery exists for — it never defends
+                    # against the same-UID child itself, which must read
+                    # its own config.
+                    fd = os.open(
+                        config_file,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                        0o600,
+                    )
+                    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                        handle.write(config_content)
+                    logger.info(
+                        "ffuf credential-bearing options delivered via %s (0600): %s",
+                        config_file.name,
+                        self._describe_delivered(config),
+                    )
+                # File-granular read scope: the sandbox needs the wordlist
+                # FILES, not their parent directories — a wordlist under
+                # /etc must not put all of /etc in the read allowlist. Both
+                # enforcement tiers support file paths (Landlock path_beneath
+                # rules on O_PATH fds; mount-ns per-file bind with stub
+                # creation).
+                wordlist_files = list(dict.fromkeys(
+                    [str(config.wordlist)]
+                    + [str(path) for path, _keyword in config.extra_wordlists]
+                    + ([str(config.request_file)] if config.request_file else [])
+                ))
+                completed = run_untrusted_networked(
+                    cmd,
+                    # Throwaway write grant (see the workspace comment
+                    # above) — never work_dir.
+                    output=str(workspace),
+                    # Durable home for proxy-events.jsonl + its MAC'd
+                    # count sidecar. Parent-side only; left defaulting
+                    # to output=, the egress audit record would be
+                    # destroyed with the workspace.
+                    events_output=str(work_dir),
+                    readable_paths=wordlist_files,
+                    proxy_hosts=[target_host],
+                    fake_home=True,
+                    tool_paths=[str(Path(binary_path).parent)],
+                    caller_label="web-ffuf",
+                    timeout=config.max_runtime + grace,
+                    capture_output=True,
+                    text=True,
+                )
+                returncode = completed.returncode
+                stderr_text = completed.stderr or ""
+            except subprocess.TimeoutExpired as exc:
+                timed_out = True
+                stderr_raw = exc.stderr
+                if isinstance(stderr_raw, bytes):
+                    stderr_text = stderr_raw.decode("utf-8", errors="replace")
+                else:
+                    stderr_text = stderr_raw or ""
+                logger.warning(
+                    "ffuf did not exit at -maxtime %ds; killed after %ds grace — "
+                    "the report reflects only what ffuf flushed before the kill",
+                    config.max_runtime,
+                    grace,
+                )
+            finally:
+                # Credentials do not persist at rest beyond the run —
+                # the workspace teardown destroys the config TOML on
+                # every exit path; the redacted log line above records
+                # what was delivered. reveal_secrets keeps a debugging
+                # copy, which must survive the teardown, so harvest a
+                # fresh 0600 inode into work_dir.
+                if config_file is not None and self.reveal_secrets:
+                    self._harvest_regular_file(
+                        config_file, work_dir / "ffuf_config.toml",
+                    )
+            # Harvest the report — written on graceful exit, or partially
+            # flushed before the backstop kill — into its stable
+            # parent-side location. O_NOFOLLOW + S_ISREG on the source:
+            # the child could leave a symlink or FIFO at the report name,
+            # and following it would copy (or hang on) something that is
+            # not ffuf's report. The fresh-0600-inode destination write
+            # also displaces anything a pre-conversion child planted at
+            # the predictable work_dir name.
+            self._harvest_regular_file(child_output, output_file)
 
         results: list[dict[str, Any]] = []
         if output_file.exists():
@@ -1266,6 +1301,45 @@ class FfufRunner:
             "results": summarized_results,
             "stderr": self._redact(self._redact_stderr(stderr_text.strip())),
         }
+
+    @staticmethod
+    def _harvest_regular_file(src: Path, dst: Path) -> bool:
+        """Copy a child-written workspace file to its parent-side home.
+
+        The source dir was the sandbox's write grant, so the child
+        chooses what sits at the name: O_NOFOLLOW refuses a planted
+        symlink (copying whatever it aims at into the run dir),
+        fstat S_ISREG refuses FIFOs/devices (a FIFO would hang the
+        parent forever). The destination is a fresh 0600 inode —
+        the report may embed delivered credentials until the scrub
+        pass rewrites it. Size is bounded upstream by the sandbox's
+        file-size rlimit on the child, exactly as when the child
+        wrote into the run dir directly. Missing source (ffuf died
+        before flushing) is a normal no-op."""
+        try:
+            fd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW)
+        except OSError:
+            return False
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                logger.warning(
+                    "refusing to harvest %s: not a regular file", src.name,
+                )
+                return False
+            dst.unlink(missing_ok=True)
+            out_fd = os.open(
+                dst, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+            )
+            with os.fdopen(out_fd, "wb") as out:
+                while chunk := os.read(fd, 1 << 20):
+                    out.write(chunk)
+            return True
+        except OSError as exc:
+            logger.warning("could not harvest %s: %s", src.name, exc)
+            return False
+        finally:
+            os.close(fd)
 
     @staticmethod
     def _restrict_report(output_file: Path) -> None:
