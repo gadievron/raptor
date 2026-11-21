@@ -255,8 +255,11 @@ def test_invoke_cc_simple_binds_anonymous_workspace_not_out_dir(tmp_path):
 
     # The egress audit stream (proxy-events.jsonl + count sidecar)
     # must NOT die with the workspace: its durable home is out_dir,
-    # declared via the parent-side-only events_output kwarg.
+    # declared via the parent-side-only events_output kwarg. The same
+    # goes for --audit evidence (audit JSONL, degraded marker,
+    # floor-refusal records — default home `audit_run_dir or output`).
     assert kwargs["events_output"] == str(out_dir)
+    assert kwargs["audit_run_dir"] == str(out_dir)
 
 
 def test_invoke_cc_simple_caller_label_set(captured_helper_kwargs, tmp_path):

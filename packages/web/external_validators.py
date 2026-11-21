@@ -312,6 +312,12 @@ class ExternalValidatorRunner:
                     # to output=, the egress audit record would be
                     # destroyed with the workspace.
                     events_output=str(run_dir),
+                    # Same decoupling for --audit evidence (audit
+                    # JSONL, degraded marker, floor-refusal records):
+                    # their default home is `audit_run_dir or output`,
+                    # and triage reads them from the same durable dir
+                    # as the proxy events.
+                    audit_run_dir=str(run_dir),
                     readable_paths=[str(templates_dir)],
                     proxy_hosts=proxy_hosts,
                     fake_home=True,
@@ -359,7 +365,9 @@ class ExternalValidatorRunner:
 
         output_file = run_dir / f"nuclei-results{suffix}.jsonl"
         # Atomic write (planted-symlink defence at the predictable
-        # artifact name in the reused, child-writable run dir).
+        # artifact name — the reused run dir was child-writable before
+        # the anonymous-workspace conversion, so legacy plants may
+        # still sit there).
         write_text_atomically(output_file, self._redact(stdout))
 
         matches_by_target: dict[str, list[dict[str, Any]]] = {u: [] for u in targets}

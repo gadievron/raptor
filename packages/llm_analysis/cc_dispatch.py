@@ -194,6 +194,12 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
                 # workspace, the default destination would be
                 # destroyed with it.
                 events_output=str(out_dir),
+                # Same decoupling for --audit evidence (audit JSONL,
+                # degraded marker, floor-refusal records): their
+                # default home is `audit_run_dir or output`, and
+                # triage reads them from the same durable dir as the
+                # proxy events.
+                audit_run_dir=str(out_dir),
                 caller_label="claude-sub-agent",
             )
     except subprocess.TimeoutExpired:

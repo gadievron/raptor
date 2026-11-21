@@ -180,8 +180,12 @@ def test_batch_binds_anonymous_workspace_and_harvests_transcripts(
     # the run-marker name.
     assert not bound.is_relative_to(out_dir)
     assert "scan-acme-webapp-20260101" not in str(bound)
-    # The egress audit stream routes parent-side to the durable home.
+    # The egress audit stream routes parent-side to the durable home,
+    # and --audit evidence (audit JSONL, degraded marker, floor-refusal
+    # records — default home `audit_run_dir or output`) must not die
+    # with the workspace either.
     assert seen["kwargs"]["events_output"] == str(run_dir)
+    assert seen["kwargs"]["audit_run_dir"] == str(run_dir)
     # Staged child inputs live inside the workspace, not behind a
     # run_dir-pathed readable_paths grant.
     assert seen["targets_path"].is_relative_to(bound)
@@ -277,6 +281,39 @@ def test_credential_headers_ride_a_private_file_not_argv(
     assert secret in seen["content"]
     # The header file must not outlive the run.
     assert not (tmp_path / "external-validators" / "nuclei-headers.txt").exists()
+
+
+def test_reveal_secrets_harvests_headers_file_to_run_dir(
+    tmp_path, templates_dir, monkeypatch
+):
+    """Pre-conversion, reveal_secrets suppressed the headers-file unlink
+    and left it in the run dir for debugging; post-conversion the
+    workspace teardown destroys the staged copy, so the keep-on-reveal
+    contract is met by harvesting it out first — same path, 0600."""
+    patch_module_attribute(monkeypatch, _mock_consumer_shutil, 'shutil', 'which', lambda _b: '/usr/bin/nuclei')
+
+    def fake_run(cmd, **kwargs):
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        "packages.web.external_validators.run_untrusted_networked", fake_run
+    )
+
+    secret = "Authorization: Bearer nuclei-secret-42"
+    runner = ExternalValidatorRunner(
+        base_url="https://example.test",
+        out_dir=tmp_path,
+        policy=WebExecutionPolicy.for_target("https://example.test"),
+        reveal_secrets=True,
+        nuclei_config=NucleiConfig(templates_dir=templates_dir,
+                                   headers=(secret,)),
+    )
+    runner.run([_finding("https://example.test/a")], ["nuclei"])
+
+    kept = tmp_path / "external-validators" / "nuclei-headers.txt"
+    assert kept.is_file()
+    assert secret in kept.read_text(encoding="utf-8")
+    assert kept.stat().st_mode & 0o777 == 0o600
 
 
 def test_jsonl_matches_attributed_per_target(tmp_path, templates_dir, monkeypatch):
