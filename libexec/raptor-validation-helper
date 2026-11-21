@@ -3947,9 +3947,50 @@ def prepare_F(workdir, target=None):
 
     # --- Verdict-to-status mapping ---
     for finding in data.get("findings", []):
-        verdict = finding.get("feasibility", {}).get("verdict", "")
+        feas = finding.get("feasibility", {})
+        verdict = feas.get("verdict", "") if isinstance(feas, dict) else ""
         if verdict and verdict in VERDICT_MAP:
+            # Same provenance bar as the derive loop above: a verdict
+            # only maps to a tier status when its record authenticates.
+            # The sanitiser strips verdicts from unverified "analyzed"
+            # records, but a forger can pre-set a verdict on any OTHER
+            # status ({status:"pending", verdict:"unlikely"} maps to
+            # confirmed_blocked, the suppression tier) and that shape
+            # survives every sanitisation pass. Legitimate verdicts
+            # are always stamped at the point they are minted (the
+            # derive loop above, raptor-run-feasibility, the
+            # orchestrator's Stage E), so an unverifiable
+            # verdict-carrier is a forgery: strip the verdict and
+            # demote the record to hint tier so re-runs cannot
+            # re-launder it either. The one exemption is a verdict
+            # mapping to "confirmed_unverified" (unknown / error /
+            # binary_not_found): that IS the demotion tier — the same
+            # value the sanitiser clamps unverified tier claims to —
+            # so applying it without a stamp is the fail-closed
+            # direction, and refusing it would overstate the finding
+            # as plain "confirmed" via the status fallback below.
             mapped = VERDICT_MAP[verdict]
+            if mapped != "confirmed_unverified" and not (
+                    feas.get("status") == "analyzed"
+                    and verify_feasibility(finding, workdir)):
+                print(
+                    f"  {_sft(str(finding.get('id', '?')), max_len=120)}: "
+                    "unverified feasibility verdict "
+                    f"{_sft(str(verdict), max_len=64)} — refusing the "
+                    "mapping; blockers kept as hint-tier prose",
+                    file=sys.stderr,
+                )
+                hints: list[str] = []
+                for field_name in ("imported_blockers", "chain_breaks"):
+                    value = feas.get(field_name)
+                    if isinstance(value, list):
+                        hints.extend(
+                            b for b in value if isinstance(b, str))
+                finding["feasibility"] = Feasibility(
+                    status="not_applicable",
+                    imported_blockers=list(dict.fromkeys(hints)),
+                ).to_dict()
+                continue
             finding["final_status"] = mapped
             # Sync status with final_status so the report reflects Stage E results
             old_status = finding.get("status", "")

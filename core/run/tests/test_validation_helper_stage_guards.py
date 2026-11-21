@@ -410,9 +410,15 @@ class TestPrepareFToleratesHostileShapes:
     stage (the s10 consumed-stage-file class, unswept at these
     sites)."""
 
-    def _data(self):
+    def _data(self, workdir: Path) -> dict:
+        from core.witness.provenance import stamp_feasibility
         good = _finding("F-1")
-        good["feasibility"] = {"verdict": "likely_exploitable"}
+        # Stamped like the mechanical stages mint it, so the verdict
+        # mapping still runs (and prints) for the well-formed row —
+        # unstamped verdict carriers are demoted, not mapped.
+        good["feasibility"] = {"status": "analyzed",
+                               "verdict": "likely_exploitable"}
+        stamp_feasibility(good, good["feasibility"], workdir)
         good["stage_b_summary"] = {"proximity": 5}
         idless = _finding("drop-me")
         del idless["id"]
@@ -423,7 +429,7 @@ class TestPrepareFToleratesHostileShapes:
     def test_prepare_f_survives_idless_and_string_summary(
             self, tmp_path, capsys):
         mod = _load_helper()
-        _write(tmp_path, "findings.json", self._data())
+        _write(tmp_path, "findings.json", self._data(tmp_path))
         mod.prepare_F(str(tmp_path))  # must not raise
         out = capsys.readouterr().out
         assert "F-1" in out
