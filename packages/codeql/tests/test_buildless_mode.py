@@ -96,6 +96,12 @@ def _run_create(db_manager, tmp_path, *, language, build_system=None,
     def fake_run(cmd, **kwargs):
         if "database" in cmd and "create" in cmd:
             captured["cmd"] = list(cmd)
+            # Honour the real contract: a successful create leaves an
+            # actual database directory at the command's DB target —
+            # the manager's dirent-type gate refuses anything else.
+            staging = Path(cmd[3])
+            staging.mkdir(parents=True, exist_ok=True)
+            (staging / "db-info.json").write_text("{}")
         r = MagicMock()
         r.returncode = 0
         r.stdout = ""
@@ -711,6 +717,10 @@ class TestBuildlessFallback:
                 if "--build-mode=none" in cmd:
                     r.returncode = 0
                     r.stderr = "Finalizing database.\n"
+                    # Real contract: success leaves an actual DB dir.
+                    staging = Path(cmd[3])
+                    staging.mkdir(parents=True, exist_ok=True)
+                    (staging / "db-info.json").write_text("{}")
                 else:
                     r.returncode = 1
                     r.stderr = "autobuild failed\n"

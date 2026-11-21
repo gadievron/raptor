@@ -68,6 +68,11 @@ def _run_traced_create(db_manager, tmp_path):
                 # Recorded at exec time: the wrapper must exist on the
                 # host while the sandboxed build runs.
                 captured["script_exists_at_exec"] = script.exists()
+            # Real contract: success leaves an actual DB dir at the
+            # command's DB target (the dirent-type gate refuses else).
+            staging = Path(cmd[3])
+            staging.mkdir(parents=True, exist_ok=True)
+            (staging / "db-info.json").write_text("{}")
         r = MagicMock()
         r.returncode = 0
         r.stdout = ""

@@ -1176,10 +1176,40 @@ class DatabaseManager:
                 continue
         return deleted
 
+    @staticmethod
+    def _is_real_directory(path: Path) -> bool:
+        """lstat-based dirent-type gate: True only for an actual
+        directory. A symlink (even one resolving to a directory), a
+        regular file or a FIFO refuses — the dirent is never
+        followed. Missing/unstatable paths refuse too."""
+        try:
+            return stat.S_ISDIR(os.lstat(path).st_mode)
+        except OSError:
+            return False
+
+    @staticmethod
+    def _remove_planted_dirent(path: Path, language: str) -> None:
+        """Remove a non-directory dirent a hostile build left where a
+        database was expected. ``os.unlink`` never follows, so only
+        the planted entry itself is removed; a still-real directory is
+        never reachable here (callers gate on _is_real_directory)."""
+        logger.error(
+            "✗ %s database path is not a real directory — the traced "
+            "build swapped a symlink or non-directory into place; "
+            "removing the planted entry and refusing the build output",
+            language,
+        )
+        try:
+            os.unlink(path)
+        except OSError as e:
+            logger.error(
+                "could not remove planted database entry %s: %s", path, e,
+            )
+
     def _detach_staging_from_gc(
         self, staging_path: Path, language: str, *,
         slot_dir: Path | None = None,
-    ) -> Path:
+    ) -> Path | None:
         """Move a kept-as-final staging DB out of the staging GC's scope.
 
         The promote-failure fallbacks hand the caller a DB living
@@ -1196,6 +1226,12 @@ class DatabaseManager:
         Defaults to the staging path's parent for flat layouts. On
         rename failure the original path is returned: the GC race
         remains for that run, but the caller still has a usable DB.
+
+        Returns ``None`` when the detached entry is not a real
+        directory: the returned path becomes the analysed database —
+        a symlink here would ride into ``database analyze``'s WRITABLE
+        sandbox bind, so a swapped dirent (a build orphan holds write
+        on the workspace hierarchy) is removed, never served.
         """
         kept = (
             slot_dir if slot_dir is not None else staging_path.parent
@@ -1207,7 +1243,13 @@ class DatabaseManager:
                 "Could not move fallback DB out of staging-GC scope (%s); "
                 "%s remains subject to the 1h staging TTL", e, staging_path,
             )
+            if not self._is_real_directory(staging_path):
+                self._remove_planted_dirent(staging_path, language)
+                return None
             return staging_path
+        if not self._is_real_directory(kept):
+            self._remove_planted_dirent(kept, language)
+            return None
         return kept
 
     def _evict_stale_canonical(
@@ -1921,6 +1963,27 @@ class DatabaseManager:
 
             success = result.returncode == 0
 
+            # Dirent-type gate on the build output. A traced build runs
+            # the untrusted repo's own scripts with a write grant on the
+            # staging hierarchy, and Landlock grants follow inodes — an
+            # orphaned build child keeps that grant after the CLI exits
+            # and can swap the staging DB dirent for a symlink before
+            # promote. Promoted to canonical, a symlink would ride into
+            # `database analyze` as a WRITABLE sandbox bind aimed
+            # wherever it points. lstat the dirent itself (never
+            # followed); anything but a real directory refuses the
+            # build output outright. The promote sites re-check AFTER
+            # their rename — the grant cannot reach slot_dir, so the
+            # post-rename lstat is decision-grade against a swap that
+            # lands inside this gate-to-rename window.
+            staging_is_real = self._is_real_directory(staging_path)
+            if success and not staging_is_real:
+                success = False
+                errors.append(
+                    f"{language} staging database is not a real "
+                    "directory after the build — output refused"
+                )
+
             if success and buildless:
                 # Degradation visibility: silently reduced coverage
                 # must not read as full coverage in the run log.
@@ -1964,7 +2027,10 @@ class DatabaseManager:
                 # build-tool error) lands in the staging DB's log dir.
                 # Losing it turned every creation failure into a manual
                 # re-run under a debugger.
-                _diag = self._salvage_creation_log(staging_path)
+                _diag = (
+                    self._salvage_creation_log(staging_path)
+                    if staging_is_real else None
+                )
                 if _diag:
                     errors.append(_diag[:2000])
                     logger.error(
@@ -1980,18 +2046,24 @@ class DatabaseManager:
                 # Slot level, not inside the workspace — the workspace
                 # is reaped in the finally below, which would destroy
                 # the diagnostics it exists to preserve.
-                _failed = staging_work.parent / (
-                    f".staging-failed-{language}"
-                )
-                rmtree_hardened(_failed)
-                try:
-                    staging_path.rename(_failed)
-                    logger.error(
-                        "failed staging preserved for inspection at %s "
-                        "(auto-cleaned after 1h)", _failed,
+                if staging_is_real:
+                    _failed = staging_work.parent / (
+                        f".staging-failed-{language}"
                     )
-                except OSError:
-                    rmtree_hardened(staging_path)
+                    rmtree_hardened(_failed)
+                    try:
+                        staging_path.rename(_failed)
+                        logger.error(
+                            "failed staging preserved for inspection at %s "
+                            "(auto-cleaned after 1h)", _failed,
+                        )
+                    except OSError:
+                        rmtree_hardened(staging_path)
+                else:
+                    # Nothing diagnostic to preserve — a planted
+                    # symlink/non-directory must not be kept where an
+                    # operator (or a later rmtree) would follow it.
+                    self._remove_planted_dirent(staging_path, language)
                 final_path = None
                 did_promote = False
                 used_cached = False
@@ -2038,8 +2110,27 @@ class DatabaseManager:
                             str(canonical_path),
                         )
                     os.rename(staging_path, canonical_path)
-                    logger.info("✓ Database promoted to canonical: %s", canonical_path)
-                    did_promote = True
+                    # Post-rename re-check: the orphan's grant covers the
+                    # staging hierarchy, not slot_dir, so whatever the
+                    # rename installed at canonical is now beyond its
+                    # reach — this lstat verdict cannot be raced.
+                    if self._is_real_directory(canonical_path):
+                        logger.info(
+                            "✓ Database promoted to canonical: %s",
+                            canonical_path,
+                        )
+                        did_promote = True
+                    else:
+                        self._remove_planted_dirent(
+                            canonical_path, language,
+                        )
+                        final_path = None
+                        success = False
+                        errors.append(
+                            f"{language} staging database was swapped "
+                            "for a non-directory before promote — "
+                            "output refused"
+                        )
                 except OSError as e:
                     if e.errno in (errno.ENOTEMPTY, errno.EEXIST):
                         # Lost the promotion race. Validate the sibling's
@@ -2093,11 +2184,30 @@ class DatabaseManager:
                                 pass  # eviction failed; retry-promote will see ENOTEMPTY
                             try:
                                 os.rename(staging_path, canonical_path)
-                                logger.info(
-                                    "✓ Database promoted to canonical (after evicting broken sibling copy): %s",
-                                    canonical_path
-                                )
-                                did_promote = True
+                                # Same post-rename re-check as the
+                                # first promote site: canonical's
+                                # dirent now sits outside the build
+                                # grant, so this verdict is final.
+                                if self._is_real_directory(
+                                    canonical_path,
+                                ):
+                                    logger.info(
+                                        "✓ Database promoted to canonical (after evicting broken sibling copy): %s",
+                                        canonical_path
+                                    )
+                                    did_promote = True
+                                else:
+                                    self._remove_planted_dirent(
+                                        canonical_path, language,
+                                    )
+                                    final_path = None
+                                    success = False
+                                    errors.append(
+                                        f"{language} staging database "
+                                        "was swapped for a "
+                                        "non-directory before promote "
+                                        "— output refused"
+                                    )
                             except OSError:
                                 # Eviction may have failed, OR succeeded but
                                 # a third writer slipped into the empty slot.
@@ -2107,6 +2217,13 @@ class DatabaseManager:
                                     staging_path, language,
                                     slot_dir=canonical_path.parent,
                                 )
+                                if final_path is None:
+                                    success = False
+                                    errors.append(
+                                        f"{language} staging database "
+                                        "was swapped for a "
+                                        "non-directory — output refused"
+                                    )
                     else:
                         # Genuine I/O error (permissions, disk full); fall back
                         # to using staging directly so the caller's analysis
@@ -2120,6 +2237,13 @@ class DatabaseManager:
                             staging_path, language,
                             slot_dir=canonical_path.parent,
                         )
+                        if final_path is None:
+                            success = False
+                            errors.append(
+                                f"{language} staging database was "
+                                "swapped for a non-directory — output "
+                                "refused"
+                            )
 
             # Count files in database (use whatever path won out above).
             # Cosmetic-only: a force=True writer in another window could

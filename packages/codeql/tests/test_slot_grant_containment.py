@@ -19,6 +19,7 @@ All tests are fully mocked — no codeql CLI, no sandbox, no network.
 
 import errno
 import os
+import shutil
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -74,15 +75,19 @@ def _fake_sandbox_run(captured: dict, returncode: int = 0):
 def _create(db_manager, tmp_path, *, traced: bool = False,
             returncode: int = 0,
             command: str = "",
-            language: str = "python"):
+            language: str = "python",
+            run_factory=None):
     """Run create_database with the capturing fake sandbox; return
-    (result, captured, slot)."""
+    (result, captured, slot). ``run_factory(captured)`` substitutes a
+    custom sandbox fake (hostile-build simulations)."""
     captured: dict = {}
     repo = tmp_path / "repo"
     repo.mkdir(exist_ok=True)
     canonical = db_manager.db_root / "abc" / f"{language}-db"
+    fake = (run_factory(captured) if run_factory
+            else _fake_sandbox_run(captured, returncode))
     with patch('core.sandbox.run',
-               side_effect=_fake_sandbox_run(captured, returncode)), \
+               side_effect=fake), \
          patch.object(db_manager, 'get_codeql_version',
                       return_value="2.26.3"), \
          patch.object(db_manager, '_count_database_files', return_value=1), \
@@ -224,6 +229,171 @@ class TestPromoteFailureFallback:
         assert kept.name.startswith(".kept-cpp-")
         assert (kept / "codeql-database.yml").exists()
         assert not staging_db.exists()
+
+
+class TestHostileStagingSwap:
+    """An orphaned traced-build child keeps the Landlock write grant on
+    the staging hierarchy after the CLI exits (grants follow inodes),
+    so it can swap the staging ``<lang>-db`` dirent for a symlink in
+    the create-exit → promote window. Promoted to canonical, that
+    symlink would ride into ``database analyze`` as a WRITABLE sandbox
+    bind aimed at the victim. The grant cannot reach slot_dir, so the
+    manager's lstat gates (pre-promote, post-rename, detach) must
+    refuse the build output and never save metadata over it."""
+
+    @staticmethod
+    def _swap_after_build(victim: Path):
+        """run_factory: build normally, then swap the staging DB for a
+        symlink before the sandbox call returns."""
+        def factory(captured: dict):
+            inner = _fake_sandbox_run(captured)
+
+            def fake_run(cmd, **kwargs):
+                r = inner(cmd, **kwargs)
+                if "database" in cmd and "create" in cmd:
+                    staging_db = Path(cmd[3])
+                    shutil.rmtree(staging_db)
+                    staging_db.symlink_to(
+                        victim, target_is_directory=True)
+                return r
+
+            return fake_run
+        return factory
+
+    def _victim(self, tmp_path: Path) -> Path:
+        victim = tmp_path / "victim"
+        victim.mkdir()
+        (victim / "precious").write_text("x")
+        return victim
+
+    def test_swapped_staging_refused_before_promote(
+            self, db_manager, tmp_path):
+        victim = self._victim(tmp_path)
+        result, _captured, slot = _create(
+            db_manager, tmp_path,
+            run_factory=self._swap_after_build(victim))
+        assert result.success is False
+        assert result.database_path is None
+        assert any("output refused" in e for e in result.errors)
+        # Nothing promoted, no trust-bearing metadata written, the
+        # planted symlink is gone and the victim untouched.
+        assert not os.path.lexists(slot / "python-db")
+        assert not (slot / "python-metadata.json").exists()
+        assert list(slot.iterdir()) == []
+        assert (victim / "precious").exists()
+
+    def test_swap_between_gate_and_rename_caught_post_rename(
+            self, db_manager, tmp_path):
+        # The swap lands AFTER the post-build gate: hook the promote
+        # rename itself so the staging dirent becomes a symlink at the
+        # instant it moves to canonical. The post-rename lstat (now on
+        # a dirent the grant cannot reach) must catch it.
+        victim = self._victim(tmp_path)
+        canonical = db_manager.db_root / "abc" / "python-db"
+        real_rename = os.rename
+
+        def hostile(src, dst, *args, **kwargs):
+            if Path(dst) == canonical:
+                shutil.rmtree(src)
+                Path(src).symlink_to(victim, target_is_directory=True)
+            return real_rename(src, dst, *args, **kwargs)
+
+        import packages.codeql.database_manager as dbm
+        with patch.object(dbm.os, 'rename', side_effect=hostile):
+            result, _captured, slot = _create(db_manager, tmp_path)
+        assert result.success is False
+        assert result.database_path is None
+        assert not os.path.lexists(slot / "python-db")
+        assert not (slot / "python-metadata.json").exists()
+        assert (victim / "precious").exists()
+
+    def test_hostile_swap_during_failed_promote_refuses_fallback(
+            self, db_manager, tmp_path):
+        # Promote fails with a genuine I/O error (outcome D) and the
+        # orphan swaps staging in the same window; the detach fallback
+        # must return refusal, not hand the symlink to the analyser.
+        victim = self._victim(tmp_path)
+        canonical = db_manager.db_root / "abc" / "python-db"
+        real_rename = os.rename
+
+        def hostile(src, dst, *args, **kwargs):
+            if Path(dst) == canonical:
+                shutil.rmtree(src)
+                Path(src).symlink_to(victim, target_is_directory=True)
+                raise OSError(errno.EACCES, "denied", str(dst))
+            return real_rename(src, dst, *args, **kwargs)
+
+        import packages.codeql.database_manager as dbm
+        with patch.object(dbm.os, 'rename', side_effect=hostile):
+            result, _captured, slot = _create(db_manager, tmp_path)
+        assert result.success is False
+        assert result.database_path is None
+        assert not list(slot.glob(".kept-*"))
+        assert (victim / "precious").exists()
+
+    def test_failed_build_with_swapped_staging_preserves_nothing(
+            self, db_manager, tmp_path):
+        # Build failure + swap: the diagnostics-preserve rename must
+        # not park a symlink at slot level for an operator (or a later
+        # rmtree) to follow.
+        victim = self._victim(tmp_path)
+
+        def factory(captured: dict):
+            inner = _fake_sandbox_run(captured, returncode=1)
+
+            def fake_run(cmd, **kwargs):
+                r = inner(cmd, **kwargs)
+                if "database" in cmd and "create" in cmd:
+                    staging_db = Path(cmd[3])
+                    shutil.rmtree(staging_db)
+                    staging_db.symlink_to(
+                        victim, target_is_directory=True)
+                return r
+
+            return fake_run
+
+        result, _captured, slot = _create(
+            db_manager, tmp_path, returncode=1, run_factory=factory)
+        assert result.success is False
+        assert not os.path.lexists(slot / ".staging-failed-python")
+        assert list(slot.iterdir()) == []
+        assert (victim / "precious").exists()
+
+    def test_detach_refuses_symlinked_staging(self, db_manager, tmp_path):
+        slot = tmp_path / "slot"
+        work = slot / ".staging-cpp-1234-abcd"
+        work.mkdir(parents=True)
+        victim = self._victim(tmp_path)
+        staging_db = work / "cpp-db"
+        staging_db.symlink_to(victim, target_is_directory=True)
+
+        kept = db_manager._detach_staging_from_gc(
+            staging_db, "cpp", slot_dir=slot)
+
+        assert kept is None
+        # The planted dirent was removed, never served.
+        assert not list(slot.glob(".kept-*"))
+        assert not os.path.lexists(staging_db)
+        assert (victim / "precious").exists()
+
+    def test_detach_rename_failure_still_refuses_symlink(
+            self, db_manager, tmp_path):
+        slot = tmp_path / "slot"
+        work = slot / ".staging-cpp-1234-abcd"
+        work.mkdir(parents=True)
+        victim = self._victim(tmp_path)
+        staging_db = work / "cpp-db"
+        staging_db.symlink_to(victim, target_is_directory=True)
+
+        import packages.codeql.database_manager as dbm
+        with patch.object(dbm.os, 'rename',
+                          side_effect=OSError(errno.EACCES, "denied")):
+            kept = db_manager._detach_staging_from_gc(
+                staging_db, "cpp", slot_dir=slot)
+
+        assert kept is None
+        assert not os.path.lexists(staging_db)
+        assert (victim / "precious").exists()
 
 
 class TestValidateSymlinkPosture:
