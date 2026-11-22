@@ -1774,6 +1774,46 @@ def test_parser_uses_the_runtime_in_its_toolchain_identity(tmp_path, monkeypatch
     assert f"JAVA_HOME={tmp_path / 'jdk'}" in command
 
 
+def test_scratch_command_places_extra_env_before_the_command(tmp_path, monkeypatch):
+    from packages.joern import prereqs, runner
+    monkeypatch.setattr(prereqs, "_java_path", lambda: None)
+    command = runner._jvm_scratch_command(
+        ["joern-parse"], tmp_path,
+        extra_env=("DOTNET_EnableWriteXorExecute=0",))
+    wx = command.index("DOTNET_EnableWriteXorExecute=0")
+    assert wx < command.index("joern-parse")
+    assert command[0] == "/usr/bin/env"
+
+
+def test_csharp_build_disables_dotnet_wx_for_the_astgen_helper(tmp_path, monkeypatch):
+    """csharpsrc builds must carry DOTNET_EnableWriteXorExecute=0: the
+    .NET W^X double-mapping reserves a 2 TiB memfd that any finite
+    RLIMIT_FSIZE kills with SIGXFSZ, and the frontend swallows the
+    helper's death into an exit-0 empty graph. Other languages must
+    NOT carry the waiver."""
+    from packages.joern import runner
+
+    captured: dict = {}
+
+    def fake_runner(cmd, **kwargs):
+        captured["cmd"] = cmd
+        import subprocess
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+
+    for languages, expect in (
+        ({"csharpsrc"}, True),
+        ({"c"}, False),
+        (None, False),
+    ):
+        captured.clear()
+        runner._build_cpg_into(
+            tmp_path, languages=languages, output_dir=tmp_path,
+            timeout=5, subprocess_runner=fake_runner, heap_mb=512,
+            frontend_args=runner.FrontendArgs())
+        has_wx = "DOTNET_EnableWriteXorExecute=0" in captured["cmd"]
+        assert has_wx is expect, (languages, captured["cmd"])
+
+
 def test_parser_does_not_infer_java_home_from_a_system_shim(tmp_path, monkeypatch):
     from packages.joern import prereqs, runner
     monkeypatch.setattr(prereqs, "_java_path", lambda: "/usr/bin/java")

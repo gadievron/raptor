@@ -856,7 +856,21 @@ def _build_cpg_into(
     for d in sorted(_resolved_exclude_dirs(exclude_dirs)):
         cmd.extend(["--exclude", str(d)])
 
-    cmd = _jvm_scratch_command(cmd, output_dir)
+    extra_env: tuple[str, ...] = ()
+    if languages and "csharpsrc" in languages:
+        # The csharp frontend's dotnetastgen helper is a .NET binary;
+        # the .NET runtime's W^X double-mapping reserves its JIT code
+        # heap as a 2 TiB memfd (ftruncate(fd, 2^41)), which ANY
+        # finite RLIMIT_FSIZE kills with SIGXFSZ — and the frontend
+        # swallows the helper's death and exits 0 with an empty
+        # graph. Disabling W^X inside the helper is the only way to
+        # keep the sandbox's file-size bound (raising it above 2 TiB
+        # would gut the disk-fill limit for the whole build): the
+        # helper stays inside the full sandbox (namespaces, landlock,
+        # seccomp, no network); only its in-process JIT-page
+        # hardening is waived.
+        extra_env = ("DOTNET_EnableWriteXorExecute=0",)
+    cmd = _jvm_scratch_command(cmd, output_dir, extra_env=extra_env)
 
     runner = subprocess_runner or _default_sandbox_runner()
 
@@ -1087,7 +1101,9 @@ def _build_cpg_with_stall_monitor(
     )
 
 
-def _jvm_scratch_command(command: list, directory: Path) -> list:
+def _jvm_scratch_command(
+    command: list, directory: Path, extra_env: tuple[str, ...] = (),
+) -> list:
     # Set the properties AFTER the generic tool environment scrub so nested
     # JVMs inherit them too. No shell evaluates these assignment arguments.
     from .server import _java_option_value
@@ -1101,7 +1117,7 @@ def _jvm_scratch_command(command: list, directory: Path) -> list:
     if home is not None:
         runtime.append(f"JAVA_HOME={home}")
     return ["/usr/bin/env", *runtime, f"_JAVA_OPTIONS=-Djava.io.tmpdir={value} -Duser.home={value}",
-            f"TMPDIR={directory}", f"HOME={directory}", *command]
+            f"TMPDIR={directory}", f"HOME={directory}", *extra_env, *command]
 
 
 def run_query(

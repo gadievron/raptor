@@ -36,7 +36,7 @@ def owned(tmp_path, monkeypatch, caplog, _isolated_graph_keepalive):
     monkeypatch.setattr(runner, "_joern_parse_path", lambda: "joern-parse-owned")
     monkeypatch.setattr(runner, "_joern_path", lambda: "joern-owned")
     monkeypatch.setattr(runner, "joern_tool_paths", lambda: [])
-    monkeypatch.setattr(runner, "_jvm_scratch_command", lambda command, directory: command)
+    monkeypatch.setattr(runner, "_jvm_scratch_command", lambda command, directory, extra_env=(): command)
     monkeypatch.setattr(artifacts, "toolchain_identity", lambda: "owned-tools")
     logger = logging.getLogger("test.graph-scratch-owned")
     monkeypatch.setattr(logger, "handlers", [caplog.handler])

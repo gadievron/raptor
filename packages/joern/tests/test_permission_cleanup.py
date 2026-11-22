@@ -93,7 +93,7 @@ def test_query_teardown_removes_restricted_workspace(tmp_path, monkeypatch, mode
     outputs = []
     monkeypatch.setattr(client, "runtime_base", lambda: tmp_path)
     monkeypatch.setattr(
-        runner, "_jvm_scratch_command", lambda command, directory: command
+        runner, "_jvm_scratch_command", lambda command, directory, extra_env=(): command
     )
     with contextlib.ExitStack() as cleanup:
 
