@@ -36,6 +36,7 @@ from core.tp_harvest.records import (
     classify_finding,
     harvest_identity,
 )
+from core.witness.provenance import sanitise_findings_evidence
 
 logger = get_logger()
 
@@ -171,6 +172,24 @@ def harvest_run(
 
     disclosure = FindingsLoadDisclosure()
     findings = load_findings_from_dir(run_dir, disclosure=disclosure)
+    # Evidence-provenance clamp BEFORE classification: finding rows
+    # are run-dir-resident (imported run dirs ship their own), and
+    # classify_finding is a pure projection of the recorded verdict —
+    # so every mechanical claim (witness verdicts, feasibility
+    # records, confirmed/exploitable statuses on any channel) must
+    # carry this install's stamp or demote to confirmed_unverified,
+    # which classifies as a named skip. Without the clamp a
+    # hand-edited findings.json walks a forged Confirmed straight
+    # onto the disclosure backlog and into rule candidates.
+    demotions = sanitise_findings_evidence({"findings": findings}, run_dir)
+    if any(demotions.values()):
+        detail = ", ".join(
+            f"{name}: {count}"
+            for name, count in sorted(demotions.items()) if count
+        )
+        notes.append(
+            "unverified evidence claims demoted before classification "
+            f"({detail}) — rows lacked this install's provenance stamp")
     if not findings and disclosure.discarded_rows:
         notes.append("no valid findings remain — malformed rows were skipped")
     elif not findings:

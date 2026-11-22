@@ -14,6 +14,8 @@ from core.tp_harvest.records import HarvestRecord
 from core.testing.module_bindings import patch_module_attribute
 from core.testing.module_views import module_function_view
 
+from .conftest import stamp_verified
+
 
 @pytest.fixture
 def record():
@@ -90,9 +92,14 @@ def test_backlog_write_failure_keeps_harvest_totals_and_continues(run_dir, monke
     rows = [
         {"id": name, "file": "src/copy.c", "function": function, "line": line,
          "status": "confirmed", "final_status": "confirmed", "cwe_id": "CWE-0",
-         "vuln_type": name, "rule_id": "metadata", "message": "owned metadata"}
+         "vuln_type": name, "rule_id": "metadata", "message": "owned metadata",
+         "ruling": {"status": "confirmed", "reason": "stage merge"}}
         for name, function, line in [("first", "copy_name", 4), ("second", "main", 9)]
     ]
+    for row in rows:
+        # Receipted: the failure under test is the backlog WRITE — the
+        # rows must get past the provenance clamp to reach it.
+        stamp_verified(row, run_dir)
     (run_dir / "findings.json").write_text(json.dumps({"findings": rows}))
     real_write = os.write
     calls = []

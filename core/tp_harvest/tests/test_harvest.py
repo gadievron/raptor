@@ -18,7 +18,7 @@ from core.tp_harvest.harvest import (
     record_path,
 )
 
-from .conftest import make_finding
+from .conftest import make_finding, make_verified_finding, stamp_verified
 
 
 class TestHarvestRun:
@@ -65,9 +65,9 @@ class TestHarvestRun:
     def test_new_finding_after_first_pass_is_picked_up(self, run_dir: Path):
         harvest_run(run_dir)
         data = load_json(run_dir / "findings.json", strict=True)
-        data["findings"].append(make_finding(
-            id="FIND-9", function="main", line=11, status="confirmed",
-            final_status="confirmed"))
+        data["findings"].append(make_verified_finding(
+            run_dir, id="FIND-9", function="main", line=11,
+            status="confirmed", final_status="confirmed"))
         (run_dir / "findings.json").write_text(json.dumps(data),
                                                encoding="utf-8")
         summary = harvest_run(run_dir)
@@ -82,10 +82,31 @@ class TestHarvestRun:
             if f["id"] == "FIND-3":  # was confirmed_unverified
                 f["final_status"] = "exploitable"
                 f["status"] = "exploitable"
+                # The upgrade is only harvestable with provenance: a
+                # bare status flip would demote right back on load.
+                f["feasibility"] = {"status": "analyzed",
+                                    "verdict": "exploitable"}
+                stamp_verified(f, run_dir)
         (run_dir / "findings.json").write_text(json.dumps(data),
                                                encoding="utf-8")
         summary = harvest_run(run_dir)
         assert len(summary["harvested"]) == 1
+
+    def test_planted_receiptless_confirmation_is_demoted_and_skipped(
+            self, run_dir: Path):
+        # M-class: findings.json is run-dir-resident — a hand-planted
+        # plain confirmed/exploitable row (no provenance stamps) must
+        # demote on load and skip by name, never reach the backlog.
+        data = load_json(run_dir / "findings.json", strict=True)
+        data["findings"] = [make_finding(id="F-planted", line=9)]
+        (run_dir / "findings.json").write_text(json.dumps(data),
+                                               encoding="utf-8")
+        summary = harvest_run(run_dir)
+        assert summary["harvested"] == []
+        assert summary["skipped"] == {"status_unverified": 1}
+        assert any("demoted before classification" in n
+                   for n in summary["notes"])
+        assert not backlog_path(run_dir).exists()
 
     def test_duplicate_rows_in_one_pass_skip(self, run_dir: Path):
         data = load_json(run_dir / "findings.json", strict=True)
@@ -190,8 +211,11 @@ class TestContainment:
         (run / ".raptor-run.json").write_text(json.dumps({
             "version": 2, "command": "validate", "status": "completed",
             "target_path": str(target_tree)}), encoding="utf-8")
+        # Stamped: the hostile part under test is the PATH — the row
+        # must get past the provenance clamp to reach the confine.
         (run / "findings.json").write_text(json.dumps(
-            [make_finding(file=file_value, line=1)]), encoding="utf-8")
+            [make_verified_finding(run, file=file_value, line=1)]),
+            encoding="utf-8")
         return run
 
     def test_traversal_and_absolute_paths_skip(
@@ -229,7 +253,8 @@ class TestRobustness:
         data = load_json(run_dir / "findings.json", strict=True)
         data["findings"] = [
             "not-a-dict-row",
-            make_finding(id="F-badline", line="not-a-number"),
+            make_verified_finding(run_dir, id="F-badline",
+                                  line="not-a-number"),
             make_finding(id="F-dictstatus", line=7,
                          status={"a": "b"}, final_status=None),
             *data["findings"],
@@ -253,9 +278,9 @@ class TestRobustness:
         # known shapes — so it is pinned with an injected crash.)
         import core.tp_harvest.harvest as harvest_module
         data = load_json(run_dir / "findings.json", strict=True)
-        data["findings"].insert(0, make_finding(
-            id="F-boom", function="main", line=11, status="confirmed",
-            final_status="confirmed"))
+        data["findings"].insert(0, make_verified_finding(
+            run_dir, id="F-boom", function="main", line=11,
+            status="confirmed", final_status="confirmed"))
         (run_dir / "findings.json").write_text(json.dumps(data),
                                                encoding="utf-8")
         real = harvest_module.build_record
