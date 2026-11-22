@@ -558,13 +558,14 @@ class TestSerializationHostility:
         # installed this pin silently exercises the orjson arm. The
         # setitem through the held function's globals covers the
         # detached copy.
+        # Only when actually detached: when both names resolve to the
+        # SAME dict, double-patching it leaks — pytest's undo restores
+        # every setattr before any setitem, so the setitem's saved
+        # "original" (already None by then) lands last and the None
+        # outlives the test, failing later orjson-arm tests in the
+        # same process.
         import core.json.utils as json_utils
         monkeypatch.setattr(json_utils, "_orjson", None)
-        # Only when actually detached: patching the live module's own dict
-        # twice makes the setitem capture the already-nulled value, and
-        # MonkeyPatch.undo replays setattr entries before setitem entries,
-        # restoring the stale None last and leaking a disabled orjson
-        # binding to the worker.
         if journal_mod.loads.__globals__ is not vars(json_utils):
             monkeypatch.setitem(
                 journal_mod.loads.__globals__, "_orjson", None)

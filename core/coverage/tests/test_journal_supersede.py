@@ -432,13 +432,12 @@ class TestHostileRows:
         # pins: patch the live core.json.utils module AND the globals
         # the compactor's module-level ``loads`` binding actually
         # reads (a sibling suite's sys.modules purge can detach them).
+        # The setitem fires only when the namespaces are actually
+        # detached: double-patching one dict leaks (pytest restores
+        # every setattr before any setitem, so the setitem's saved
+        # None lands last and outlives the test).
         import core.json.utils as json_utils
         monkeypatch.setattr(json_utils, "_orjson", None)
-        # Patch the function globals only when actually detached: when they
-        # are the live module's dict the second (setitem) patch captures the
-        # already-nulled value, and MonkeyPatch.undo replays setattr entries
-        # before setitem entries, so the stale None would be restored last
-        # and leak a disabled orjson binding to the rest of the worker.
         if journal_compact.loads.__globals__ is not vars(json_utils):
             monkeypatch.setitem(
                 journal_compact.loads.__globals__, "_orjson", None)

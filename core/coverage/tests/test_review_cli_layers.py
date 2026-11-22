@@ -518,11 +518,11 @@ def test_compact_refuses_non_serializable_preserved_row(
     # module-level ``loads`` / ``load_json`` bindings, which after a
     # sibling suite purges core.json.* from sys.modules read a
     # detached module the sys.modules-only patch misses.
+    # The setitem fires only when the namespaces are actually
+    # detached: double-patching one dict leaks (pytest restores every
+    # setattr before any setitem, so the setitem's saved None lands
+    # last and outlives the test).
     monkeypatch.setattr(json_utils, "_orjson", None)
-    # Only when actually detached: patching the live module's own dict twice
-    # makes the setitem capture the already-nulled value, and MonkeyPatch.undo
-    # replays setattr entries before setitem entries, restoring the stale
-    # None last and leaking a disabled orjson binding to the worker.
     if journal_mod.loads.__globals__ is not vars(json_utils):
         monkeypatch.setitem(journal_mod.loads.__globals__, "_orjson", None)
     project = tmp_path / "proj"
