@@ -13,6 +13,7 @@ from core.testing.module_bindings import mock_module_attribute
 
 
 import logging
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -1134,6 +1135,22 @@ class TestServePurgesAnalyzeWritableState:
         assert not (planted / "results").exists()
         assert not (planted / "db-cpp" / "deep" / "cache").exists()
         assert (planted / "db-cpp" / "blob.bin").exists()
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores modes")
+    def test_purge_refuses_on_unreadable_directory(self, db_manager, repo):
+        """An unreadable directory under db-* must refuse the purge
+        (→ unservable), not be skipped: ``os.walk``'s default onerror
+        would silently hide any ``cache`` dir it holds, leaving
+        replayable evaluator state in a \"purged\" tree."""
+        planted = _plant_cached_db(db_manager, repo, "cpp", "buildless")
+        hidden = planted / "db-cpp" / "hidden"
+        hidden.mkdir()
+        hidden.chmod(0)
+        try:
+            assert db_manager._purge_unauthenticated_analysis_state(
+                planted, "cpp") is False
+        finally:
+            hidden.chmod(0o700)
 
 
 class TestExtractionOutcomes:

@@ -159,6 +159,23 @@ class TestDigestSubset:
         finally:
             rel.chmod(0o600)
 
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores modes")
+    def test_unreadable_directory_refuses(self, manager):
+        """An unreadable directory must refuse the whole tree, not be
+        skipped: ``os.walk``'s default onerror swallows the failure
+        silently, and whatever the directory holds — a symlink the
+        shape sweep never sees, relations the digest never covers —
+        would be invisible to the trust decision."""
+        db = _plant_db(manager)
+        hidden = db / "db-python" / "default" / "hidden"
+        hidden.mkdir()
+        (hidden / "x.rel").write_bytes(b"\x05" * 16)
+        hidden.chmod(0)
+        try:
+            assert database_content_digest(db) is None
+        finally:
+            hidden.chmod(0o700)
+
 
 class TestServeComparesDigest:
     def test_matching_tree_serves(self, manager, tmp_path):

@@ -393,6 +393,17 @@ def _digest_included(rel_parts: tuple) -> bool:
     return rel_parts[0].startswith("db-") and "cache" not in rel_parts
 
 
+def _refuse_walk_error(error: OSError) -> None:
+    """``os.walk`` onerror callback for trust-bearing sweeps: re-raise
+    instead of silently skipping. The default (``onerror=None``)
+    swallows unreadable directories, so a mode-0 subdirectory would
+    HIDE its entries from the sweep — a symlink the hostile-shape
+    check never sees, content the digest never covers, a ``cache``
+    dir the serve purge never clears. Callers catch OSError and treat
+    the raise as refuse/miss."""
+    raise error
+
+
 def database_content_digest(db_path: Path) -> str | None:
     """sha256 fingerprint of the database's immutable content subset,
     or None when the tree is hostile-shaped or unreadable.
@@ -419,11 +430,16 @@ def database_content_digest(db_path: Path) -> str | None:
     its streamed content hash, so adding, removing, renaming, or
     rewriting a subset file all change the digest. Reads are fd-gated
     (O_NOFOLLOW + fstat regularity). OSError anywhere → None: callers
-    treat None as refuse/miss, never as "unknown but fine".
+    treat None as refuse/miss, never as "unknown but fine". That
+    includes walk enumeration errors (``_refuse_walk_error``): an
+    unreadable directory would otherwise be skipped silently, hiding
+    whatever it holds from both the digest and the shape sweep.
     """
     entries: list = []
     try:
-        for root, dirs, files in os.walk(db_path, followlinks=False):
+        for root, dirs, files in os.walk(
+            db_path, followlinks=False, onerror=_refuse_walk_error,
+        ):
             root_path = Path(root)
             for name in dirs + files:
                 info = os.lstat(os.path.join(root, name))
@@ -1105,6 +1121,7 @@ class DatabaseManager:
                     continue
                 for root, dirs, _files in os.walk(
                     child, followlinks=False,
+                    onerror=_refuse_walk_error,
                 ):
                     doomed.extend(
                         Path(root) / name for name in dirs
