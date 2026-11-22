@@ -217,6 +217,49 @@ class TestRulingConfirmationStamp:
         assert not prov.verify_ruling_confirmation(_finding(), tmp_path)
 
 
+class TestHarvestEntryStamp:
+    def _entry(self, **kw):
+        base = {"action": "harvested", "record_sha256": "a" * 64}
+        base.update(kw)
+        return base
+
+    def test_round_trip(self, tmp_path):
+        entry = self._entry()
+        prov.stamp_harvest_entry(entry, "hid-1", tmp_path)
+        assert prov.verify_harvest_entry(entry, "hid-1", tmp_path)
+
+    def test_run_binding(self, tmp_path):
+        entry = self._entry()
+        prov.stamp_harvest_entry(entry, "hid-1", tmp_path / "run-a")
+        assert not prov.verify_harvest_entry(entry, "hid-1",
+                                             tmp_path / "run-b")
+
+    def test_harvest_id_swap_fails(self, tmp_path):
+        entry = self._entry()
+        prov.stamp_harvest_entry(entry, "hid-1", tmp_path)
+        assert not prov.verify_harvest_entry(entry, "hid-2", tmp_path)
+
+    def test_record_sha_tamper_fails(self, tmp_path):
+        entry = self._entry()
+        prov.stamp_harvest_entry(entry, "hid-1", tmp_path)
+        entry["record_sha256"] = "b" * 64
+        assert not prov.verify_harvest_entry(entry, "hid-1", tmp_path)
+
+    def test_mutable_audit_fields_stay_unbound(self, tmp_path):
+        # last_seen_at / label pointers are audit metadata without
+        # verdict authority — updating them must not demote the entry.
+        entry = self._entry()
+        prov.stamp_harvest_entry(entry, "hid-1", tmp_path)
+        entry["last_seen_at"] = "2026-11-22T00:00:00+00:00"
+        entry["label"] = "labels/x.json"
+        assert prov.verify_harvest_entry(entry, "hid-1", tmp_path)
+
+    def test_unstamped_or_non_dict_never_verifies(self, tmp_path):
+        assert not prov.verify_harvest_entry(self._entry(), "hid-1",
+                                             tmp_path)
+        assert not prov.verify_harvest_entry(None, "hid-1", tmp_path)
+
+
 class TestSanitiseFindingsEvidence:
     def test_forged_witness_record_stripped_and_ruling_rolled_back(self, tmp_path):
         f = _finding(

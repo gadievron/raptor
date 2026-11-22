@@ -1199,6 +1199,81 @@ def sanitise_findings_evidence(
 
 
 # ---------------------------------------------------------------------------
+# tp-harvest manifest entries — emission provenance for the flywheel
+# ---------------------------------------------------------------------------
+
+_HARVEST_ENTRY_KIND = "tp-harvest-entry"
+
+
+def harvest_entry_fields(
+    harvest_id: str,
+    record_sha256: str,
+    run_dir: Path | str,
+    *,
+    binding: str | None = None,
+) -> dict:
+    """The harvest manifest-entry fields consumers act on, in MAC form.
+
+    The tp-harvest output tree is run-dir-resident: an imported or
+    pre-planted run dir can ship a self-consistent forged manifest
+    entry (``action: "harvested"``, a record file, a matching
+    ``record_sha256`` — the hash is attacker-computable) and have the
+    harvest short-circuit past classification while consumers treat
+    the forged record as an emitted confirmation. The stamp binds the
+    emission ACT: this install's harvest, this run directory, this
+    harvest_id, these record bytes. Mutable audit fields beside it
+    (``last_seen_at``, the label pointers) stay unbound — they carry
+    no verdict authority."""
+    return {
+        "kind": _HARVEST_ENTRY_KIND,
+        "run": binding if binding is not None else run_binding(run_dir),
+        "harvest_id": str(harvest_id),
+        "record_sha256": str(record_sha256),
+    }
+
+
+def stamp_harvest_entry(
+    entry: dict,
+    harvest_id: str,
+    run_dir: Path | str,
+) -> None:
+    """Stamp a manifest entry the harvest just emitted a record for.
+    No usable key → entry stays unstamped (refused-on-read)."""
+    nonce = _load_or_create_run_nonce(run_dir)
+    binding = run_binding_nonced(run_dir, nonce) if nonce else None
+    token = mint(harvest_entry_fields(
+        harvest_id, str(entry.get("record_sha256") or ""), run_dir,
+        binding=binding,
+    ))
+    if token:
+        entry[PROVENANCE_KEY] = token
+        if binding is not None:
+            entry[BINDING_GRADE_KEY] = GRADE_RUN_NONCE
+
+
+def verify_harvest_entry(
+    entry: Mapping[str, Any] | None,
+    harvest_id: str,
+    run_dir: Path | str,
+) -> bool:
+    """Whether the manifest entry's record emission was performed by
+    the harvest of THIS install in THIS run directory FOR THIS
+    harvest_id and record content."""
+    if not isinstance(entry, Mapping):
+        return False
+    binding, _grade = _binding_for_verify(entry, run_dir)
+    if binding is None:
+        return False
+    return verify(
+        harvest_entry_fields(
+            harvest_id, str(entry.get("record_sha256") or ""), run_dir,
+            binding=binding,
+        ),
+        entry.get(PROVENANCE_KEY),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Witness-store manifests — content-MAC provenance for collect_outcomes
 # ---------------------------------------------------------------------------
 
@@ -1270,6 +1345,7 @@ __all__ = [
     "GRADE_RUN_NONCE",
     "PROVENANCE_KEY",
     "feasibility_fields",
+    "harvest_entry_fields",
     "iris_refutation_fields",
     "key_usable",
     "manifest_content_sha256",
@@ -1281,6 +1357,7 @@ __all__ = [
     "smt_conditions_hash",
     "smt_feasibility_fields",
     "stamp_feasibility",
+    "stamp_harvest_entry",
     "stamp_iris_refutation",
     "stamp_ruling_confirmation",
     "stamp_smt_feasibility",
@@ -1289,6 +1366,7 @@ __all__ = [
     "verify",
     "verify_feasibility",
     "verify_feasibility_graded",
+    "verify_harvest_entry",
     "verify_iris_refutation",
     "verify_ruling_confirmation",
     "verify_smt_feasibility",

@@ -36,7 +36,11 @@ from core.tp_harvest.records import (
     classify_finding,
     harvest_identity,
 )
-from core.witness.provenance import sanitise_findings_evidence
+from core.witness.provenance import (
+    sanitise_findings_evidence,
+    stamp_harvest_entry,
+    verify_harvest_entry,
+)
 
 logger = get_logger()
 
@@ -123,9 +127,27 @@ def load_manifest(run_dir: Path) -> dict[str, Any]:
 
 
 def load_record(run_dir: Path, harvest_id: str) -> HarvestRecord | None:
-    """A previously emitted record, or None."""
-    raw = load_json(record_path(run_dir, harvest_id),
-                    max_bytes=_MAX_RECORD_BYTES)
+    """A previously emitted record, or None.
+
+    Authenticated: the record file alone is run-dir-resident bytes an
+    imported or pre-planted run dir can ship wholesale, so a record is
+    served only when the manifest entry for *harvest_id* carries this
+    install's emission stamp for this run AND the entry's
+    ``record_sha256`` still matches the on-disk bytes. Forged trees
+    (and post-emission edits) read as absent — the consumer that
+    matters most is label emission, which must never pin a corpus
+    label to a record the harvest never projected. Pre-authentication
+    harvests heal on re-run: the stampless entry stops
+    short-circuiting, so the record is re-projected and re-stamped.
+    """
+    entry = load_manifest(run_dir)["entries"].get(harvest_id)
+    if not (isinstance(entry, dict)
+            and verify_harvest_entry(entry, harvest_id, run_dir)):
+        return None
+    path = record_path(run_dir, harvest_id)
+    if str(entry.get("record_sha256") or "") != _record_sha256(path):
+        return None
+    raw = load_json(path, max_bytes=_MAX_RECORD_BYTES)
     if not isinstance(raw, dict):
         return None
     names = {f.name for f in dataclasses.fields(HarvestRecord)}
@@ -308,6 +330,21 @@ def _harvest_one(
 
     prior = entries.get(hid)
     if (isinstance(prior, dict) and prior.get("action") == "harvested"
+            and record_path(run_dir, hid).is_file()
+            and not verify_harvest_entry(prior, hid, run_dir)):
+        # The entry claims a prior emission this install never stamped
+        # for this run — a pre-planted/imported tp-harvest tree (the
+        # record_sha256 beside it is attacker-computable, so the
+        # tamper check below cannot stand alone), or a harvest from
+        # before entries were stamped. Either way it carries no
+        # short-circuit authority: fall through and re-project from
+        # the live finding row, which rewrites (and stamps) the entry
+        # via whichever arm classification takes.
+        notes.append(
+            f"manifest entry {hid} lacks this install's emission "
+            "stamp — ignored and re-projected from the finding row")
+        prior = None
+    if (isinstance(prior, dict) and prior.get("action") == "harvested"
             and record_path(run_dir, hid).is_file()):
         # Idempotence: keyed on finding identity — already emitted.
         prior["last_seen_at"] = now
@@ -367,7 +404,7 @@ def _harvest_one(
         labels_mod.append_backlog_pointer(backlog_path(run_dir), record)
         backlog_hids.add(hid)
 
-    entries[hid] = {
+    entry: dict[str, Any] = {
         "finding_id": record.finding_id,
         "status": record.status,
         "action": "harvested",
@@ -381,6 +418,11 @@ def _harvest_one(
         "first_harvested_at": now,
         "last_seen_at": now,
     }
+    # Emission provenance: binds this install + run + hid + the record
+    # bytes, so a pre-planted manifest/record pair can neither
+    # short-circuit a later pass nor be served by load_record.
+    stamp_harvest_entry(entry, hid, run_dir)
+    entries[hid] = entry
     return hid
 
 

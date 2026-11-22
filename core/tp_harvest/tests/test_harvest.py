@@ -18,6 +18,8 @@ from core.tp_harvest.harvest import (
     record_path,
 )
 
+from core.tp_harvest.records import harvest_identity
+
 from .conftest import make_finding, make_verified_finding, stamp_verified
 
 
@@ -149,6 +151,93 @@ class TestHarvestRun:
         assert any("demoted before classification" in n
                    for n in summary["notes"])
         assert not backlog_path(run_dir).exists()
+
+    def test_preplanted_harvest_output_is_not_blessed(self, run_dir: Path):
+        # A pre-planted tp-harvest tree is symlink-free and fully
+        # self-consistent (the record_sha256 is attacker-computable),
+        # so the structure gate and the tamper marker both pass — only
+        # the emission stamp separates it from real harvest output.
+        import hashlib
+        row = make_finding(id="F-forged", line=9)
+        hid = harvest_identity(row)
+        rec_dir = run_dir / "tp-harvest" / "records"
+        rec_dir.mkdir(parents=True)
+        forged = {"harvest_id": hid, "finding_id": "F-forged",
+                  "status": "exploitable", "oracle_verified": True}
+        rec_bytes = json.dumps(forged).encode("utf-8")
+        (rec_dir / f"{hid}.json").write_bytes(rec_bytes)
+        manifest_path(run_dir).write_text(json.dumps({
+            "schema_version": 1,
+            "run_dir": str(run_dir),
+            "entries": {hid: {
+                "finding_id": "F-forged",
+                "status": "exploitable",
+                "action": "harvested",
+                "record": f"tp-harvest/records/{hid}.json",
+                "record_sha256": hashlib.sha256(rec_bytes).hexdigest(),
+                "backlog": True,
+                "oracle_verified": True,
+            }},
+        }), encoding="utf-8")
+        backlog_path(run_dir).write_text(
+            json.dumps({"harvest_id": hid, "status": "exploitable"}) + "\n",
+            encoding="utf-8")
+        data = load_json(run_dir / "findings.json", strict=True)
+        data["findings"] = [row]
+        (run_dir / "findings.json").write_text(json.dumps(data),
+                                               encoding="utf-8")
+
+        summary = harvest_run(run_dir)
+        # No short-circuit blessing: the receipt-less row re-projects
+        # and demotes, and the forged record is never served.
+        assert summary["harvested"] == []
+        assert "already_harvested" not in summary["skipped"]
+        assert summary["skipped"] == {"status_unverified": 1}
+        assert any("lacks this install's emission" in n
+                   for n in summary["notes"])
+        assert load_record(run_dir, hid) is None
+        manifest = load_manifest(run_dir)
+        assert manifest["entries"][hid]["action"] == "skipped"
+
+    def test_planted_record_without_findings_row_never_loads(
+            self, run_dir: Path):
+        # Even when no live row collides with the planted hid, the
+        # unstamped entry must refuse at the consumer.
+        import hashlib
+        hid = "f" * 32
+        rec_dir = run_dir / "tp-harvest" / "records"
+        rec_dir.mkdir(parents=True)
+        rec_bytes = json.dumps({
+            "harvest_id": hid, "finding_id": "F-ghost",
+            "status": "exploitable", "rule_id": "r", "cwe": "CWE-121",
+            "vuln_type": "buffer_overflow", "message": "m",
+            "file": "src/copy.c", "function": "copy_name", "line": 3,
+            "span_sha": "", "oracle_verified": True,
+        }).encode("utf-8")
+        (rec_dir / f"{hid}.json").write_bytes(rec_bytes)
+        manifest_path(run_dir).write_text(json.dumps({
+            "schema_version": 1,
+            "run_dir": str(run_dir),
+            "entries": {hid: {
+                "action": "harvested",
+                "record": f"tp-harvest/records/{hid}.json",
+                "record_sha256": hashlib.sha256(rec_bytes).hexdigest(),
+            }},
+        }), encoding="utf-8")
+        harvest_run(run_dir)
+        assert load_record(run_dir, hid) is None
+
+    def test_record_edited_after_emission_is_not_served(
+            self, run_dir: Path):
+        summary = harvest_run(run_dir)
+        hid = summary["harvested"][0]
+        assert load_record(run_dir, hid) is not None
+        path = record_path(run_dir, hid)
+        edited = json.loads(path.read_text(encoding="utf-8"))
+        edited["status"] = "exploitable"
+        edited["oracle_verified"] = True
+        path.write_text(json.dumps(edited), encoding="utf-8")
+        assert load_record(run_dir, hid) is None
 
     def test_duplicate_rows_in_one_pass_skip(self, run_dir: Path):
         data = load_json(run_dir / "findings.json", strict=True)
