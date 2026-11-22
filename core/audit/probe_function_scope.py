@@ -155,7 +155,7 @@ def source_binding(source: str, function_name: str, *, verb: str, integer_abi=No
         "verb": verb,
         "sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
     }
-    if verb in {"check-overflow", "check-oob", "check-overflow-to-oob", "check-negative-bypass", "check-array-bounds", "check-alloc-bounds", "check-integer-division", "check-shift-count", "check-integer-comparison", "check-integer-conversion", "check-unary-negation", "check-integer-update"}:
+    if verb in {"check-overflow", "check-oob", "check-overflow-to-oob", "check-negative-bypass", "check-array-bounds", "check-alloc-bounds", "check-loop-bounds", "check-integer-division", "check-shift-count", "check-integer-comparison", "check-integer-conversion", "check-unary-negation", "check-integer-update"}:
         binding["hypothesis_sha256"] = hashlib.sha256(hypothesis.encode("utf-8", "surrogatepass")).hexdigest()
     if verb == "check-overflow":
         # Matching source is insufficient: replies must satisfy the current
@@ -195,6 +195,10 @@ def source_binding(source: str, function_name: str, *, verb: str, integer_abi=No
     elif verb == "check-alloc-bounds":
         from .integer_abi import integer_abi_record
         binding["query_contract"] = "symbolic-allocation-guards-v1"
+        binding["integer_abi"] = integer_abi_record(integer_abi)
+    elif verb == "check-loop-bounds":
+        from .integer_abi import integer_abi_record
+        binding["query_contract"] = "bounded-loop-progression-v1"
         binding["integer_abi"] = integer_abi_record(integer_abi)
     elif verb == "check-oob":
         binding["query_contract"] = "explicit-bounds-roles-v1"

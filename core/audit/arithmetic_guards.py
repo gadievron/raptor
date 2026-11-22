@@ -41,6 +41,10 @@ def guards_for_operation(body, target, data, operands, *, language=None, integer
     watched integer name and at most exits the path (for example, one
     allocation declaration and its null-check early return, whose success
     path the caller names as an explicit assumption).
+
+    ``target`` may itself be a statement that is a direct child of a walked
+    compound statement: the premises holding at its entry are returned and
+    the statement's own semantics stay entirely with the caller.
     """
     def text(node):
         return data[node.start_byte:node.end_byte].decode("utf-8") if node is not None else ""
@@ -209,6 +213,8 @@ def guards_for_operation(body, target, data, operands, *, language=None, integer
             return None
         if node.type == "compound_statement":
             for child in node.named_children:
+                if child == target:
+                    return facts  # statement target; see the docstring contract
                 if contains(child):
                     return walk(child, facts, depth + 1)
                 if child in admitted:
@@ -271,7 +277,7 @@ def guards_for_operation(body, target, data, operands, *, language=None, integer
     for item in _nodes(body):
         if item.type.endswith("_statement") and item.type not in {
             "compound_statement", "if_statement", "return_statement", "expression_statement",
-        }:
+        } and item != target:
             return GuardPremises("unavailable")
     facts = walk(body, [])
     if facts is None:

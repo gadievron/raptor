@@ -2310,6 +2310,7 @@ _SMT_DIRECT_ONLY_VERBS = frozenset({
     "check-integer-division",
     "check-array-bounds",
     "check-alloc-bounds",
+    "check-loop-bounds",
     "check-auth-bypass",
     "check-lock-discipline",
     "check-resource-leak",
@@ -2336,6 +2337,7 @@ _SMT_VERB_ROLES = {
     "check-overflow": "verification",
     "check-array-bounds": "verification",
     "check-alloc-bounds": "verification",
+    "check-loop-bounds": "verification",
     "check-integer-division": "verification",
     "check-shift-count": "verification",
     "check-integer-comparison": "detection",
@@ -2791,6 +2793,15 @@ def run_smt_verb_direct(
                 )
                 if (allocated.details or {}).get("alloc_bounds_status") != "unavailable":
                     return allocated
+            # A write claim may name a counted-loop store whose progression
+            # the closed loop oracle decides.
+            if access_kind == "write" and parse_array_access_claim(hypothesis, access_kind="write") is not None:
+                looped = _smt_verb_in_subprocess(
+                    file_path=file_path, function_name=function_name, verb="check-loop-bounds",
+                    source=source, hypothesis=hypothesis, target_path=target_path, integer_abi=integer_abi,
+                )
+                if (looped.details or {}).get("loop_bounds_status") != "unavailable":
+                    return looped
     result = _smt_verb_in_subprocess(
         file_path=file_path,
         function_name=function_name,
@@ -2812,6 +2823,14 @@ def run_smt_verb_direct(
             )
             if (allocated.details or {}).get("alloc_bounds_status") != "unavailable":
                 return allocated
+        if (resolve_integer_abi(integer_abi) is not None and has_array_write_goal(hypothesis)
+                and parse_array_access_claim(hypothesis, access_kind="write") is not None):
+            looped = _smt_verb_in_subprocess(
+                file_path=file_path, function_name=function_name, verb="check-loop-bounds",
+                source=source, hypothesis=hypothesis, target_path=target_path, integer_abi=integer_abi,
+            )
+            if (looped.details or {}).get("loop_bounds_status") != "unavailable":
+                return looped
     if include_callers:
         from .literal_call_observation import complete_literal_overflow_observation
         return complete_literal_overflow_observation(
@@ -2898,7 +2917,7 @@ def _smt_verb_in_subprocess(
     from uuid import uuid4
     from .integer_abi import integer_abi_record
     abi_record = integer_abi_record(integer_abi)
-    if verb in {"check-overflow", "check-array-bounds", "check-alloc-bounds", "check-integer-division", "check-shift-count", "check-integer-comparison", "check-integer-conversion", "check-unary-negation", "check-integer-update"} and abi_record is None:
+    if verb in {"check-overflow", "check-array-bounds", "check-alloc-bounds", "check-loop-bounds", "check-integer-division", "check-shift-count", "check-integer-comparison", "check-integer-conversion", "check-unary-negation", "check-integer-update"} and abi_record is None:
         return SweepResult(
             tool="smt", file_path=file_path, function_name=function_name,
             outcome="inconclusive", rule_id=f"smt:{verb}",
@@ -2963,7 +2982,7 @@ def _smt_verb_in_subprocess(
                     result.matches = []
                     result.details = {**details, "source_scope_status": "unbound-worker-result"}
                 result.rule_id = f"smt:{verb}"
-            if (is_diagnostic_smt_rule(verb) or verb in {"check-array-bounds", "check-alloc-bounds", "check-integer-division", "check-shift-count"}) and result.outcome != "error":
+            if (is_diagnostic_smt_rule(verb) or verb in {"check-array-bounds", "check-alloc-bounds", "check-loop-bounds", "check-integer-division", "check-shift-count"}) and result.outcome != "error":
                 result.outcome, result.details = _scope_smt_observation(
                     verb, result.outcome, result.details or {},
                 )
@@ -2995,7 +3014,7 @@ def _run_smt_verb_inner(
     """Confined-worker admission for source-derived function observations."""
     from .integer_abi import integer_abi_record
     abi_record = integer_abi_record(integer_abi)
-    if verb in {"check-overflow", "check-array-bounds", "check-alloc-bounds", "check-integer-division", "check-shift-count", "check-integer-comparison", "check-integer-conversion", "check-unary-negation", "check-integer-update"} and abi_record is None:
+    if verb in {"check-overflow", "check-array-bounds", "check-alloc-bounds", "check-loop-bounds", "check-integer-division", "check-shift-count", "check-integer-comparison", "check-integer-conversion", "check-unary-negation", "check-integer-update"} and abi_record is None:
         return SweepResult(
             tool="smt", file_path=file_path, function_name=function_name,
             outcome="inconclusive", rule_id=f"smt:{verb}",
@@ -3017,7 +3036,7 @@ def _run_smt_verb_inner(
         file_path=file_path, function_name=function_name, verb=verb,
         source=source, hypothesis=hypothesis, target_path=target_path, vocab=vocab, integer_abi=abi_record,
     )
-    if binding is not None and (is_diagnostic_smt_rule(verb) or verb in {"check-array-bounds", "check-alloc-bounds", "check-integer-division", "check-shift-count"}) and result.outcome != "error":
+    if binding is not None and (is_diagnostic_smt_rule(verb) or verb in {"check-array-bounds", "check-alloc-bounds", "check-loop-bounds", "check-integer-division", "check-shift-count"}) and result.outcome != "error":
         result.outcome, result.details = _scope_smt_observation(verb, result.outcome, result.details or {})
         if result.outcome != "confirmed":
             result.matches = []
@@ -3101,6 +3120,14 @@ def _run_smt_verb_on_source(
             from .alloc_bounds import check_alloc_bounds
             from .condition_extraction import language_for_file
             details = check_alloc_bounds(source, hypothesis, language=language_for_file(file_path), integer_abi=integer_abi)
+            outcome = "confirmed" if details.get("violation") is True else "inconclusive"
+            return SweepResult(tool="smt", file_path=file_path, function_name=function_name,
+                               rule_id=f"smt:{verb}", outcome=outcome, details=details,
+                               matches=[details] if outcome == "confirmed" else [])
+        elif verb == "check-loop-bounds":
+            from .condition_extraction import language_for_file
+            from .loop_bounds import check_loop_bounds
+            details = check_loop_bounds(source, hypothesis, language=language_for_file(file_path), integer_abi=integer_abi)
             outcome = "confirmed" if details.get("violation") is True else "inconclusive"
             return SweepResult(tool="smt", file_path=file_path, function_name=function_name,
                                rule_id=f"smt:{verb}", outcome=outcome, details=details,
