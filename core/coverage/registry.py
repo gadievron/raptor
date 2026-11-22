@@ -132,8 +132,10 @@ def classify(tool_label: str) -> tuple[str, str]:
 
     A ``:machine`` suffix is a generic demotion marker: producers
     (``import_annotations``, ``import_functions_analysed``) append it
-    to rows whose review claim could not be verified (no human-grade
-    provenance / no MAC / no current source hash). Such a label keeps
+    to rows that earn no review credit — no human-grade provenance, a
+    missing or failing MAC (a current source hash does not rescue
+    these: the hash is unkeyed), or a verified claim whose recorded
+    hash is stale against current source. Such a label keeps
     its base category but never grades above scanned depth — the mark
     remains real examination evidence, but must not clear the
     function from the LLM-review gap the way a verified review does.

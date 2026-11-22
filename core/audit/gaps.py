@@ -2705,8 +2705,8 @@ def _fold_journal_into_covered(
                 # (including hashless historical suppression —
                 # span-bound to the recorded site, so a row whose
                 # span matches no checklist item re-reviews);
-                # unstamped and unverifiable-token rows credit only
-                # behind the exact source-hash gate; dark /
+                # unstamped and unverifiable-token rows earn no
+                # credit and resurface as gaps; dark /
                 # provisional / mechanical-echo / agent-mark rows
                 # resurface exactly as before (those screens live in
                 # _verify_entries_fold, shared with the verified

@@ -795,8 +795,8 @@ def is_agent_mark(entry: Any) -> bool:
     MAC — the journal MAC attests "this install's writer-key signed
     this content", never WHO held the key — and an UNSTAMPED forged
     ``model="operator"`` row passes this screen into the pre-existing
-    unstamped tier (exact-source-hash-gated fold credit, no verdict
-    reuse, no store import authority beyond that). Those bounds are
+    unstamped tier (no review credit, no verdict reuse, no store
+    import authority — examination evidence at most). Those bounds are
     the journal MAC's own documented trust model, and no claim here
     exceeds it.
 
@@ -972,7 +972,8 @@ def append_entry(out_dir: Path, entry: ReviewJournalEntry) -> None:
     # carries a MAC over its own canonical content. Stamped on the
     # entry object too, so a caller that keeps it sees the same row
     # a reader would load. No usable key → the row persists unstamped
-    # and demotes to the hash-gated legacy tier on read.
+    # and earns no review credit on read (re-earned by the next
+    # stamped review).
     from core.coverage import journal_mac
     # ``run_path`` is stamped HERE, never caller-supplied: the full
     # resolved run-dir path is where the row physically lands, and
@@ -3624,7 +3625,7 @@ def merge_into_index(project_dir: Path, run_dir: Path, *,
                     # read an HONEST row as tampered, permanently
                     # revoking its verdict-reuse authority. Strip the
                     # token instead: the row lands in the honest
-                    # unstamped tier (exact-hash fold credit, no
+                    # unstamped tier (no review credit, no
                     # verdict reuse) — the same tier a failing token
                     # demotes to, minus the false tamper attribution
                     # and with repair possible (a later skew-free
@@ -3790,7 +3791,7 @@ def merge_into_index(project_dir: Path, run_dir: Path, *,
                 "token stripped, row(s) indexed unstamped (version "
                 "skew: a reader on this checkout dropped a stamped "
                 "field it does not know — or a foreign or edited "
-                "token; exact-hash fold credit only until a "
+                "token; no review credit until a "
                 "skew-free merge re-projects them)",
                 stripped, run_dir,
             )
