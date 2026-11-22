@@ -1612,6 +1612,21 @@ def _apply_stage_file(workdir, stage_letter):
         # so a confirmation planted straight into findings.json (or
         # grafted onto a row the stage file never ruled on) carries
         # no runtime-grade authority downstream.
+        #
+        # Doctrinal bound, stated plainly: the stage file this merge
+        # consumes is run-dir-resident and UNAUTHENTICATED — anyone
+        # who can write the run dir between the stage LLM finishing
+        # and this merge running can have a confirmation receipted at
+        # full authority. The receipt authenticates the ACT (this
+        # chokepoint accepted this ruling for this run), never the
+        # TRUTH of the stage content: planting a stage file is
+        # exactly as powerful as prompt-injecting the stage LLM that
+        # writes it, no more — both are inside the run dir's existing
+        # trust boundary, which the structure gates and the finalize
+        # sanitiser defend at the consumption edges. What the receipt
+        # buys is that confirmations minted OUTSIDE this act (edits
+        # after the merge, imported run dirs, grafts onto other rows)
+        # verify false and demote.
         if stage_letter.upper() in ("D", "E", "F") and ruling_affirmed:
             from core.witness.provenance import stamp_ruling_confirmation
             for fid in sorted(ruling_affirmed):
