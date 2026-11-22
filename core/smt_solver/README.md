@@ -24,7 +24,13 @@ remain separate questions. The result must retain its assumptions and scope.
 | Can division or remainder be undefined? | `division_undefined` in [csem.py](csem.py). | Promoted operand types and a source-bound operation. Test a zero divisor and, for signed operands, minimum divided by minus one. [integer_division.py](../audit/integer_division.py) binds one explicitly quoted atomic `/` or `%` site under an explicit ABI, validates its entry/prefix guards, and independently replays the witness. Explicit zero-divisor and signed-overflow hypotheses select different fault predicates; unknown subjects decline. Unsupported sites and safe operations remain inconclusive for a whole-function claim. |
 | Can a shift have an invalid count or signed result? | `shift_count_invalid` and `left_shift_undefined` in [csem.py](csem.py); [integer_shift.py](../audit/integer_shift.py) checks atomic source shift counts. | Independently promoted left operand and count, their signedness, and the language version. The strict signed left-shift predicate models C99/C11 requirements; its SAT result alone is not a C++ undefined-behavior claim. |
 | Can a conversion change an integer value? | `conversion_changes_value` and `truncation_loses_bits` in [csem.py](csem.py). | Explicit source/destination widths and signedness, target conversion behavior, and the property that requires value preservation. These predicates model specified bit-pattern conversions; an implementation-defined or deliberately narrowing conversion is not automatically a defect. |
-| Can an index leave an array's bounds? | [array_bounds.py](../audit/array_bounds.py) binds a deliberately small local fixed-array read model. | The selected object and extent, index identity and type, entry domains, guards, and defined prefixes. Pointer arithmetic, dynamic allocations, aliases, and object lifetimes need additional models. |
+| Can an index leave an array's bounds? | [array_bounds.py](../audit/array_bounds.py) binds a deliberately small local fixed-array read model, including `*(Array + Index)`-family dereferences via [array_index.py](../audit/array_index.py). | The selected object and extent, index identity and type, entry domains, guards, and defined prefixes. Aliases and object lifetimes still need additional models. |
+| Can an index exceed a dynamic allocation's extent? | [alloc_bounds.py](../audit/alloc_bounds.py) binds one visible `malloc` with a symbolic element count and a mandatory null-check exit. | The allocation site, its element type, the null-check, and an immutable parameter index. This oracle only ever confirms; an unsat obligation claims nothing because size conversion and wrap are unmodeled. |
+| Can a counted loop write past its array? | [loop_bounds.py](../audit/loop_bounds.py) binds one literal-extent local array and one counted for-loop whose visited indices form a closed arithmetic progression. | Literal start/step, a literal or immutable-parameter bound with the counter's exact type, and a provably wrap-free exit increment. Possible counter wrap declines instead of guessing the wrapped progression. |
+| Can a copy length exceed its destination? | The copy-length sufficiency model in [condition_smt.py](../audit/condition_smt.py); exact capacities and size signedness minted by [sink_extents.py](../audit/sink_extents.py). | A destination resolving to one same-function literal-extent array and a size identifier with one closed-set type spelling; every occurrence accounted for. Anything unmodeled derives nothing — a wrong capacity or signedness would invent an insufficiency or clear a guard. |
+| Do a check and its use really execute in order? | [toctou_order.py](../audit/toctou_order.py) re-examines lexical TOCTOU pairs on the statement-level control-flow graph. | The refiner can only narrow: prune pairs with no ordered flow, discharge atomicity idioms to inconclusive (never refuted), and sustain the lexical verdict for anything it cannot model. |
+| Can two lexically ordered sites actually both execute? | [guard_contradiction.py](../audit/guard_contradiction.py) discharges lifetime-witness refusals whose governing `if` conditions are proven jointly unsatisfiable. | A closed condition grammar over certified immutable locals/parameters, no jump statements, and a machine-checked UNSAT. Every unmodeled construct keeps the conservative refusal. |
+| Does a printf-family call supply its format's arguments? | [format_args.py](../audit/format_args.py) counts directives of a plain literal format exactly — no solver query is involved. | A seeded direct callee and a format inside the closed directive/escape grammar; a counted deficit is undefined behaviour by construction (C11 7.21.6.1p2), a surplus is never a defect, and every unmodeled construct declines the whole call. |
 | Does a signed/unsigned comparison use the intended integer values? | Explicit signed/unsigned comparisons in [bitvec.py](bitvec.py); conditional comparison diagnostics in [condition_smt.py](../audit/condition_smt.py). | Actual comparison conversions, including promotions and rank. Flipping a uniform profile is not a substitute for C's per-expression conversion rules. |
 | Can a mutation break an invariant? | [invariant_smt.py](../audit/invariant_smt.py). | An admitted transition and reaching predicates. This is mathematical-integer induction: initialization, C overflow/conversions, aliasing, and application reachability are outside that proof. `preserved_nonneg` is conditional and remains inconclusive in aggregate. |
 
@@ -33,8 +39,9 @@ negative/oversized counts independently. Signed left-shift value faults still
 need explicit language-standard semantics beyond that count oracle. Typed conversion checks and comparison checks need per-expression
 conversion facts before their mathematical witnesses become C counterexamples.
 Uninitialized-value checks would additionally need definition/use tracking and
-an initialization state per SSA value. Dynamic buffer checks would need object
-identity, allocation extent, lifetime, and pointer-offset relations.
+an initialization state per SSA value. Dynamic buffer checks beyond the narrow
+single-`malloc` oracle still need object identity, lifetime, and general
+pointer-offset relations.
 
 ## Binding a source model
 
@@ -284,3 +291,66 @@ is evaluated as `Flags & (4 == 0)`, without changing it to a grouped mask
 comparison. Feasible-entry and contrary-truth checks plus independent typed
 replay support a diagnostic constant-condition observation, not programmer
 intent or function-wide safety.
+
+Fixed local-array claims also admit `*(Array + Index)`-family dereferences.
+The shape binder distinguishes two arithmetic kinds: a whole-addend index
+(`*(Array + (Index % 8))`) computes in the index's promoted type exactly like
+a subscript, while a trailing literal displacement (`*(Array + Index + 1)`,
+`*(&Array[Index] - 1)`) is mathematical pointer arithmetic applied after the
+index joins the pointer and never wraps in the index's type. Conflating the
+two kinds would wrap a displacement that C defines as exact, or fail to wrap
+an index expression that C defines as modular; each claim binds one kind and
+replays it under that kind's semantics. Write wording never binds a read.
+
+The allocated-extent oracle (`check-alloc-bounds`) admits one visible
+`T *p = malloc(n)` or `malloc(n * sizeof(T))` with a mandatory null-check
+exit and one direct read indexed by an immutable integer parameter. The
+extent is the symbolic element count, so the oracle only ever confirms: a
+sat witness exhibits an entry reaching the access with a negative index or
+`index >= count`, which is outside the allocated object on every conforming
+allocator. An unsat obligation claims nothing — allocation-size conversion
+and wrap behaviour are unmodeled, so no safety verdict exists here.
+
+The counted-loop oracle (`check-loop-bounds`) admits one literal-extent
+local array and one for-loop whose body is exactly one literal store, with
+a literal start and step and a literal or immutable-parameter bound sharing
+the counter's exact type. The visited indices form a closed arithmetic
+progression, so the first out-of-extent index is a literal; a sat witness
+is replayed by a direct bounded re-execution of the source loop. A safety
+verdict exists only where the exit increment provably stays inside the
+counter's storage type; possible counter wrap declines.
+
+Copy-length sufficiency verdicts may consume exact destination capacities
+and size signedness minted by the sink-extent miner. Both facts are exact
+by construction — a one-dimensional literal-extent same-function array with
+every identifier occurrence accounted for, and a size identifier resolving
+to one simple declaration with a closed-set type spelling — because a wrong
+capacity would invent an insufficiency and a wrong signedness would clear a
+guard. Anything unmodeled derives nothing.
+
+The TOCTOU ordering refiner re-examines each lexical check/use pair on the
+statement-level control-flow graph and can only narrow: `pruned` when the
+pair is provably not an ordered flow (different functions, no CFG path, or
+every path reassigns the checked variable), `discharged` to inconclusive —
+never refuted — when the use carries an atomicity idiom, and `sustained`
+otherwise, leaving the lexical verdict exactly as before. A verified
+ordering stamps the confirmed finding; an unmodeled source sustains without
+the stamp.
+
+The lifetime guard-contradiction oracle discharges a release/use refusal
+only when both statements' governing `if` conditions, conjoined over
+certified immutable locals and parameters under a closed condition grammar,
+are machine-checked unsatisfiable. Jump statements disable the oracle for
+the whole function; loops, writes, shadowing, macros naming a guard,
+volatile, mixed-signedness literals and every other unmodeled construct
+keep the conservative refusal. Z3 absence keeps every refusal.
+
+`check-format-args` performs no solver query: it counts the directives of a
+plain literal printf-family format exactly, inside a closed directive and
+escape grammar, against the supplied arguments. A counted deficit is
+undefined behaviour regardless of values (C11 7.21.6.1p2) and survives as a
+confirmed detection receipt; a surplus is never a defect; and positional
+forms, `%m`, wide conversions, unknown flags, non-literal or prefixed
+formats and va_list variants decline the whole call, because an over-count
+would manufacture a false positive. Negatives remain capped at inconclusive —
+arity says nothing about the call's reachability.
