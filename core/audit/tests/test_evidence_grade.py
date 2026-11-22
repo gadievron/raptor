@@ -903,8 +903,13 @@ class TestProducerStampClosure:
     _AUDIT_ROOT = Path(__file__).resolve().parents[1]
 
     # Stamps a producer deliberately commits only on demotable /
-    # non-finding outcomes. Additions require a behavioral test
-    # proving the stamp never rides a "finding" status.
+    # non-finding outcomes, keyed to the ONLY modules (paths relative
+    # to core/audit) allowed to write them. The exemption is
+    # per-producer, not per-spelling: a second writer of the same
+    # stamp fails the census even though the spelling is listed, so
+    # the behavioral guarantee stays attached to the audited
+    # chokepoint. Additions require a behavioral test proving the
+    # stamp never rides a "finding" status at the named producer.
     #
     # dynamic:exception — detection role in the exact-spelling
     # registry; its single producer
@@ -914,7 +919,14 @@ class TestProducerStampClosure:
     # proof against the LIVE chokepoint:
     # test_dynamic_sweep_forgery.py (exception-grade cases assert
     # status == "suspicious" after stamping).
-    _DELIBERATELY_DEMOTABLE: frozenset = frozenset({"dynamic:exception"})
+    _DELIBERATELY_DEMOTABLE: dict = {
+        "dynamic:exception": ("dynamic_sweep.py",),
+    }
+
+    @classmethod
+    def _deliberately_demotable(cls, loc, stamp) -> bool:
+        modules = cls._DELIBERATELY_DEMOTABLE.get(stamp, ())
+        return any(str(loc).startswith(f"{m}:") for m in modules)
 
     @classmethod
     def _modules(cls):
@@ -1165,7 +1177,7 @@ class TestProducerStampClosure:
                 ):
                     violations.append((loc, prefix))
                 continue
-            if stamp in self._DELIBERATELY_DEMOTABLE:
+            if self._deliberately_demotable(loc, stamp):
                 continue
             if not is_tool_evidence(stamp):
                 violations.append((loc, stamp))
@@ -1237,13 +1249,27 @@ class TestProducerStampClosure:
         assert found, "sweep no longer sees attribute stamp writers"
         violations = [
             (loc, stamp) for loc, stamp in found
-            if stamp not in self._DELIBERATELY_DEMOTABLE
+            if not self._deliberately_demotable(loc, stamp)
             and not is_tool_evidence(stamp)
         ]
         assert not violations, (
             "attribute stamp writers emit firewall-rejected stamps: "
             f"{violations}"
         )
+
+    def test_demotable_exemption_is_per_producer(self):
+        """The hatch names the chokepoint, not just the spelling: a
+        SECOND writer of a demotable stamp (e.g. the orchestrator
+        re-inlining the exception stamp without the demotion) must
+        fail the census even though the spelling is listed."""
+        assert self._deliberately_demotable(
+            "dynamic_sweep.py:1", "dynamic:exception")
+        assert not self._deliberately_demotable(
+            "orchestrator.py:4675", "dynamic:exception")
+        assert not self._deliberately_demotable(
+            "dynamic_sweep_extra.py:1", "dynamic:exception")
+        assert not self._deliberately_demotable(
+            "dynamic_sweep.py:1", "dynamic:not-observed")
 
 
 class TestStampPartOrderClosure:
