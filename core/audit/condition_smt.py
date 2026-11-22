@@ -5803,6 +5803,10 @@ class TocTouResult:
     use_line: int = 0
     variable: str = ""
     reasoning: str = ""
+    #: True only when the check-to-use flow was positively verified on
+    #: the statement CFG (C sources with a file path). Lexical-only
+    #: findings leave it False.
+    ordering_verified: bool = False
 
     def to_dict(self) -> dict:
         d = {
@@ -5816,6 +5820,8 @@ class TocTouResult:
         }
         if not self.applicable:
             d["applicable"] = False
+        if self.ordering_verified:
+            d["ordering_verified"] = True
         return d
 
 
@@ -5889,10 +5895,60 @@ def _extract_path_arg(line: str, call_match: re.Match) -> str:
     return ""
 
 
+#: Candidate pairs ordered on the CFG per source before falling back to
+#: the lexical verdict (the pre-refinement behavior) for the remainder.
+_TOCTOU_REFINE_CAP = 128
+
+
+def _toctou_args_related(check_arg: str, use_arg: str) -> bool:
+    """Same path expression, or identifier-boundary composition.
+
+    Bare containment paired ``access(p, ...)`` with ``open(path, ...)``
+    — different variables. Containment counts only when the shorter
+    expression appears at identifier boundaries in the longer one
+    (``dir`` inside ``dir + name`` yes, ``p`` inside ``path`` no).
+    """
+    if check_arg == use_arg:
+        return True
+    shorter, longer = sorted((check_arg, use_arg), key=len)
+    if not shorter:
+        return False
+    for m in re.finditer(re.escape(shorter), longer):
+        before = longer[m.start() - 1] if m.start() else ""
+        after = longer[m.end()] if m.end() < len(longer) else ""
+        if (before.isalnum() or before == "_"
+                or after.isalnum() or after == "_"):
+            continue
+        return True
+    return False
+
+
+def _toctou_negative(pruned: int, discharged: int) -> TocTouResult:
+    """Negative lane outcome honest about why candidates were removed."""
+    if discharged:
+        return TocTouResult(
+            applicable=False,
+            reasoning=(
+                f"{discharged} check-then-use candidate(s) carry an atomic "
+                "use idiom — race mitigated on its primary vector, not "
+                "shown absent"
+            ),
+        )
+    if pruned:
+        return TocTouResult(
+            reasoning=(
+                f"{pruned} lexical candidate pair(s) pruned on the "
+                "control-flow graph (no ordered check-to-use flow)"
+            ),
+        )
+    return TocTouResult(reasoning="no TOCTOU pattern found")
+
+
 def _check_toctou_pairs(
     lines: list,
     check_re: re.Pattern,
     use_re: re.Pattern,
+    refiner=None,
 ) -> TocTouResult:
     """Scan for check-then-act pairs on the same path variable."""
     checks: list[tuple[int, str, str]] = []
@@ -5903,6 +5959,7 @@ def _check_toctou_pairs(
             if path_arg:
                 checks.append((i, m.group(1), path_arg))
 
+    pruned = discharged = attempts = 0
     for i, line in enumerate(lines):
         m = use_re.search(line)
         if m:
@@ -5912,25 +5969,42 @@ def _check_toctou_pairs(
             for check_line, check_call, check_arg in checks:
                 if i <= check_line:
                     continue
-                if check_arg == use_arg or (
-                    check_arg in use_arg or use_arg in check_arg
-                ):
-                    return TocTouResult(
-                        toctou_found=True,
-                        check_call=check_call,
-                        check_line=check_line + 1,
-                        use_call=m.group(1),
-                        use_line=i + 1,
-                        variable=check_arg,
-                        reasoning=(
-                            f"'{check_call}' checks '{check_arg}' at line "
-                            f"{check_line + 1}, then '{m.group(1)}' uses it "
-                            f"at line {i + 1} — filesystem state can change "
-                            f"between check and use"
-                        ),
+                if not _toctou_args_related(check_arg, use_arg):
+                    continue
+                verified = False
+                reasoning = (
+                    f"'{check_call}' checks '{check_arg}' at line "
+                    f"{check_line + 1}, then '{m.group(1)}' uses it "
+                    f"at line {i + 1} — filesystem state can change "
+                    f"between check and use"
+                )
+                if refiner is not None and attempts < _TOCTOU_REFINE_CAP:
+                    attempts += 1
+                    verdict = refiner.refine(
+                        check_call, check_line + 1,
+                        m.group(1), i + 1, check_arg,
                     )
+                    if verdict.status == "pruned":
+                        pruned += 1
+                        continue
+                    if verdict.status == "discharged":
+                        discharged += 1
+                        continue
+                    if verdict.verified:
+                        verified = True
+                        reasoning += f"; {verdict.reason}"
+                return TocTouResult(
+                    toctou_found=True,
+                    check_call=check_call,
+                    check_line=check_line + 1,
+                    use_call=m.group(1),
+                    use_line=i + 1,
+                    variable=check_arg,
+                    reasoning=reasoning,
+                    ordering_verified=verified,
+                )
 
-    return TocTouResult(reasoning="no TOCTOU pattern found")
+    return _toctou_negative(pruned, discharged)
 
 
 def _extract_nth_arg(line: str, call_match: re.Match, n: int = 0) -> str:
@@ -5957,7 +6031,7 @@ def _extract_nth_arg(line: str, call_match: re.Match, n: int = 0) -> str:
     return ""
 
 
-def _check_toctou_double_fetch(lines: list) -> TocTouResult:
+def _check_toctou_double_fetch(lines: list, refiner=None) -> TocTouResult:
     """Detect copy_from_user double-fetch: same user pointer copied twice."""
     fetches: dict[str, list[tuple[int, str]]] = {}
     for i, line in enumerate(lines):
@@ -5967,33 +6041,67 @@ def _check_toctou_double_fetch(lines: list) -> TocTouResult:
             if src_arg:
                 fetches.setdefault(src_arg, []).append((i, m.group(1)))
 
+    pruned = attempts = 0
     for arg, locs in fetches.items():
-        if len(locs) >= 2:
+        for first, second in zip(locs, locs[1:]):
+            verified = False
+            reasoning = (
+                f"double fetch of user pointer '{arg}': first at line "
+                f"{first[0] + 1}, second at line {second[0] + 1} — "
+                f"user space can modify between fetches"
+            )
+            if refiner is not None and attempts < _TOCTOU_REFINE_CAP:
+                attempts += 1
+                verdict = refiner.refine(
+                    first[1], first[0] + 1, second[1], second[0] + 1, arg,
+                )
+                if verdict.status == "pruned":
+                    pruned += 1
+                    continue
+                if verdict.verified:
+                    verified = True
+                    reasoning += f"; {verdict.reason}"
             return TocTouResult(
                 toctou_found=True,
-                check_call=locs[0][1],
-                check_line=locs[0][0] + 1,
-                use_call=locs[1][1],
-                use_line=locs[1][0] + 1,
+                check_call=first[1],
+                check_line=first[0] + 1,
+                use_call=second[1],
+                use_line=second[0] + 1,
                 variable=arg,
-                reasoning=(
-                    f"double fetch of user pointer '{arg}': first at line "
-                    f"{locs[0][0] + 1}, second at line {locs[1][0] + 1} — "
-                    f"user space can modify between fetches"
-                ),
+                reasoning=reasoning,
+                ordering_verified=verified,
             )
 
-    return TocTouResult(reasoning="no double-fetch pattern found")
+    return _toctou_negative(pruned, 0) if pruned else TocTouResult(
+        reasoning="no double-fetch pattern found",
+    )
 
 
-def check_toctou(source: str) -> TocTouResult:
-    """Detect TOCTOU (check-then-act) filesystem races and double fetches."""
+def check_toctou(source: str, *, file_path: str | None = None) -> TocTouResult:
+    """Detect TOCTOU (check-then-act) filesystem races and double fetches.
+
+    With a C/C++ *file_path*, every lexical candidate pair is re-ordered
+    on the statement CFG (:mod:`core.audit.toctou_order`): provably
+    unordered pairs are pruned, atomic use idioms discharge to
+    inconclusive, and sustained findings say whether the flow was
+    verified. The refinement only ever narrows the lexical verdict.
+    """
     from .safety_contract import assert_boost_only
     assert_boost_only("condition_smt")
     if not source or not source.strip():
         return TocTouResult(applicable=False, reasoning="empty source")
 
     lines = source.splitlines()
+
+    refiner = None
+    if file_path is not None:
+        from .condition_extraction import language_for_file
+        if language_for_file(file_path) in ("c", "cpp"):
+            try:
+                from .toctou_order import ToctouRefiner
+                refiner = ToctouRefiner(source)
+            except Exception:
+                logger.debug("TOCTOU refiner unavailable", exc_info=True)
 
     has_go = any(kw in source for kw in ("func ", "package ", "import ("))
     has_py = any(kw in source for kw in ("def ", "import os", "from pathlib"))
@@ -6008,14 +6116,24 @@ def check_toctou(source: str) -> TocTouResult:
         if result.toctou_found:
             return result
 
-    result = _check_toctou_pairs(lines, _TOCTOU_C_CHECKS, _TOCTOU_C_USES)
-    if result.toctou_found:
-        return result
+    pair_result = _check_toctou_pairs(
+        lines, _TOCTOU_C_CHECKS, _TOCTOU_C_USES, refiner,
+    )
+    if pair_result.toctou_found:
+        return pair_result
 
-    result = _check_toctou_double_fetch(lines)
-    if result.toctou_found:
-        return result
+    fetch_result = _check_toctou_double_fetch(lines, refiner)
+    if fetch_result.toctou_found:
+        return fetch_result
 
+    # Compose the negatives: a discharged candidate (mitigated, not
+    # absent) outranks a prune note, which outranks a plain no-match.
+    for result in (pair_result, fetch_result):
+        if not result.applicable:
+            return result
+    for result in (pair_result, fetch_result):
+        if "pruned" in result.reasoning:
+            return result
     return TocTouResult(reasoning="no TOCTOU pattern found")
 
 

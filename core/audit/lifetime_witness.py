@@ -1626,6 +1626,21 @@ def _stmt_occurrences(node: Any, names: frozenset[str]) -> list[_Occurrence]:
     return out
 
 
+#: Public alias of the CFG exit sentinel for sibling oracles.
+CFG_EXIT = _EXIT
+
+
+def build_statement_cfg(body: Any) -> _CFG:
+    """Statement-level CFG for a parsed C function body.
+
+    Public wrapper for sibling source oracles (the TOCTOU ordering
+    refiner). Raises :class:`ProofRefusal` on any construct the builder
+    does not model — callers must treat that as "no CFG", never as a
+    verdict.
+    """
+    return _CFGBuilder().build(body)
+
+
 # ---------------------------------------------------------------------------
 # Function analysis (shared substrate)
 # ---------------------------------------------------------------------------

@@ -3424,7 +3424,7 @@ def _run_smt_verb_on_source(
                     function_name=function_name, outcome="inconclusive",
                     rule_id=f"smt:{verb}",
                 )
-            tt_result = check_toctou(source)
+            tt_result = check_toctou(source, file_path=file_path)
             if tt_result.toctou_found:
                 return SweepResult(
                     tool="smt", file_path=file_path,

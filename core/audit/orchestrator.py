@@ -33230,7 +33230,7 @@ def _pre_loop_smt_screen(
 
         if not tool_hit and is_c:
             with contextlib.suppress(*_SMT_SCREEN_ERRORS):  # type: ignore[arg-type]
-                ttr = check_toctou(source)
+                ttr = check_toctou(source, file_path=file_path)
                 if ttr.toctou_found:
                     tool_hit = "smt:check-toctou"
 
