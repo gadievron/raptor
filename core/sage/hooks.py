@@ -32,6 +32,7 @@ from core.security.redaction import redact_secrets
 from . import rowmac
 from .client import SageClient
 from .config import SageConfig
+from .server_identity import server_identity_ok
 
 logger = get_logger()
 
@@ -90,6 +91,15 @@ def _ollama_gpu_available() -> bool:
         base = os.environ.get(
             "SAGE_OLLAMA_URL", "http://localhost:11435"
         ).rstrip("/")
+        if not server_identity_ok(base, "ollama"):
+            # Same gate the direct-embed path runs: never probe an
+            # unverified loopback port, and never let whatever answers
+            # it steer the GPU/CPU posture (worker counts, embed path,
+            # pipeline-hook enablement). Negative-cached below like
+            # any other probe failure.
+            _ollama_has_gpu = False
+            _ollama_gpu_checked_at = time.time()
+            return False
         resp = httpx.get(f"{base}/api/ps", timeout=5)
         if resp.status_code == 200:
             for model in resp.json().get("models", []):

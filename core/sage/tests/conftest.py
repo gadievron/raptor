@@ -21,6 +21,7 @@ import pytest
 @pytest.fixture(autouse=True)
 def _trusted_sage_server(monkeypatch):
     import core.sage.client as client_mod
+    import core.sage.hooks as hooks_mod
 
     # hasattr-guarded so the fixture tolerates the binding's absence
     # (an implementation-reverted tree must fail only the gate's own
@@ -29,6 +30,12 @@ def _trusted_sage_server(monkeypatch):
     if hasattr(client_mod, "server_identity_ok"):
         monkeypatch.setattr(
             client_mod, "server_identity_ok", lambda url, service: True
+        )
+    # Same neutralisation at the hooks binding (the GPU probe gates
+    # on server identity before touching the Ollama port).
+    if hasattr(hooks_mod, "server_identity_ok"):
+        monkeypatch.setattr(
+            hooks_mod, "server_identity_ok", lambda url, service: True
         )
     # And keep the operator bypass out of test outcomes regardless of
     # the invoking shell's environment.

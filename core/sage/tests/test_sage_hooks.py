@@ -3598,3 +3598,21 @@ class TestOllamaGpuProbeTtl(unittest.TestCase):
             self.assertTrue(hooks._ollama_gpu_available())
         self.assertEqual(g.call_args.args[0],
                          "http://127.0.0.1:21434/api/ps")
+
+    def test_unverified_server_is_never_probed(self):
+        # The same identity gate the direct-embed path runs: whatever
+        # answers an unverified loopback port must not steer worker
+        # counts, the embed path, or pipeline-hook enablement — the
+        # probe never even touches it.
+        from core.sage import hooks
+        with patch.object(hooks, "server_identity_ok",
+                          return_value=False) as gate, \
+                patch("httpx.get",
+                      return_value=self._gpu_response()) as g:
+            self.assertFalse(hooks._ollama_gpu_available())
+        self.assertEqual(gate.call_args.args[1], "ollama")
+        g.assert_not_called()
+        # Negative-cached like any other probe failure — re-gated
+        # after the TTL, not latched for the process lifetime.
+        self.assertIs(hooks._ollama_has_gpu, False)
+        self.assertGreater(hooks._ollama_gpu_checked_at, 0.0)
