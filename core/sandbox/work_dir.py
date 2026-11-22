@@ -128,17 +128,23 @@ def adopt_subdir_identity(identity: object) -> str:
     walk_path = identity.get("walk_path")
     st_dev = identity.get("st_dev")
     st_ino = identity.get("st_ino")
-    for name, value in (("path", path), ("walk_path", walk_path)):
-        if (not isinstance(value, str)
-                or value != canonical_bind_path(value)):
-            msg = (f"adopt_subdir_identity: {name!r} must be a "
-                   f"canonical absolute path")
+    def canonical_path(name: str, value: object) -> str:
+        if not isinstance(value, str) or value != canonical_bind_path(value):
+            msg = f"adopt_subdir_identity: {name!r} must be a canonical absolute path"
             raise ValueError(msg)
-    for name, value in (("st_dev", st_dev), ("st_ino", st_ino)):
+        return value
+
+    def inode_number(name: str, value: object) -> int:
         if type(value) is not int or value < 0:
             msg = (f"adopt_subdir_identity: {name!r} must be a "
                    f"non-negative int, got {type(value).__name__}")
             raise ValueError(msg)
+        return value
+
+    path = canonical_path("path", path)
+    walk_path = canonical_path("walk_path", walk_path)
+    st_dev = inode_number("st_dev", st_dev)
+    st_ino = inode_number("st_ino", st_ino)
     with _identity_lock:
         _verified_subdirs[path] = (walk_path, st_dev, st_ino)
     return path
