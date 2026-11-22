@@ -209,6 +209,18 @@ class TestRulingConfirmationStamp:
         f["vuln_type"] = "remote code execution"
         assert not prov.verify_ruling_confirmation(f, tmp_path)
 
+    def test_cwe_tamper_fails(self, tmp_path):
+        # cwe classifies the confirmation the same way vuln_type does
+        # and rides the same surviving Confirmed into reports, SARIF
+        # and harvest records — a post-stamp swap must demote.
+        f = _finding(cwe="CWE-125")
+        ruling = {"status": "confirmed", "reason": "r"}
+        f["ruling"] = ruling
+        prov.stamp_ruling_confirmation(f, ruling, tmp_path)
+        assert prov.verify_ruling_confirmation(f, tmp_path)
+        f["cwe"] = "CWE-787"
+        assert not prov.verify_ruling_confirmation(f, tmp_path)
+
     def test_unstamped_or_non_dict_never_verifies(self, tmp_path):
         assert not prov.verify_ruling_confirmation(
             _finding(ruling={"status": "confirmed"}), tmp_path)
