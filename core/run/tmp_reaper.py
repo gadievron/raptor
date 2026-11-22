@@ -794,22 +794,45 @@ _SYSTEM_TMP_ROOTS: tuple[str, ...] = ("/tmp",)
 _LANE_DIR_PREFIX = ".raptor-lane-"
 
 
+def strip_branded_family(base: Path, family: str | None = None) -> Path:
+    """``base`` with the branded ``raptor-<euid>`` component stripped.
+
+    Under the ``bin/raptor`` launcher the ambient temp dir is the
+    per-session ``TMPDIR`` — ``<base>/raptor-<euid>/session-…/tmp`` —
+    so anything minted "in the temp dir" inherits the framework name,
+    the euid, and the session pid as path components. Directories whose
+    paths become CHILD-VISIBLE (a sandboxed child's ``TMPDIR`` value,
+    the mountinfo root field of a bind mount, a writable-bind source)
+    must instead be minted at the de-branded base this returns: the
+    path up to (excluding) the family component, or ``base`` unchanged
+    when it is not family-branded. Pure — callers resolve ``base``
+    themselves so each consumer stays on its own (test-steerable)
+    ``tempfile`` namespace. This module is the bottom of the core.run
+    import stack, so every consumer can import it without a cycle.
+    """
+    family = family if family is not None else f"raptor-{os.geteuid()}"
+    parts = base.parts
+    if family in parts:
+        return Path(*parts[: parts.index(family)])
+    return base
+
+
 def _debranded_base() -> str:
     """gettempdir() with the ``raptor-<euid>`` family stripped out.
 
-    core/run/workdir.py mints anonymous ``.ws-`` workspaces OUTSIDE the
-    branded launcher family (the whole point is a marker-free path for
-    a sandboxed child's writable bind), so under a custom
+    core/run/workdir.py mints anonymous ``.ws-`` workspaces — and
+    core/sandbox/context.py its child-visible ``.scr-``/``.fp-`` dirs —
+    OUTSIDE the branded launcher family (the whole point is a
+    marker-free path for a sandboxed child), so under a custom
     ``RAPTOR_WORK_DIR`` base a SIGKILLed owner strands them somewhere
-    neither gettempdir() nor _SYSTEM_TMP_ROOTS covers. Computed inline
-    — workdir.py imports this module, so the reverse import would
-    cycle. Empty string when gettempdir() is not family-branded (the
-    plain dir is already a root via _add's realpath dedup). Resolves
-    first, matching workdir's own base computation."""
-    parts = Path(tempfile.gettempdir()).resolve().parts
-    fam = f"raptor-{os.geteuid()}"
-    if fam in parts:
-        return str(Path(*parts[: parts.index(fam)]))
+    neither gettempdir() nor _SYSTEM_TMP_ROOTS covers. Empty string
+    when gettempdir() is not family-branded (the plain dir is already
+    a root via _add's realpath dedup). Resolves first, matching the
+    consumers' own base computation."""
+    base = Path(tempfile.gettempdir()).resolve()
+    stripped = strip_branded_family(base)
+    if stripped != base:
+        return str(stripped)
     return ""
 
 

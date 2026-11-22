@@ -61,7 +61,7 @@ from pathlib import Path
 from core.atomic_fs import rmtree_hardened
 from core.atomic_fs.cache_eviction import file_generation
 from core.run.scratch import scratch_dir
-from core.run.tmp_reaper import _dir_in_use, _live_cwds, _pid_alive
+from core.run.tmp_reaper import _dir_in_use, _live_cwds, _pid_alive, strip_branded_family
 
 logger = logging.getLogger(__name__)
 
@@ -318,11 +318,7 @@ def _debranded_tmp_base() -> Path:
     case, and the plain temp dir when it is not family-branded.
     """
     base = Path(tempfile.gettempdir()).resolve()
-    parts = base.parts
-    fam = _family_name()
-    if fam in parts:
-        return Path(*parts[: parts.index(fam)])
-    return base
+    return strip_branded_family(base, _family_name())
 
 
 @contextmanager

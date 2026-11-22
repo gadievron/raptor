@@ -1213,6 +1213,38 @@ class TestMultiRootSweep:
         assert kept.is_dir()
 
 
+class TestStripBrandedFamily:
+    """Pure helper shared by the `.ws-` allocator, the sandbox's
+    child-visible `.scr-`/`.fp-` mints, and `_debranded_base` itself:
+    the launcher's `raptor-<euid>` family component (and everything
+    below it — the session pid rides in the next component) must strip
+    cleanly out of a temp base."""
+
+    def test_branded_base_strips_to_the_family_parent(self):
+        from core.run.tmp_reaper import strip_branded_family
+        fam = f"raptor-{os.geteuid()}"
+        base = Path("/var/tmp") / fam / "session-1-2" / "tmp"
+        assert strip_branded_family(base) == Path("/var/tmp")
+
+    def test_unbranded_base_is_returned_unchanged(self):
+        from core.run.tmp_reaper import strip_branded_family
+        assert strip_branded_family(Path("/var/tmp")) == Path("/var/tmp")
+
+    def test_explicit_family_overrides_the_euid_default(self):
+        from core.run.tmp_reaper import strip_branded_family
+        base = Path("/work/raptor-selftest/session-9-9/tmp")
+        assert strip_branded_family(
+            base, "raptor-selftest") == Path("/work")
+        # The euid-derived default does not match the custom family, so
+        # the same base passes through untouched without the override.
+        assert strip_branded_family(base) == base
+
+    def test_family_at_the_root_strips_to_root(self):
+        from core.run.tmp_reaper import strip_branded_family
+        fam = f"raptor-{os.geteuid()}"
+        assert strip_branded_family(Path("/") / fam) == Path("/")
+
+
 class TestPidSuffixDirReaping:
     """reap_dead_pid_dirs(pid_suffix=True) — mkdtemp-minted session
     scratch whose caller embeds the owning pid in the prefix
