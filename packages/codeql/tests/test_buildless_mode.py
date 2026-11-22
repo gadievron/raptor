@@ -832,6 +832,9 @@ def _plant_cached_db(db_manager, repo, language, build_system_value):
         "file_count": 1, "duration_seconds": 1.0,
         "database_path": str(db),
     }
+    # Serve requires the promote-minted content digest to match.
+    from packages.codeql.database_manager import database_content_digest
+    meta["content_digest"] = database_content_digest(db)
     # Planted sidecars must carry the writer's integrity stamp or the
     # reader (load_metadata) treats them as forged and misses.
     from packages.codeql import cache_integrity

@@ -39,17 +39,21 @@ Name binding
     validly-stamped sidecar could be copied over ANOTHER slot's
     filename and vouch a genuine-but-wrong database there.
 
-Scope note — why no database content digest
+Scope note — the database content digest
     The metadata MAC binds the sidecar's claims, not the database
-    bytes beside it. An at-rest content digest was considered and
-    rejected: ``database analyze`` holds a legitimate writable bind on
-    the canonical DB (results, logs, evaluator cache land inside it —
-    see ``QueryRunner._analysis_scope``), so any digest computed at
-    promote would false-miss after the first analyze and degrade the
-    cache into a permanent rebuild loop. Database content integrity
-    rests on the narrowed create-time write grant (the per-call
-    staging workspace) plus ``validate_database``'s lstat-based
-    structural checks.
+    bytes beside it. Content integrity is carried by a SEPARATE
+    immutable-subset digest
+    (``database_manager.database_content_digest``) minted at promote
+    and stamped into the MAC'd sidecar as ``content_digest``, then
+    recomputed and compared at serve. A full-tree digest was rejected:
+    ``database analyze`` holds a legitimate writable bind on the
+    canonical DB (results, logs, evaluator cache land inside it — see
+    ``QueryRunner._analysis_scope``), so it would false-miss after the
+    first analyze and degrade the cache into a permanent rebuild loop.
+    The subset therefore covers only what analyze never writes — the
+    yml, ``src.zip``, and the ``db-*`` relations outside evaluator
+    cache dirs. The same walk refuses hostile tree shapes (internal
+    symlinks / special files) at promote, adopt, and serve.
 
 Upgrade note
     Sidecars written before this module carry no token and read as

@@ -1412,6 +1412,8 @@ class TestCacheTtlKnob:
             build_system="none", file_count=1, success=True,
             duration_seconds=0.1, errors=[],
             database_path=str(db_dir),
+            # Serve requires the promote-minted digest to match.
+            content_digest=dm.database_content_digest(db_dir),
         )
         monkeypatch.setattr(mgr, "load_metadata", lambda *a, **k: meta)
         monkeypatch.setattr(

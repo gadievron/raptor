@@ -35,6 +35,8 @@ def manager(tmp_path):
 
 
 def _metadata(manager, repo: Path, language: str = "python") -> DatabaseMetadata:
+    from packages.codeql.database_manager import database_content_digest
+    db = manager.get_database_dir(REPO_HASH, language)
     return DatabaseMetadata(
         repo_hash=REPO_HASH, repo_path=str(repo), language=language,
         created_at=datetime.now(timezone.utc).isoformat(),
@@ -42,7 +44,10 @@ def _metadata(manager, repo: Path, language: str = "python") -> DatabaseMetadata
         build_system="source-only", file_count=1, success=True,
         duration_seconds=0.1,
         errors=[],
-        database_path=str(manager.get_database_dir(REPO_HASH, language)),
+        database_path=str(db),
+        # Serve requires the promote-minted content digest to match
+        # the planted DB's bytes.
+        content_digest=database_content_digest(db),
     )
 
 

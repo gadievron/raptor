@@ -6,7 +6,10 @@ import json
 
 import pytest
 
-from packages.codeql.database_manager import DatabaseManager
+from packages.codeql.database_manager import (
+    DatabaseManager,
+    database_content_digest,
+)
 
 
 @pytest.mark.parametrize('success,accepted', [
@@ -37,6 +40,8 @@ def test_cache_reuse_requires_boolean_success_sidecar(tmp_path, success, accepte
         'build_command': '', 'build_system': 'source-only', 'file_count': 1,
         'success': success, 'duration_seconds': 0.1, 'errors': [],
         'database_path': str(database),
+        # Serve requires the promote-minted content digest to match.
+        'content_digest': database_content_digest(database),
     }
     # Stamp every variant: the Boolean-success gate under test must be
     # the discriminator, not the (separate) integrity-verification gate.

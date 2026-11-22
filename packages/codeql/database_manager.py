@@ -383,6 +383,80 @@ def _build_stderr_tail(stderr: str | None, *, max_lines: int = 10,
     return detail
 
 
+def _digest_included(rel_parts: tuple) -> bool:
+    """Whether a database-relative path is in the immutable digest
+    subset: the two top-level identity files plus the ``db-*`` dataset
+    relations, EXCLUDING any directory named ``cache`` (the evaluator
+    cache under ``db-<lang>/default/cache/`` is the one place
+    ``database analyze`` legitimately writes inside ``db-*``).
+    ``results/``, ``log/`` and ``diagnostic/`` are analyze-writable
+    and sit outside the subset entirely."""
+    if len(rel_parts) == 1:
+        return rel_parts[0] in ("codeql-database.yml", "src.zip")
+    return rel_parts[0].startswith("db-") and "cache" not in rel_parts
+
+
+def database_content_digest(db_path: Path) -> str | None:
+    """sha256 fingerprint of the database's immutable content subset,
+    or None when the tree is hostile-shaped or unreadable.
+
+    The sidecar MAC (``packages.codeql.cache_integrity``) binds the
+    metadata's CLAIMS; this digest binds the claims to the database
+    BYTES the next run will analyse. ``database analyze`` holds a
+    writable bind on the served DB, so a full-tree digest would
+    false-miss after the first analyze — the digest therefore covers
+    only the subset analyze never writes (see ``_digest_included``):
+    the yml, ``src.zip`` (the source every snippet/coverage reader
+    trusts), and the ``db-*`` relation files the evaluator actually
+    queries. Swapping any of those swaps analysis ground truth.
+
+    The walk doubles as the hostile-shape sweep and covers the WHOLE
+    tree, excluded regions included: a symlink or special file
+    anywhere rides into analyze's writable sandbox bind aimed wherever
+    it points, so its presence refuses the database outright (None)
+    rather than merely dropping it from the digest. The verdict is
+    only decision-grade where the tree sits outside the build grant —
+    promote and serve call this on post-rename canonical/kept paths.
+
+    The manifest hashes each included file's relative path alongside
+    its streamed content hash, so adding, removing, renaming, or
+    rewriting a subset file all change the digest. Reads are fd-gated
+    (O_NOFOLLOW + fstat regularity). OSError anywhere → None: callers
+    treat None as refuse/miss, never as "unknown but fine".
+    """
+    entries: list = []
+    try:
+        for root, dirs, files in os.walk(db_path, followlinks=False):
+            root_path = Path(root)
+            for name in dirs + files:
+                info = os.lstat(os.path.join(root, name))
+                if stat.S_ISLNK(info.st_mode) or not (
+                    stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)
+                ):
+                    logger.warning(
+                        "CodeQL database %s contains a symlink or "
+                        "special file (%s) — refusing the tree",
+                        db_path,
+                        (root_path / name).relative_to(db_path).as_posix(),
+                    )
+                    return None
+            for name in files:
+                rel = (root_path / name).relative_to(db_path)
+                if _digest_included(rel.parts):
+                    entries.append((rel.as_posix(), root_path / name))
+        manifest = hashlib.sha256()
+        for rel_posix, path in sorted(entries):
+            file_hash = hashlib.sha256()
+            with open_regular_gated(path, follow_symlinks=False) as fh:
+                for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                    file_hash.update(chunk)
+            manifest.update(rel_posix.encode("utf-8") + b"\x00")
+            manifest.update(file_hash.digest())
+        return manifest.hexdigest()
+    except (OSError, ValueError):
+        return None
+
+
 @dataclass
 class DatabaseMetadata:
     """Metadata for CodeQL database."""
@@ -398,6 +472,10 @@ class DatabaseMetadata:
     duration_seconds: float
     errors: list[str]
     database_path: str
+    # Immutable-subset content digest minted at promote (see
+    # database_content_digest). None only in legacy entries, which
+    # read as serve misses and rebuild once.
+    content_digest: str | None = None
 
     def to_dict(self):
         return asdict(self)
@@ -954,6 +1032,25 @@ class DatabaseManager:
             logger.warning("Cached database failed validation: %s", language)
             return None
 
+        # Content check, after the cheap gates: the DB bytes must
+        # match the digest the promote stamped into the MAC'd sidecar
+        # (database_content_digest — immutable subset only, so
+        # analyze's own writes don't false-miss). A missing digest is
+        # a legacy entry (the MAC stops anyone stripping the field
+        # from a stamped sidecar): one-time rebuild, same posture as
+        # the unstamped-sidecar upgrade path. A None recompute means
+        # the tree is unreadable or hostile-shaped (internal symlink /
+        # special file) — never served either way.
+        digest = database_content_digest(db_path)
+        if digest is None or metadata.content_digest != digest:
+            logger.warning(
+                "Cached %s database content does not match its stamped "
+                "sidecar digest (legacy entry, modified immutable "
+                "files, or an internal symlink) — treating as a cache "
+                "miss and rebuilding", language,
+            )
+            return None
+
         logger.info("✓ Using cached database for %s: %s", language, db_path)
         return db_path
 
@@ -1252,6 +1349,18 @@ class DatabaseManager:
             return None
         if not self._is_real_directory(kept):
             self._remove_planted_dirent(kept, language)
+            return None
+        # Same hostile-shape sweep as the promote sites, on the same
+        # decision-grade footing (kept now sits outside the build
+        # grant): the returned path becomes the analysed database, so
+        # an internal symlink or special file refuses the whole tree.
+        if database_content_digest(kept) is None:
+            logger.error(
+                "✗ fallback %s DB tree was refused (internal "
+                "symlink/special file or unreadable content) — "
+                "refusing to serve it", language,
+            )
+            rmtree_hardened(kept)
             return None
         return kept
 
@@ -2024,6 +2133,10 @@ class DatabaseManager:
             # post-rename lstat is decision-grade against a swap that
             # lands inside this gate-to-rename window.
             staging_is_real = self._is_real_directory(staging_path)
+            # Minted at the promote sites (post-rename, out of the
+            # build grant) and stamped into the MAC'd sidecar; stays
+            # None on every non-promote outcome.
+            content_digest: str | None = None
             if success and not staging_is_real:
                 success = False
                 errors.append(
@@ -2074,10 +2187,49 @@ class DatabaseManager:
                 # build-tool error) lands in the staging DB's log dir.
                 # Losing it turned every creation failure into a manual
                 # re-run under a debugger.
-                _diag = (
-                    self._salvage_creation_log(staging_path)
-                    if staging_is_real else None
-                )
+                # Preserve the full staging dir for inspection under a
+                # name the stale-marker GC already reaps (1h TTL), so
+                # diagnostics survive without accumulating: keep only
+                # the newest failed dir per cache slot.
+                # Slot level, not inside the workspace — the workspace
+                # is reaped in the finally below, which would destroy
+                # the diagnostics it exists to preserve.
+                # Rename BEFORE salvaging: the staging_is_real verdict
+                # above is a snapshot inside the build grant (an
+                # orphaned build child can swap the dirent after it),
+                # so the tree is lifted to slot level first — out of
+                # the grant, same argument as the promote sites — and
+                # the post-rename lstat plus the log read both land on
+                # a tree the orphan can no longer reach.
+                _diag = None
+                if staging_is_real:
+                    _failed = staging_work.parent / (
+                        f".staging-failed-{language}"
+                    )
+                    rmtree_hardened(_failed)
+                    try:
+                        staging_path.rename(_failed)
+                    except OSError:
+                        # Couldn't lift the tree out of the grant;
+                        # salvage best-effort in place (the read is
+                        # fd-gated and the tail is escaped) and
+                        # discard the raceable tree.
+                        _diag = self._salvage_creation_log(staging_path)
+                        rmtree_hardened(staging_path)
+                    else:
+                        if self._is_real_directory(_failed):
+                            _diag = self._salvage_creation_log(_failed)
+                            logger.error(
+                                "failed staging preserved for inspection "
+                                "at %s (auto-cleaned after 1h)", _failed,
+                            )
+                        else:
+                            self._remove_planted_dirent(_failed, language)
+                else:
+                    # Nothing diagnostic to preserve — a planted
+                    # symlink/non-directory must not be kept where an
+                    # operator (or a later rmtree) would follow it.
+                    self._remove_planted_dirent(staging_path, language)
                 if _diag:
                     errors.append(_diag[:2000])
                     logger.error(
@@ -2086,31 +2238,6 @@ class DatabaseManager:
                             _diag[:2000], preserve_newlines=True,
                         ),
                     )
-                # Preserve the full staging dir for inspection under a
-                # name the stale-marker GC already reaps (1h TTL), so
-                # diagnostics survive without accumulating: keep only
-                # the newest failed dir per cache slot.
-                # Slot level, not inside the workspace — the workspace
-                # is reaped in the finally below, which would destroy
-                # the diagnostics it exists to preserve.
-                if staging_is_real:
-                    _failed = staging_work.parent / (
-                        f".staging-failed-{language}"
-                    )
-                    rmtree_hardened(_failed)
-                    try:
-                        staging_path.rename(_failed)
-                        logger.error(
-                            "failed staging preserved for inspection at %s "
-                            "(auto-cleaned after 1h)", _failed,
-                        )
-                    except OSError:
-                        rmtree_hardened(staging_path)
-                else:
-                    # Nothing diagnostic to preserve — a planted
-                    # symlink/non-directory must not be kept where an
-                    # operator (or a later rmtree) would follow it.
-                    self._remove_planted_dirent(staging_path, language)
                 final_path = None
                 did_promote = False
                 used_cached = False
@@ -2160,13 +2287,32 @@ class DatabaseManager:
                     # Post-rename re-check: the orphan's grant covers the
                     # staging hierarchy, not slot_dir, so whatever the
                     # rename installed at canonical is now beyond its
-                    # reach — this lstat verdict cannot be raced.
+                    # reach — this lstat verdict cannot be raced. The
+                    # content digest rides on the same argument: it is
+                    # computed on the out-of-grant canonical tree, then
+                    # stamped into the MAC'd sidecar for the serve-time
+                    # check. None here means the tree holds a symlink /
+                    # special file (a traced build runs the repo's own
+                    # code) or is unreadable — either way build output
+                    # that must not become the cache slot.
                     if self._is_real_directory(canonical_path):
+                        content_digest = database_content_digest(
+                            canonical_path)
+                    if content_digest is not None:
                         logger.info(
                             "✓ Database promoted to canonical: %s",
                             canonical_path,
                         )
                         did_promote = True
+                    elif self._is_real_directory(canonical_path):
+                        rmtree_hardened(canonical_path)
+                        final_path = None
+                        success = False
+                        errors.append(
+                            f"{language} database tree was refused at "
+                            "promote (internal symlink/special file or "
+                            "unreadable content) — output refused"
+                        )
                     else:
                         self._remove_planted_dirent(
                             canonical_path, language,
@@ -2193,6 +2339,16 @@ class DatabaseManager:
                             and self._sibling_canonical_acceptable(
                                 repo_hash, language, traced_build,
                             )
+                            # Hostile-shape sweep before adopting a
+                            # tree this process never promoted: an
+                            # internal symlink would ride into this
+                            # run's analyze writable bind. No digest
+                            # COMPARISON here — the winner may not
+                            # have saved metadata yet (rename lands
+                            # before save_metadata), and serve-time
+                            # lookups enforce the match once it does.
+                            and database_content_digest(
+                                canonical_path) is not None
                         ):
                             logger.info(
                                 "✓ Database promoted by sibling; using cached %s", canonical_path
@@ -2231,18 +2387,36 @@ class DatabaseManager:
                                 pass  # eviction failed; retry-promote will see ENOTEMPTY
                             try:
                                 os.rename(staging_path, canonical_path)
-                                # Same post-rename re-check as the
-                                # first promote site: canonical's
-                                # dirent now sits outside the build
-                                # grant, so this verdict is final.
+                                # Same post-rename re-check and
+                                # content digest as the first promote
+                                # site: canonical's dirent now sits
+                                # outside the build grant, so both
+                                # verdicts are final.
                                 if self._is_real_directory(
                                     canonical_path,
                                 ):
+                                    content_digest = (
+                                        database_content_digest(
+                                            canonical_path))
+                                if content_digest is not None:
                                     logger.info(
                                         "✓ Database promoted to canonical (after evicting broken sibling copy): %s",
                                         canonical_path
                                     )
                                     did_promote = True
+                                elif self._is_real_directory(
+                                    canonical_path,
+                                ):
+                                    rmtree_hardened(canonical_path)
+                                    final_path = None
+                                    success = False
+                                    errors.append(
+                                        f"{language} database tree "
+                                        "was refused at promote "
+                                        "(internal symlink/special "
+                                        "file or unreadable content) "
+                                        "— output refused"
+                                    )
                                 else:
                                     self._remove_planted_dirent(
                                         canonical_path, language,
@@ -2335,6 +2509,7 @@ class DatabaseManager:
                 duration_seconds=time.time() - start_time,
                 errors=errors,
                 database_path=str(final_path) if final_path else "",
+                content_digest=content_digest,
             )
 
             # Save metadata only when WE promoted to canonical. If we used
