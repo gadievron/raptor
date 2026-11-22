@@ -355,6 +355,63 @@ class TestGhidraImportCache:
         assert find_redb(None, binf) is None
 
 
+class TestTargetClassSnapshot:
+    """The target's filesystem class is snapshotted once per search:
+    the gate branches on it in opposite directions (regular targets
+    demand content identity, non-file targets fall to the slot rule),
+    so a swap between two candidate probes must not flip a refusal
+    into slot-rule acceptance."""
+
+    def test_stale_regular_snapshot_still_refuses_unstamped_run_slot(
+        self, tmp_path,
+    ):
+        """Direct-gate pin: with a search-scoped snapshot saying the
+        target WAS a regular binary, a directory now sitting at the
+        target path must not re-open the non-file acceptance lane."""
+        from core.audit.binary_context import _accept_redb
+
+        target = tmp_path / "app"
+        cand = _write_redb(tmp_path / "run", target)
+        target.mkdir()  # swapped after the search snapshot
+
+        assert _accept_redb(
+            cand, target, "run", lambda: None, target_is_regular=True,
+        ) is False
+
+    def test_target_swap_between_candidates_does_not_downgrade(
+        self, tmp_path, monkeypatch,
+    ):
+        """End-to-end race: candidate 1 (run slot) is skipped on a
+        hash mismatch, the target is swapped to a directory, and
+        candidate 2 (stem-keyed slot, unstamped) is probed. The
+        search-start snapshot must keep refusing toward re-import —
+        pre-fix the second probe re-statted the target, saw a
+        non-file and accepted the unverified document."""
+        import core.audit.binary_context as bc
+
+        monkeypatch.setenv("RAPTOR_DIR", str(tmp_path / "raptor"))
+        binf = _make_binary(tmp_path / "bins" / "libbeta.so",
+                            b"\x7fELF-beta")
+        other = _make_binary(tmp_path / "bins" / "libalpha.so",
+                             b"\x7fELF-alpha")
+        run = tmp_path / "run"
+        _write_redb(run, binf, sha256_file(other))  # hash mismatch
+        cache = tmp_path / "raptor" / "out" / "ghidra-import-libbeta"
+        _write_redb(cache, None)  # unstamped, identity unknown
+
+        original = bc._accept_redb
+
+        def racing(cand, target, kind, sha, **kwargs):
+            accepted = original(cand, target, kind, sha, **kwargs)
+            if binf.is_file():  # swap after the first probe
+                binf.unlink()
+                binf.mkdir()
+            return accepted
+
+        monkeypatch.setattr(bc, "_accept_redb", racing)
+        assert find_redb(run, binf) is None
+
+
 class TestGprTargets:
     def test_bundled_binary_is_unknown_run_accepts_shared_refuses(
         self, tmp_path,

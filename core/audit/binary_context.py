@@ -221,6 +221,15 @@ def find_redb(
     def _target_sha() -> str | None:
         return _target_content_sha(Path(target_path)) if target_path is not None else None
 
+    # The target's filesystem class is snapshotted ONCE for the whole
+    # search: the gate branches on it in opposite directions (regular
+    # targets demand content identity, non-file targets fall to the
+    # slot rule), so a target swapped mid-search must not flip a
+    # hash-mismatch skip on one candidate into slot-rule acceptance
+    # on the next.
+    target_is_regular = (
+        Path(target_path).is_file() if target_path is not None else False)
+
     for cand, kind in candidates:
         if not cand.is_file():
             continue
@@ -229,7 +238,9 @@ def find_redb(
         def retain(database: Any, *, candidate: Path = cand) -> None:
             if _snapshot_sink is not None:
                 _snapshot_sink(candidate, database)
-        if _accept_redb(cand, Path(target_path), kind, _target_sha, _snapshot_sink=retain):
+        if _accept_redb(cand, Path(target_path), kind, _target_sha,
+                        target_is_regular=target_is_regular,
+                        _snapshot_sink=retain):
             return cand
     return None
 
@@ -302,9 +313,17 @@ def _accept_redb(
     kind: str,
     target_sha: Callable[[], str | None],
     *,
+    target_is_regular: bool | None = None,
     _snapshot_sink: Callable[[Any], None] | None = None,
 ) -> bool:
     """Identity gate for one existing re-database.json candidate.
+
+    ``target_is_regular`` is the caller's search-scoped snapshot of
+    the target's filesystem class (``None`` = snapshot now). The gate
+    never re-stats the class itself: it branches on it in opposite
+    directions, and a target swapped between two probes (regular →
+    directory) must not downgrade the hashable-target refusal into
+    the non-file slot-rule acceptance.
 
     Evidence order:
 
@@ -339,6 +358,10 @@ def _accept_redb(
     identity. Refuse them and continue looking; a later unchecked reload must
     not turn a transient error into acceptance of a replacement database.
     """
+    if target_is_regular is None:
+        target_is_regular = target.is_file()
+    target_is_gpr = target.suffix == ".gpr"
+
     def _skip(why: str) -> bool:
         from core.security.log_sanitisation import escape_nonprintable
         logger.warning(
@@ -377,7 +400,7 @@ def _accept_redb(
     if not (isinstance(stamp, str) and stamp):
         stamp = None
 
-    if stamp and target.suffix != ".gpr":
+    if stamp and not target_is_gpr:
         actual = target_sha()
         if actual is None:
             return _skip("recorded binary_sha256 cannot be checked against stable target content")
@@ -389,9 +412,10 @@ def _accept_redb(
 
     if recorded:
         from core.security.log_sanitisation import escape_nonprintable
-        verdict = _same_recorded_binary(Path(recorded), target)
+        verdict = _same_recorded_binary(
+            Path(recorded), target, target_is_regular=target_is_regular)
         if verdict is True:
-            if target.suffix == ".gpr" or not target.is_file():
+            if target_is_gpr or not target_is_regular:
                 return _accepted()
             # Path identity on a HASHABLE target is not acceptance:
             # binary_path is attacker-writable JSON, and a stamped
@@ -407,7 +431,7 @@ def _accept_redb(
                 f"({escape_nonprintable(str(recorded)[:300])})")
 
     if kind in ("run", "stem-keyed"):
-        if target.suffix == ".gpr" or not target.is_file():
+        if target_is_gpr or not target_is_regular:
             # Identity is unestablishable from the target side, so
             # the slot's own provenance is the only signal available.
             return _accepted()
@@ -421,8 +445,16 @@ def _accept_redb(
         "no verifiable binary identity in a shared cache location")
 
 
-def _same_recorded_binary(recorded: Path, target: Path) -> bool | None:
+def _same_recorded_binary(
+    recorded: Path, target: Path, *,
+    target_is_regular: bool | None = None,
+) -> bool | None:
     """Is the database's recorded binary the run's target?
+
+    ``target_is_regular`` is the caller's search-scoped snapshot of
+    the target's filesystem class (``None`` = snapshot now); the
+    class decides which identity rules apply, so it must be the SAME
+    evaluation the acceptance gate branched on.
 
     ``True``/``False`` when decidable; ``None`` when identity is
     unknown — the target is not a regular file (run-dir spelling),
@@ -445,7 +477,9 @@ def _same_recorded_binary(recorded: Path, target: Path) -> bool | None:
         # rule decides (an operator-named project legitimately
         # differs from its binary's name, so unknown, not foreign).
         return True if recorded.stem == target.stem else None
-    if not target.is_file():
+    if target_is_regular is None:
+        target_is_regular = target.is_file()
+    if not target_is_regular:
         return None
     try:
         if recorded.exists() and os.path.samefile(recorded, target):
