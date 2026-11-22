@@ -1637,9 +1637,18 @@ def _consumer(index):
 
 
 def _assert_namespace(owner, before):
+    # The warnings machinery lazily writes a per-module
+    # __warningregistry__ into module globals whenever a warning is
+    # attributed to that module — a GC-triggered finalizer from an
+    # unrelated test can do that at any point in the exercised window
+    # under parallel load. Interpreter bookkeeping, not a leaked
+    # fixture binding, so it is excluded from the ownership check.
+    bookkeeping = {"__warningregistry__"}
     current = vars(owner)
-    changed = [name for name, value in before.items() if name not in current or current[name] is not value]
-    added = sorted(current.keys() - before.keys())
+    changed = [name for name, value in before.items()
+               if name not in bookkeeping
+               and (name not in current or current[name] is not value)]
+    added = sorted(current.keys() - before.keys() - bookkeeping)
     assert changed == [] and added == [], (owner.__name__, changed, added)
 
 
@@ -1768,6 +1777,17 @@ def _exercise(index, borrowed, exit_mode, mock=True):
         else:
             assert isinstance(caught, RuntimeError if exit_mode == "error" else KeyboardInterrupt), repr(caught)
             assert str(caught) == "owned scope exit"
+
+
+def test_assert_namespace_ignores_warning_registry_bookkeeping():
+    probe = ModuleType("bookkeeping_probe")
+    probe.existing = object()
+    before = dict(vars(probe))
+    probe.__warningregistry__ = {"spurious": True}
+    _assert_namespace(probe, before)
+    probe.leaked = object()
+    with pytest.raises(AssertionError):
+        _assert_namespace(probe, before)
 
 
 @pytest.mark.parametrize("index", range(len(_SITES)), ids=lambda index: _SITES[index]["file"] + ":" + str(_SITES[index]["line"]))
