@@ -2112,6 +2112,14 @@
    "exp": 1.0,
    "verdict": "linear"
   },
+  "core/orchestration/joern_scan.py\u001f_CALL_NAME_RE": {
+   "digests": [
+    "9df2d9ac878b"
+   ],
+   "exp": 1.0,
+   "note": "The word boundary prevents restarting inside an identifier; identifier and following whitespace spans are disjoint. Reviewed against both Joern call-name readers.",
+   "verdict": "linear"
+  },
   "core/orchestration/joern_trace.py\u001f_CALL_NAME_RE": {
    "digests": [
     "9df2d9ac878b"
