@@ -20,7 +20,7 @@ Notable Rust quirks:
     by c++filt — we build a ``nm --demangle``-derived map first
     (nm's libiberty handles both) and fall back to c++filt only for
     names absent from the binary's symbol table (inlined-only DIEs).
-  * Test binary lives at ``target/release/deps/regex-<hash>``; we
+  * Test binary lives at ``target/release/deps/integration-<hash>``; we
     glob for the latest.
 """
 
@@ -113,7 +113,7 @@ def _rust_cov_candidates() -> tuple[str, ...]:
 
 REGEX_URL = "https://github.com/rust-lang/regex.git"
 REGEX_TAG = "1.10.6"
-CACHE_VERSION = "1"
+CACHE_VERSION = "2"
 
 
 @dataclass
@@ -153,9 +153,9 @@ class _RegexRustDriver:
 
 def _test_binaries(target_dir: Path) -> list[Path]:
     return [
-        path for path in sorted((target_dir / "release/deps").glob("regex-*"))
+        path for path in sorted((target_dir / "release/deps").glob("integration-*"))
         if path.is_file() and path.stat().st_size > 0 and os.access(path, os.X_OK)
-        and "." not in path.name[6:]
+        and "." not in path.name.removeprefix("integration-")
         and path.resolve().is_relative_to(target_dir.resolve())
     ]
 
@@ -209,19 +209,18 @@ def _build_and_run(tag_dir: Path, target_dir: Path, profdata: Path) -> None:
     # sentinel cache absorbs it afterwards.
     build_env["CARGO_HOME"] = str(tag_dir / "cargo-home")
     run_build_step(
-        ["cargo", "build", "--release", "--tests"],
+        ["cargo", "build", "--release", "--test", "integration"],
         cwd=src, scope=tag_dir, extra_env=build_env, network=True,
         timeout=1800,
     )
 
-    candidates = sorted((target_dir / "release" / "deps").glob("regex-*"))
-    test_bin = next(
-        (c for c in candidates if c.is_file() and os.access(c, os.X_OK)
-         and "." not in c.name[6:]), None,
-    )
-    if test_bin is None:
-        msg = f"regex-rust: no test binary built at {target_dir}/release/deps/"
+    # The pinned crate declares tests/lib.rs as the "integration" target.
+    # Use the same discovery on a cold build and a warm cache hit.
+    candidates = _test_binaries(target_dir)
+    if not candidates:
+        msg = f"regex-rust: no integration test binary built at {target_dir}/release/deps/"
         raise RuntimeError(msg)
+    test_bin = candidates[-1]
 
     profraw_pattern = str(tag_dir / "cov-%p-%m.profraw")
     # The built test binary is untrusted-origin code — run it inside

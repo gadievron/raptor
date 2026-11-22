@@ -62,7 +62,7 @@ def case(request, tmp_path, monkeypatch):
         builder = "_build_fresh"
     else:
         dirs = [root / ("target" if name == "regex_rust" else "build")]
-        tail = {"snappy": "snappy_unittest", "leveldb": "leveldb_tests", "regex_rust": "release/deps/regex-owned"}[name]
+        tail = {"snappy": "snappy_unittest", "leveldb": "leveldb_tests", "regex_rust": "release/deps/integration-owned"}[name]
         files = [dirs[0] / tail, root / "merged.profdata"]
         profile = root / {"snappy": "snappy_123.profraw", "leveldb": "leveldb_123.profraw", "regex_rust": "cov-123-456.profraw"}[name]
         builder = "_build_and_run"
@@ -332,3 +332,23 @@ def test_cleanup_cancellation_preserves_build_error_and_continues(case, monkeypa
     assert all(not path.exists() for path in dirs)
     assert profile is None or not profile.exists()
     assert not (root / "sentinel.ok").exists()
+
+
+def test_regex_discovers_declared_integration_target_only(tmp_path):
+    from core.inventory.binary_oracle_corpora.regex_rust import _test_binaries
+
+    target = tmp_path / "target"
+    deps = target / "release/deps"
+    deps.mkdir(parents=True)
+    integration = deps / "integration-abc123"
+    integration.write_bytes(b"owned test binary")
+    integration.chmod(0o700)
+    for name in ("regex-abc123", "integration-abc123.d", "integration-empty"):
+        path = deps / name
+        path.write_bytes(b"" if name.endswith("empty") else b"other artifact")
+        path.chmod(0o700)
+    non_executable = deps / "integration-data"
+    non_executable.write_bytes(b"non-executable artifact")
+    non_executable.chmod(0o600)
+
+    assert _test_binaries(target) == [integration]
