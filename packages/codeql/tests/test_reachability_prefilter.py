@@ -693,3 +693,85 @@ def test_allow_unreachable_suppresses_lexical_dead(tmp_path):
     verdict = a._check_reachability(_finding("src/mod.py", line=3), tmp_path)
     assert verdict == "lexical_dead"
     assert _suppresses(verdict, earned=frozenset()) is False
+
+
+def test_spliced_override_token_on_sarif_cannot_block_suppression(
+        tmp_path, monkeypatch, caplog):
+    """SARIF is never a stamped verdict carrier: the verdict CLI mints
+    claim tokens onto findings artifacts only, and the claim binds flat
+    record keys — not the SARIF locations this arm consumes. A genuine
+    token spliced wholesale (claim keys + token) onto a SARIF result
+    therefore VERIFIES while pointing the override at any finding; it
+    must carry no bypass authority here, and the planted flag is
+    surfaced to the operator."""
+    import logging
+
+    from core.run.verdict_mac import (
+        stamp_manual_override,
+        verified_manual_override,
+    )
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "disabled.py").write_text(
+        "raise ImportError('retired')\n"
+        "def dead(q):\n"
+        "    cursor.execute(q)\n"
+    )
+    a = _analyzer()
+    canned = _finding("src/disabled.py", line=3)
+    monkeypatch.setattr(a, "parse_sarif_finding", lambda r, run: canned)
+    a.dataflow_validator = MagicMock()
+    a.dataflow_validator.validate_finding.side_effect = AssertionError(
+        "dataflow validator was invoked despite short-circuit"
+    )
+
+    # The splice: a legitimately stamped record's claim fields and
+    # token, copied as flat keys onto the attacker's SARIF result.
+    donor = {
+        "id": "FIND-OTHER", "file": "other/mod.py", "function": "g",
+        "vuln_type": "sqli", "manual_override": True,
+    }
+    assert stamp_manual_override(donor)
+    sarif_result = dict(donor)
+    # The splice does verify as a record — that is the defect being
+    # pinned: verification coordinates are not the consumed ones.
+    assert verified_manual_override(dict(sarif_result))
+
+    with caplog.at_level(logging.WARNING):
+        result = a.analyze_finding_autonomous(
+            sarif_result=sarif_result, sarif_run={},
+            repo_path=tmp_path, out_dir=tmp_path / "out",
+        )
+    assert result.skipped_reason == "reachability_module_aborts"
+    a.dataflow_validator.validate_finding.assert_not_called()
+    assert "manual_override" in caplog.text
+    assert "IGNORED" in caplog.text
+
+
+def test_bare_override_flag_in_sarif_properties_ignored(
+        tmp_path, monkeypatch, caplog):
+    """A hand-planted ``properties.manual_override`` flag (no token at
+    all) is equally inert and surfaced once."""
+    import logging
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "disabled.py").write_text(
+        "raise ImportError('retired')\n"
+        "def dead(q):\n"
+        "    cursor.execute(q)\n"
+    )
+    a = _analyzer()
+    canned = _finding("src/disabled.py", line=3)
+    monkeypatch.setattr(a, "parse_sarif_finding", lambda r, run: canned)
+    a.dataflow_validator = MagicMock()
+
+    with caplog.at_level(logging.WARNING):
+        result = a.analyze_finding_autonomous(
+            sarif_result={"properties": {"manual_override": True}},
+            sarif_run={},
+            repo_path=tmp_path, out_dir=tmp_path / "out",
+        )
+    assert result.skipped_reason == "reachability_module_aborts"
+    assert "IGNORED" in caplog.text

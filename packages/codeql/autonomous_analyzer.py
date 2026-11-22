@@ -1212,16 +1212,20 @@ class AutonomousCodeQLAnalyzer:
         # them), because 1-hop / entry-completeness assumptions can miss
         # reflection, cross-file, or address-of edges. The decision is
         # routed through ``check_suppress`` — the canonical chokepoint
-        # the /agentic sibling uses — so the finding-level
-        # ``manual_override`` operator opt-out (a SARIF top-level or
-        # ``properties`` key) and --allow-unreachable are honored here
-        # exactly as they are there; the previous inline
-        # ``may_suppress`` copy silently ignored manual_override.
-        # VERIFIED only (core.run.verdict_mac): SARIF lives in the
-        # sandbox-writable run dir, so a bare flag is forgeable by
-        # the scanned target — without the verdict-CLI claim token it
-        # demotes to absent. The run-wide operator opt-out here is
-        # --allow-unreachable.
+        # the /agentic sibling uses — so --allow-unreachable is
+        # honored here exactly as it is there.
+        # SARIF carries NO manual_override authority: the verdict CLI
+        # (``core.run.verdicts.set_manual_override``, the only claim
+        # minter) stamps findings artifacts, never SARIF, so a token
+        # on a SARIF result can only be a splice — and the claim's
+        # coordinates are flat record keys, not the
+        # locations[0].physicalLocation this arm actually consumes
+        # via ``_locate_finding_function``, so a copied token+claim
+        # pair verified while pointing the override anywhere. Any
+        # flag found here is surfaced (once) and ignored; the
+        # operator opt-outs are --allow-unreachable (run-wide) and
+        # the verdict CLI on the findings artifacts the /agentic
+        # sibling reads.
         suppress = False
         suppressed_func = ""
         if reachability_verdict:
@@ -1229,11 +1233,29 @@ class AutonomousCodeQLAnalyzer:
             if loc is not None:
                 rel_path, func_name, line_start = loc
                 suppressed_func = func_name
-                from core.analysis.reach_chokepoint import check_suppress
-                from core.run.verdict_mac import verified_manual_override
+                from core.analysis.reach_chokepoint import (
+                    check_suppress,
+                    coerce_manual_override,
+                )
                 # loc is non-None only when the inventory is a dict
                 # (see _locate_finding_function).
                 _props = sarif_result.get("properties")
+                if (coerce_manual_override(
+                        sarif_result.get("manual_override"))
+                        or (isinstance(_props, dict)
+                            and coerce_manual_override(
+                                _props.get("manual_override")))):
+                    from core.security.log_sanitisation import (
+                        sanitise_for_terminal,
+                    )
+                    self.logger.warning(
+                        "verdict integrity: manual_override on SARIF "
+                        "result %s is IGNORED — SARIF is never a "
+                        "stamped verdict carrier (re-apply with the "
+                        "verdict CLI on the run's findings artifacts)",
+                        sanitise_for_terminal(
+                            str(finding.rule_id or "?"), max_len=120),
+                    )
                 suppress = check_suppress(
                     checklist=self._reachability_inventory,
                     file_path=rel_path,
@@ -1241,11 +1263,7 @@ class AutonomousCodeQLAnalyzer:
                     line=line_start,
                     repo_root=repo_path,
                     allow_unreachable=self._allow_unreachable,
-                    manual_override=(
-                        verified_manual_override(sarif_result)
-                        or verified_manual_override(
-                            _props if isinstance(_props, dict) else {})
-                    ),
+                    manual_override=False,
                 ) is not None
         if suppress:
             self.logger.info(
