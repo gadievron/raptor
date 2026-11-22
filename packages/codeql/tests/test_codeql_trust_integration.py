@@ -135,3 +135,69 @@ def test_safe_target_does_not_short_circuit_at_trust_gate(tmp_path):
 
     # Trust gate didn't fire — cached path returned success.
     assert result.success is True
+
+
+def _swap_during_hash(dm, target: Path, tmp_path: Path):
+    """Doctored repo-hash step that swaps the target spelling at a
+    fresh inode — landing the swap in the verdict→dispatch window the
+    held-handle recheck exists to close."""
+    import os
+
+    def _swap(repo_path):
+        os.rename(target, tmp_path / "swapped-aside")
+        target.mkdir()
+        return "fakehash"
+
+    return patch.object(dm, "compute_repo_hash", side_effect=_swap)
+
+
+def test_post_verdict_swap_refused_before_spawn(tmp_path):
+    """The trust verdict is released against the repo SPELLING; the
+    hash/cache/staging work before the codeql spawn is a swap window.
+    A target swapped inside that window must be refused by the
+    pre-spawn recheck — the sandbox must never be invoked."""
+    target = _safe_target(tmp_path)
+    dm = _dm(tmp_path)
+    spawned = []
+
+    def _spy(*args, **kwargs):
+        spawned.append(args)
+        raise AssertionError("codeql spawned against a swapped target")
+
+    with _swap_during_hash(dm, target, tmp_path), \
+         patch.object(dm, "get_cached_database", return_value=None), \
+         patch("core.sandbox.run", side_effect=_spy):
+        result = dm.create_database(target, "python")
+
+    assert result.success is False
+    assert result.database_path is None
+    assert any("changed during the CodeQL trust check" in e
+               for e in result.errors)
+    assert not spawned
+
+
+def test_stable_target_passes_recheck_and_spawns(tmp_path):
+    """Discriminating companion: the SAME flow without the swap must
+    get through the recheck to the sandbox spawn — the re-bracket is
+    refuse-only, never a new blocker for honest targets."""
+    import subprocess
+
+    target = _safe_target(tmp_path)
+    dm = _dm(tmp_path)
+    spawned = []
+
+    def _spy(cmd, *args, **kwargs):
+        spawned.append(cmd)
+        # Abort the flow here: TimeoutExpired is a handled exit that
+        # (for a non-traced python create) has no buildless fallback,
+        # so the test never needs a real codeql CLI.
+        raise subprocess.TimeoutExpired(cmd="codeql", timeout=1)
+
+    with patch.object(dm, "compute_repo_hash", return_value="fakehash"), \
+         patch.object(dm, "get_cached_database", return_value=None), \
+         patch("core.sandbox.run", side_effect=_spy):
+        result = dm.create_database(target, "python")
+
+    assert spawned, "recheck blocked a stable target before the spawn"
+    assert not any("changed during the CodeQL trust check" in e
+                   for e in result.errors)

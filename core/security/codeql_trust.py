@@ -96,6 +96,7 @@ from core.security._trust_common import (
     RAPTOR_DIR as _RAPTOR_DIR,
     FileScan,
     Finding,
+    HeldTrustVerdict,
     is_registered_worktree_of_self as _is_registered_worktree_of_self,
     mask as _mask,
     open_supplied_target,
@@ -850,12 +851,22 @@ def _scan_repo(
     return (tuple(scans), any_blocking)
 
 
-def check_repo_codeql_trust(
+def open_codeql_trust_check(
     repo_path: str,
     trust_override: bool | None = None,
-) -> bool:
-    """Check target repo for unsafe CodeQL pack config. Returns True if
-    DB creation should be refused.
+) -> HeldTrustVerdict:
+    """Run the CodeQL pack-config trust check and return the verdict
+    WITH its held observation fd (:class:`HeldTrustVerdict`).
+
+    ``handle.refused`` is the same verdict
+    :func:`check_repo_codeql_trust` returns (True = refuse DB
+    creation). A consumer with pre-dispatch work between the verdict
+    and ``codeql database create`` (hashing, cache probes, staging)
+    holds the handle across that work and calls ``handle.recheck()``
+    immediately before the spawn — a refuse-only re-bracket of the
+    same spelling against the same held inode, shrinking the
+    post-return swap window the plain bool check documents. Close via
+    the context-manager protocol or ``handle.close()``.
 
     ``trust_override``:
         None   → read the module-level flag (set by ``set_trust_override``).
@@ -865,7 +876,10 @@ def check_repo_codeql_trust(
         False  → force strict. Tests, hard-enforcement code paths.
     """
     if not repo_path:
-        return False
+        # Documented no-op contract: nothing was supplied, nothing to
+        # gate — and nothing to hold or re-check.
+        return HeldTrustVerdict(False, repo_path, bool(trust_override),
+                                _SCAN_SUBJECT, None)
     if trust_override is None:
         trust_override = _trust_override_set
     # Fail-closed resolve+stat gate (shared helper layer): a SUPPLIED
@@ -876,7 +890,8 @@ def check_repo_codeql_trust(
     resolved, refuse = resolve_supplied_target(
         repo_path, trust_override, subject=_SCAN_SUBJECT)
     if resolved is None:
-        return refuse
+        return HeldTrustVerdict(refuse, repo_path, trust_override,
+                                _SCAN_SUBJECT, None)
     # Held observation fd (shared helper layer): the self-recognition
     # gate borrows it, the pack WALK enumerates and reads through it
     # (``os.fwalk(dir_fd=...)`` — see ``_scan_repo``), and the
@@ -891,7 +906,8 @@ def check_repo_codeql_trust(
     target_fd, refuse = open_supplied_target(
         resolved, trust_override, subject=_SCAN_SUBJECT)
     if target_fd is None:
-        return refuse
+        return HeldTrustVerdict(refuse, resolved, trust_override,
+                                _SCAN_SUBJECT, None)
     try:
         scans, any_blocking = _scan_repo(resolved, target_fd=target_fd)
         if scans:
@@ -904,17 +920,48 @@ def check_repo_codeql_trust(
         # Refuse-only identity bracket: conjunctive, runs after the
         # scan and the rendering — it can refuse a clean verdict whose
         # target was swapped mid-scan, never wave anything through.
-        if supplied_target_diverged(
-                target_fd, resolved, trust_override, _SCAN_SUBJECT):
-            return True
-        return any_blocking and not trust_override
-    finally:
+        refused = (supplied_target_diverged(
+            target_fd, resolved, trust_override, _SCAN_SUBJECT)
+            or (any_blocking and not trust_override))
+    except BaseException:
+        # The handle below takes ownership of the fd; on any failure
+        # before that hand-off the fd is still ours to release.
         os.close(target_fd)
+        raise
+    # The handle owns target_fd from here: the caller's close (or the
+    # finalizer belt) releases it.
+    return HeldTrustVerdict(refused, resolved, trust_override,
+                            _SCAN_SUBJECT, target_fd)
+
+
+def check_repo_codeql_trust(
+    repo_path: str,
+    trust_override: bool | None = None,
+) -> bool:
+    """Check target repo for unsafe CodeQL pack config. Returns True if
+    DB creation should be refused.
+
+    Thin wrapper over :func:`open_codeql_trust_check` that releases
+    the held observation fd immediately — callers with pre-dispatch
+    work between this verdict and the spawn should hold the handle
+    instead and ``recheck()`` just before dispatching.
+
+    ``trust_override``:
+        None   → read the module-level flag (set by ``set_trust_override``).
+                 Production default.
+        True   → force trust (warn but never block). Tests, callers with
+                 context the module flag doesn't capture.
+        False  → force strict. Tests, hard-enforcement code paths.
+    """
+    with open_codeql_trust_check(repo_path, trust_override) as held:
+        return held.refused
 
 
 __all__ = [
     "FileScan",
     "Finding",
+    "HeldTrustVerdict",
     "check_repo_codeql_trust",
+    "open_codeql_trust_check",
     "set_trust_override",
 ]

@@ -71,6 +71,7 @@ from core.security._trust_common import (
     RAPTOR_DIR as _RAPTOR_DIR,
     FileScan,
     Finding,
+    HeldTrustVerdict,
     is_registered_worktree_of_self as _is_registered_worktree_of_self,
     mask as _mask,
     open_supplied_target,
@@ -682,8 +683,22 @@ def _scan_mcp(path: Path, raw: bytes | None = None) -> FileScan | None:
     return fs
 
 
-def check_repo_claude_trust(repo_path: str, trust_override: bool | None = None) -> bool:
-    """Check target repo. Returns True if dispatch should be refused.
+def open_cc_trust_check(
+    repo_path: str,
+    trust_override: bool | None = None,
+) -> HeldTrustVerdict:
+    """Run the Claude Code config trust check and return the verdict
+    WITH its held observation fd (:class:`HeldTrustVerdict`).
+
+    ``handle.refused`` is the same verdict
+    :func:`check_repo_claude_trust` returns (True = refuse dispatch).
+    A consumer with pre-dispatch work between the verdict and the CLI
+    spawn (lifecycle setup, prompt building, credential staging) holds
+    the handle across that work and calls ``handle.recheck()``
+    immediately before the spawn — a refuse-only re-bracket of the
+    same spelling against the same held inode, shrinking the
+    post-return swap window the plain bool check documents. Close via
+    the context-manager protocol or ``handle.close()``.
 
     trust_override:
         None  → read the module-level flag (set by set_trust_override()).
@@ -704,7 +719,10 @@ def check_repo_claude_trust(repo_path: str, trust_override: bool | None = None) 
     two directories.
     """
     if not repo_path:
-        return False
+        # Documented no-op contract: nothing was supplied, nothing to
+        # gate — and nothing to hold or re-check.
+        return HeldTrustVerdict(False, repo_path, bool(trust_override),
+                                _SCAN_SUBJECT, None)
     if trust_override is None:
         trust_override = _trust_override_set
     # Fail-closed resolve+stat gate (shared helper layer): a SUPPLIED
@@ -713,12 +731,14 @@ def check_repo_claude_trust(repo_path: str, trust_override: bool | None = None) 
     resolved, refuse = resolve_supplied_target(
         repo_path, trust_override, subject=_SCAN_SUBJECT)
     if resolved is None:
-        return refuse
+        return HeldTrustVerdict(refuse, repo_path, trust_override,
+                                _SCAN_SUBJECT, None)
     target = Path(resolved)
     target_fd, refuse = open_supplied_target(
         resolved, trust_override, subject=_SCAN_SUBJECT)
     if target_fd is None:
-        return refuse
+        return HeldTrustVerdict(refuse, resolved, trust_override,
+                                _SCAN_SUBJECT, None)
     try:
         # Self-recognition OUTSIDE the scan cache, bound to the held
         # fd: RAPTOR's own repo (its .claude config legitimately ships
@@ -733,13 +753,15 @@ def check_repo_claude_trust(repo_path: str, trust_override: bool | None = None) 
         # (path, config-bytes) pair. Even the self verdict rides the
         # divergence bracket — it is keyed to the spelling a consumer
         # dispatches against.
+        config_state = None
         try:
             if (target == _RAPTOR_DIR
                     or _is_registered_worktree_of_self(
                         target, _RAPTOR_DIR, target_fd=target_fd)):
-                return supplied_target_diverged(
+                refused = supplied_target_diverged(
                     target_fd, resolved, trust_override, _SCAN_SUBJECT)
-            config_state = _read_config_state(target, dir_fd=target_fd)
+            else:
+                config_state = _read_config_state(target, dir_fd=target_fd)
         except NotImplementedError:
             # Platform without dir_fd support: never fall back to path
             # re-walks (that would reopen the swap windows the held fd
@@ -747,29 +769,61 @@ def check_repo_claude_trust(repo_path: str, trust_override: bool | None = None) 
             # which the scanner already treats as dangerous.
             config_state = tuple(
                 ("unreadable",) for _ in _config_candidates(target))
-        scans, any_blocking = _scan_cached(resolved, config_state)
-        # Print side-effects live OUTSIDE the cache. Pre-fix the print()
-        # calls were inside `_check_cached` which was @lru_cache'd — so
-        # the operator only saw the warning on the FIRST identical call
-        # per process; every subsequent invocation silently returned the
-        # cached verdict with no visible diagnostic. Re-emit the
-        # rendering on each invocation so the warning isn't suppressed
-        # by cache-friendly callers (e.g. an orchestrator that re-checks
-        # the same repo per finding).
-        if scans:
-            render_scan_report(target, scans, any_blocking, trust_override,
-                               subject=_SCAN_SUBJECT)
-        # Refuse-only identity bracket: the verdict is released against
-        # the SPELLING, so the spelling must still denote the inode the
-        # evidence came from. Runs after the scan (it can only refuse,
-        # never grant) and after the rendering (the operator sees both
-        # the findings and the divergence message).
-        if supplied_target_diverged(
-                target_fd, resolved, trust_override, _SCAN_SUBJECT):
-            return True
-        return any_blocking and not trust_override
-    finally:
+        if config_state is not None:
+            scans, any_blocking = _scan_cached(resolved, config_state)
+            # Print side-effects live OUTSIDE the cache. Pre-fix the
+            # print() calls were inside `_check_cached` which was
+            # @lru_cache'd — so the operator only saw the warning on the
+            # FIRST identical call per process; every subsequent
+            # invocation silently returned the cached verdict with no
+            # visible diagnostic. Re-emit the rendering on each
+            # invocation so the warning isn't suppressed by
+            # cache-friendly callers (e.g. an orchestrator that
+            # re-checks the same repo per finding).
+            if scans:
+                render_scan_report(target, scans, any_blocking,
+                                   trust_override, subject=_SCAN_SUBJECT)
+            # Refuse-only identity bracket: the verdict is released
+            # against the SPELLING, so the spelling must still denote
+            # the inode the evidence came from. Runs after the scan (it
+            # can only refuse, never grant) and after the rendering
+            # (the operator sees both the findings and the divergence
+            # message).
+            refused = (supplied_target_diverged(
+                target_fd, resolved, trust_override, _SCAN_SUBJECT)
+                or (any_blocking and not trust_override))
+    except BaseException:
+        # The handle below takes ownership of the fd; on any failure
+        # before that hand-off the fd is still ours to release.
         os.close(target_fd)
+        raise
+    # The handle owns target_fd from here: the caller's close (or the
+    # finalizer belt) releases it. Self-targets keep their fd too —
+    # the self verdict is as spelling-keyed as any other, so a
+    # consumer's pre-spawn recheck() still has an inode to re-bracket
+    # against.
+    return HeldTrustVerdict(refused, resolved, trust_override,
+                            _SCAN_SUBJECT, target_fd)
+
+
+def check_repo_claude_trust(repo_path: str, trust_override: bool | None = None) -> bool:
+    """Check target repo. Returns True if dispatch should be refused.
+
+    Thin wrapper over :func:`open_cc_trust_check` that releases the
+    held observation fd immediately — callers with pre-dispatch work
+    between this verdict and the spawn should hold the handle instead
+    and ``recheck()`` just before dispatching.
+
+    trust_override:
+        None  → read the module-level flag (set by set_trust_override()).
+                The production default.
+        True  → force trust (warn but never block). Tests, or callers with
+                context the module flag doesn't capture.
+        False → force strict. Tests, or code paths that want hard enforcement
+                regardless of what the user opted into elsewhere.
+    """
+    with open_cc_trust_check(repo_path, trust_override) as held:
+        return held.refused
 
 
 # The authoritative (kind, path components) list of config files this

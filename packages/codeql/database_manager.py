@@ -1480,8 +1480,16 @@ class DatabaseManager:
         # `database create`. Refuse on findings unless --trust-repo
         # has been parsed at the entry point. Distinct surface from
         # the cc_trust check (which guards .claude/settings.json).
-        from core.security.codeql_trust import check_repo_codeql_trust
-        if check_repo_codeql_trust(str(repo_path)):
+        # The verdict comes back as a HELD handle (observation fd kept
+        # open): every early return below closes it explicitly, and a
+        # refuse-only `held.recheck()` runs immediately before the
+        # sandboxed `codeql database create` so the hash/cache/staging
+        # work in between can't be used as a swap window against the
+        # verdict's spelling.
+        from core.security.codeql_trust import open_codeql_trust_check
+        held = open_codeql_trust_check(str(repo_path))
+        if held.refused:
+            held.close()
             return DatabaseResult(
                 success=False,
                 language=language,
@@ -1515,6 +1523,7 @@ class DatabaseManager:
                 repo_hash=repo_hash,
             )
             if cached_db:
+                held.close()
                 duration = time.time() - start_time
                 metadata = self.load_metadata(repo_hash, language)
                 return DatabaseResult(
@@ -1587,6 +1596,7 @@ class DatabaseManager:
                 repo_hash=repo_hash,
             )
             if cached:
+                held.close()
                 duration = time.time() - start_time
                 metadata = self.load_metadata(repo_hash, language)
                 return DatabaseResult(
@@ -1629,6 +1639,7 @@ class DatabaseManager:
                 _floor_txt = (
                     '.'.join(map(str, _floor)) if _floor else "a newer release"
                 )
+                held.close()
                 return DatabaseResult(
                     success=False,
                     language=language,
@@ -1677,6 +1688,7 @@ class DatabaseManager:
             path.resolve().is_relative_to(repo_path)
             for path in (self.db_root, self.db_root / "tmp")
         ):
+            held.close()
             return DatabaseResult(
                 success=False, language=language, database_path=None, metadata=None,
                 errors=["Traced CodeQL builds require a database cache outside the source tree; "
@@ -1747,6 +1759,7 @@ class DatabaseManager:
             os.name == "posix"
             and not os.access(working_dir, os.X_OK)
         ):
+            held.close()
             return DatabaseResult(
                 success=False,
                 language=language,
@@ -1921,6 +1934,37 @@ class DatabaseManager:
             # (inside the try) so the finally below reaps it on every
             # exit path.
             staging_work.mkdir(parents=True, exist_ok=True)
+
+            # Refuse-only trust re-bracket, immediately before the
+            # spawn: the trust verdict above was released against the
+            # repo SPELLING, and the hash/cache/staging work since
+            # then is a window in which that spelling could be swapped
+            # at a fresh inode. recheck() compares the spelling's
+            # CURRENT identity against the inode the verdict's
+            # evidence came from (the held observation fd) and can
+            # only refuse, never grant. The fd itself never crosses
+            # into the sandbox — the mount namespace re-walks the
+            # spelling to build its binds — so this is the narrowest
+            # window this process can provide. (Exception paths
+            # between here and the handle's open are covered by its
+            # GC finalizer belt.)
+            if held.recheck():
+                held.close()
+                return DatabaseResult(
+                    success=False,
+                    language=language,
+                    database_path=None,
+                    metadata=None,
+                    errors=[
+                        ("target repo changed during the CodeQL trust "
+                         "check (swapped after the verdict, before "
+                         "dispatch) — refusing to invoke `codeql "
+                         "database create`.")
+                    ],
+                    duration_seconds=time.time() - start_time,
+                    cached=False,
+                )
+            held.close()
             result = sandbox_run(
                 temporary_command(cmd),  # type: ignore[arg-type]
                 block_network=True,

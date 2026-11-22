@@ -163,6 +163,31 @@ class GateOrderTests(unittest.TestCase):
         self.assertIn("cc_trust", result.skipped_reason)
         self.assertIsNone(result.run_dir)
 
+    def test_internal_cc_check_refuses_untrusted_target(self):
+        # Belt-and-braces: a caller that FORGETS to compute
+        # block_cc_dispatch (default False) must still be refused when
+        # the resolved target carries blocking Claude Code config —
+        # the runner re-derives the verdict itself, held, at its own
+        # resolution seam. Refusal is pre-lifecycle (no run dir) and
+        # the sandbox never spawns.
+        with TemporaryDirectory() as tmp:
+            target = Path(tmp) / "target"
+            target.mkdir()
+            (target / ".mcp.json").write_text(
+                '{"mcpServers": {"x": {"command": "evil"}}}')
+            spawned = []
+
+            def _spy(cmd, *args, **kwargs):
+                spawned.append(cmd)
+                return _ok()
+
+            result = _run(tmp, Path(tmp) / "run", target=target,
+                          sandbox=_spy)
+        self.assertFalse(result.ran)
+        self.assertIn("cc_trust", result.skipped_reason)
+        self.assertIsNone(result.run_dir)
+        self.assertEqual(spawned, [])
+
     def test_transport_kill_switch_skips_before_resolution(self):
         # This lane is a billed spawn that never passes
         # run_cc_streaming, so it honours RAPTOR_CC_TRANSPORT_DISABLED
@@ -275,6 +300,37 @@ class DispatchFlowTests(unittest.TestCase):
         self.assertEqual(result.run_dir, run_dir)
         self.assertIn("fail", lifecycle_calls)
         self.assertNotIn("complete", lifecycle_calls)
+
+    def test_pre_spawn_recheck_refuses_swapped_target(self):
+        # The cc-trust verdict is released against the target SPELLING
+        # at the resolution seam; lifecycle start, staging and prompt
+        # building all run before the spawn. A target swapped at a
+        # fresh inode inside that window must be refused by the
+        # held-handle recheck immediately before the spawn — the
+        # sandbox must never be invoked against the swapped tree.
+        import os
+        with TemporaryDirectory() as tmp:
+            target = Path(tmp) / "target"
+            target.mkdir()
+            run_dir = Path(tmp) / "run"
+            spawned = []
+            dispatcher = _lifecycle_dispatcher(run_dir)
+
+            def _spy(cmd, *args, **kwargs):
+                spawned.append(cmd)
+                return dispatcher(cmd, *args, **kwargs)
+
+            def _swap(d):
+                os.rename(target, Path(tmp) / "swapped-aside")
+                target.mkdir()
+
+            result = _run(tmp, run_dir, target=target, sandbox=_spy,
+                          stage=_swap)
+        self.assertFalse(result.ran)
+        self.assertIn("changed during the Claude Code config trust "
+                      "check", result.skipped_reason)
+        self.assertEqual(result.run_dir, run_dir)
+        self.assertEqual(spawned, [])
 
     def test_timeout_reports_and_fails_lifecycle(self):
         import subprocess as sp

@@ -954,7 +954,12 @@ def run_skill_dispatch(
     Gate chain (first hit wins, mirrors the /agentic post-pass order):
 
     1. ``block_cc_dispatch`` — cc-trust verdict for the target repo
-       (compute via ``core.security.cc_trust.check_repo_claude_trust``);
+       (compute via ``core.security.cc_trust.check_repo_claude_trust``).
+       Belt-and-braces: this function ALSO runs its own held cc-trust
+       check against the resolved target (``open_cc_trust_check``) and
+       re-brackets it immediately before the spawn, so a caller that
+       forgets the flag — or a target swapped after the caller's check
+       — still refuses fail-closed;
     2. rule-of-two: human terminal or effective sandbox (per
        ``require_human_or_sandbox_for_agentic_pass(command)``);
     3. ``claude`` binary on PATH (or explicit ``claude_bin``);
@@ -1047,6 +1052,26 @@ def run_skill_dispatch(
     target = Path(target).resolve()
     context_dirs = [Path(d).resolve() for d in context_dirs]
 
+    # Internal cc-trust check, HELD across the pre-spawn work. Gate 1
+    # above honours the CALLER's verdict (computed at its own seam,
+    # possibly with context this function lacks); this one is
+    # fail-closed hardening bound to the exact resolved spelling this
+    # function dispatches against, and — unlike a bool — it keeps its
+    # observation fd open so `held.recheck()` can re-bracket that
+    # spelling immediately before the `claude -p` spawn (lifecycle
+    # setup, prompt building and credential staging all run in
+    # between). A refusal here is skip-shaped like every other gate.
+    # Under the operator's trust override the check warns-and-proceeds
+    # (refused=False), so a re-render of findings the caller's own
+    # check already printed is the only duplication.
+    from core.security.cc_trust import open_cc_trust_check
+    held = open_cc_trust_check(str(target))
+    if held.refused:
+        held.close()
+        return SkillDispatchResult(
+            ran=False,
+            skipped_reason="cc_trust blocked dispatch (untrusted target)")
+
     t0 = time.monotonic()
 
     started = start_lifecycle(command, target,
@@ -1056,6 +1081,7 @@ def run_skill_dispatch(
         # Carry the helper's one-line detail (already sanitised at the
         # start_lifecycle seam): the bare constant left the operator
         # with no lead on WHY the child pass never started.
+        held.close()
         reason = "lifecycle start failed"
         if started.error:
             reason = f"{reason}: {started.error}"
@@ -1177,6 +1203,32 @@ def run_skill_dispatch(
                 # inside the CM; the file path joins readable_paths because
                 # TMPDIR is outside the sandbox's read allowlist.
                 with system_prompt_file_for(dispatch_config) as _sys_prompt_path:
+                    # Refuse-only trust re-bracket, immediately before
+                    # the spawn: the cc-trust verdict above was
+                    # released against the target SPELLING, and the
+                    # lifecycle/prompt/credential work since then is a
+                    # window in which that spelling could be swapped
+                    # at a fresh inode. recheck() compares the
+                    # spelling's CURRENT identity against the inode
+                    # the verdict's evidence came from (the held
+                    # observation fd) and can only refuse, never
+                    # grant. The fd itself never crosses into the
+                    # sandbox — the mount namespace re-walks the
+                    # spelling to build its binds — so this is the
+                    # narrowest window this process can provide. The
+                    # handle is closed in the function's finally.
+                    if held.recheck():
+                        lifecycle_settled = True
+                        reason = ("target changed during the Claude "
+                                  "Code config trust check (swapped "
+                                  "after the verdict, before dispatch)"
+                                  " — refusing to dispatch")
+                        fail_lifecycle(run_dir, reason)
+                        logger.warning("%s: %s", log_label, reason)
+                        return SkillDispatchResult(
+                            ran=False, skipped_reason=reason,
+                            run_dir=run_dir,
+                            duration_s=time.monotonic() - t0)
                     proc = run_untrusted_networked(
                         build_cc_command(
                             dispatch_config,
@@ -1358,6 +1410,10 @@ def run_skill_dispatch(
         fail_lifecycle(run_dir, "unexpected exception")
         raise
     finally:
+        # Release the held cc-trust observation fd on every exit path
+        # (idempotent; the last meaningful read was the pre-spawn
+        # recheck above).
+        held.close()
         # Settle the credential-proxy ledger (spend read + reconcile +
         # revoke) whether the dispatch succeeded, failed, or was
         # interrupted — a minted token must never outlive its pass.

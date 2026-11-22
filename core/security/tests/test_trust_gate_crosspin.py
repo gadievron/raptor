@@ -40,6 +40,7 @@ _SHARED_NAMES = [
     ("_is_registered_worktree_of_self", "is_registered_worktree_of_self"),
     ("open_supplied_target", "open_supplied_target"),
     ("supplied_target_diverged", "supplied_target_diverged"),
+    ("HeldTrustVerdict", "HeldTrustVerdict"),
 ]
 
 
@@ -84,6 +85,7 @@ class TestNoPrivateReDerivation:
         "def supplied_target_diverged(",
         "_FD_OBSERVE_FLAGS = ",
         "_DIR_OBSERVE_FLAGS = ",
+        "class HeldTrustVerdict",
     )
 
     @pytest.mark.parametrize("mod", [cc, ql], ids=["cc_trust", "codeql_trust"])

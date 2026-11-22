@@ -33,6 +33,7 @@ from __future__ import annotations
 import os
 import stat
 import unicodedata
+import weakref
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -713,6 +714,104 @@ def supplied_target_diverged(
     print(f"raptor: {shown} changed during the {subject} check "
           f"({safe_text(str(reason))}) — treating as dangerous")
     return True
+
+
+class HeldTrustVerdict:
+    """A released trust verdict plus the held observation fd it binds
+    to.
+
+    :func:`supplied_target_diverged` documents a post-return window:
+    the check's verdict is keyed to the target SPELLING, and a swap
+    landing between the bracket's final lstat and the consumer's
+    dispatch still re-aims that spelling. This handle lets the
+    CONSUMER own that window instead of inheriting it: the check
+    returns with its observation fd still open, the consumer does its
+    pre-dispatch work (hashing, caching, staging, prompt building),
+    then calls :meth:`recheck` immediately before spawning the tool —
+    a refuse-only re-bracket of the same spelling against the same
+    held inode. No fd crosses into the spawned CLI (the sandbox
+    re-walks its target spelling to build binds, so fd semantics stop
+    at the exec); the window is narrowed to the gap between the LAST
+    recheck and the exec — the smallest this process can make it.
+
+    ``refused`` is the check's verdict, same sense as the bool checks
+    (True = refuse). :meth:`recheck` never re-reads evidence and can
+    only move the answer toward refusal. :meth:`close` releases the
+    fd and is idempotent; the context-manager protocol closes on
+    exit, and a leaked handle's fd is closed by a GC finalizer belt.
+    """
+
+    def __init__(
+        self,
+        refused: bool,
+        resolved: str,
+        trust_override: bool,
+        subject: str,
+        fd: int | None,
+    ) -> None:
+        self.refused = bool(refused)
+        self._resolved = resolved
+        self._trust_override = trust_override
+        self._subject = subject
+        self._fd = fd
+        self._had_fd = fd is not None
+        self._finalizer = (
+            weakref.finalize(self, _close_quietly, fd)
+            if fd is not None else None
+        )
+
+    def recheck(self) -> bool:
+        """REFUSE-ONLY re-bracket (True = refuse the dispatch).
+
+        Compares the target spelling's CURRENT identity against the
+        held fd via :func:`supplied_target_diverged` — same lstat
+        discipline, same trust-override downgrade. A stored refusal
+        short-circuits. A handle that never held an fd (empty path,
+        or an unexaminable target tolerated by the trust override)
+        keeps its verdict: there is no identity to re-compare and the
+        original lane already decided. A CLOSED handle fails closed
+        unconditionally — rechecking after close is a caller bug, and
+        the fd number may already denote an unrelated object.
+        """
+        if self.refused:
+            return True
+        if self._fd is None:
+            if self._had_fd:
+                print(f"raptor: {self._subject} re-check attempted "
+                      "after the held observation fd was closed — "
+                      "treating as dangerous")
+                return True
+            return False
+        return supplied_target_diverged(
+            self._fd, self._resolved, self._trust_override, self._subject,
+        )
+
+    def close(self) -> None:
+        fin, self._finalizer = self._finalizer, None
+        fd, self._fd = self._fd, None
+        if fin is not None:
+            fin.detach()
+        if fd is not None:
+            _close_quietly(fd)
+
+    def __enter__(self) -> HeldTrustVerdict:
+        return self
+
+    def __exit__(self, *exc_info: object) -> bool:
+        self.close()
+        return False
+
+
+def _close_quietly(fd: int) -> None:
+    """Close belt for observation fds: an O_RDONLY observation fd has
+    nothing to flush, so a close surprise carries no verdict-relevant
+    information — swallow it rather than mask the caller's real
+    control flow (this also runs from the GC finalizer, where raising
+    is useless)."""
+    try:
+        os.close(fd)
+    except OSError:
+        pass
 
 
 def render_scan_report(
