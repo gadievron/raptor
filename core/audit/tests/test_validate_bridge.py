@@ -23,6 +23,16 @@ def _write_manifest(d, target):
     (d / ".raptor-run.json").write_text(json.dumps({"target": str(target)}))
 
 
+def _receipt_ruling(finding, run_dir):
+    """Stamp a fixture's confirmed ruling the way /validate's trusted
+    acts do. The bridge sanitises against the candidate dir and demotes
+    unreceipted plain-"confirmed" rulings — these fixtures model a
+    legitimate validation output, not a forged one."""
+    from core.witness.provenance import stamp_ruling_confirmation
+    stamp_ruling_confirmation(finding, finding["ruling"], run_dir)
+    return finding
+
+
 def _write_validate_findings(d, *, with_feasibility=True):
     """Write a findings.json with optional feasibility data."""
     findings = [{
@@ -142,14 +152,14 @@ class TestImportValidateEvidence:
         # LLM-written fields with the wrong type must read as absent
         # evidence for that field, never abort the import.
         (tmp_path / "findings.json").write_text(json.dumps({
-            "findings": [{
+            "findings": [_receipt_ruling({
                 "id": "FIND-001",
                 "function": "parse_header",
                 "file": "src/http.c",
                 "feasibility": "likely",          # not a dict
                 "evidence_chain": "not-a-list",   # not a list
                 "ruling": {"status": "confirmed"},
-            }],
+            }, tmp_path)],
             "metadata": "not-a-dict",
         }))
         result = import_validate_evidence(tmp_path, tmp_path / "target")
@@ -723,7 +733,7 @@ def _write_postpass_audit_findings(d, target, *, command="audit"):
     (d / ".raptor-run.json").write_text(json.dumps({
         "command": command, "target": str(target),
     }))
-    (d / "findings.json").write_text(json.dumps({"findings": [{
+    finding = {
         "id": "AUD-001",
         "file": "src/util.c",
         "function": "copy_buf",
@@ -732,7 +742,12 @@ def _write_postpass_audit_findings(d, target, *, command="audit"):
         "candidate_reasoning": "memcpy with unclamped len",
         "ruling": {"status": "confirmed", "reason": "post-pass ruling"},
         "final_status": "confirmed",
-    }]}))
+    }
+    # The post-pass runs the validation helper against this dir, which
+    # mints a ruling-confirmation receipt — without it the bridge's
+    # sanitise demotes the plain-"confirmed" claim (by design).
+    _receipt_ruling(finding, d)
+    (d / "findings.json").write_text(json.dumps({"findings": [finding]}))
 
 
 class TestSelfShadowing:
@@ -826,16 +841,17 @@ class TestHistoryMechanism:
 
     def test_records_carry_line_cwe_mechanism(self, tmp_path):
         target = _make_target(tmp_path)
-        (tmp_path / "findings.json").write_text(json.dumps({"findings": [{
-            "id": "EXT-002",
-            "file": "src/http.c",
-            "function": "parse_header",
-            "line": 242,
-            "cwe_id": "CWE-570",
-            "candidate_reasoning": "unsigned uid < 0 is provably false",
-            "ruling": {"status": "confirmed", "reason": "dead branch"},
-            "final_status": "confirmed",
-        }]}))
+        (tmp_path / "findings.json").write_text(json.dumps({"findings": [
+            _receipt_ruling({
+                "id": "EXT-002",
+                "file": "src/http.c",
+                "function": "parse_header",
+                "line": 242,
+                "cwe_id": "CWE-570",
+                "candidate_reasoning": "unsigned uid < 0 is provably false",
+                "ruling": {"status": "confirmed", "reason": "dead branch"},
+                "final_status": "confirmed",
+            }, tmp_path)]}))
         result = import_validate_evidence(tmp_path, target)
         rec = result.verdict_history[0]
         assert rec["line"] == 242
@@ -864,14 +880,15 @@ class TestHistoryMechanism:
         # line-unknown, not raise out of import_validate_evidence and
         # lose ALL bridge evidence.
         target = _make_target(tmp_path)
-        (tmp_path / "findings.json").write_text(json.dumps({"findings": [{
-            "id": "X-1",
-            "file": "src/http.c",
-            "function": "parse_header",
-            "line": "~242",
-            "ruling": {"status": "confirmed", "reason": "r"},
-            "final_status": "confirmed",
-        }]}))
+        (tmp_path / "findings.json").write_text(json.dumps({"findings": [
+            _receipt_ruling({
+                "id": "X-1",
+                "file": "src/http.c",
+                "function": "parse_header",
+                "line": "~242",
+                "ruling": {"status": "confirmed", "reason": "r"},
+                "final_status": "confirmed",
+            }, tmp_path)]}))
         result = import_validate_evidence(tmp_path, target)
         assert result.verdict_history[0]["line"] == 0
 

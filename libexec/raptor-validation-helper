@@ -1489,6 +1489,11 @@ def _apply_stage_file(workdir, stage_letter):
         applied = 0
         refused = 0
         payload_quarantined = 0
+        # Finding ids whose update payload itself asserted a plain
+        # "confirmed" ruling — the trusted act the confirmation stamp
+        # below binds. A row merely touched by an update must not
+        # launder a pre-planted ruling already sitting on it.
+        ruling_affirmed: set[str] = set()
 
         def _gated_merge(finding, update_dict):
             nonlocal payload_quarantined
@@ -1501,6 +1506,12 @@ def _apply_stage_file(workdir, stage_letter):
                       f"{_sft(', '.join(sorted(refused_keys)), max_len=200)}",
                       file=sys.stderr)
             payload_quarantined += quarantined
+            staged_ruling = cleaned.get("ruling")
+            if (isinstance(staged_ruling, dict)
+                    and (normalize_status(staged_ruling.get("status")) or "")
+                    == "confirmed"
+                    and finding.get("id")):
+                ruling_affirmed.add(str(finding["id"]))
             _deep_merge(finding, cleaned)
 
         if "updates" in staged and isinstance(staged["updates"], dict):
@@ -1590,6 +1601,28 @@ def _apply_stage_file(workdir, stage_letter):
                 print(f"  {quarantined} rule-out(s) without a verified "
                       f"refutation record quarantined as "
                       f"ruled_out_unverified")
+
+        # Confirmation receipt — the symmetric half of the disproven
+        # quarantine above. Plain "confirmed" is the LLM tier by
+        # design (no mechanical record anchors it), so its authority
+        # binds to THIS trusted act: the stage-file merge chokepoint,
+        # for exactly the rows whose update payload asserted the
+        # confirmation. The finalize sanitiser demotes any confirmed
+        # claim without a verifying receipt to confirmed_unverified,
+        # so a confirmation planted straight into findings.json (or
+        # grafted onto a row the stage file never ruled on) carries
+        # no runtime-grade authority downstream.
+        if stage_letter.upper() in ("D", "E", "F") and ruling_affirmed:
+            from core.witness.provenance import stamp_ruling_confirmation
+            for fid in sorted(ruling_affirmed):
+                finding = by_id.get(fid)
+                if not isinstance(finding, dict):
+                    continue
+                ruling = finding.get("ruling")
+                if (isinstance(ruling, dict)
+                        and ruling.get("status") == "confirmed"):
+                    stamp_ruling_confirmation(finding, ruling, workdir)
+
         for finding in container.get("findings", []):
             # Empty cvss_vector fails schema pattern; normalise to None
             if finding.get("cvss_vector") == "":
@@ -3896,7 +3929,8 @@ def prepare_F(workdir, target=None):
             f"  provenance: demoted unverified evidence claims "
             f"(witness {stats['witness_stripped']}, feasibility "
             f"{stats['feasibility_demoted']}, final_status "
-            f"{stats['final_status_demoted']}, is_exploitable "
+            f"{stats['final_status_demoted']}, confirmation "
+            f"{stats['confirmation_demoted']}, is_exploitable "
             f"{stats['exploitable_demoted']})"
         )
     from packages.exploitability_validation.models import Feasibility

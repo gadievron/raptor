@@ -149,6 +149,62 @@ class TestStampAndVerifyRecords:
         assert not prov.verify_feasibility(f, tmp_path)
 
 
+class TestRulingConfirmationStamp:
+    """The ruling-confirmation receipt binds the TRUSTED ACT that
+    accepted a plain-"confirmed" ruling (Stage D merge / sanity pass /
+    witness upgrade) — status, reason, finding coordinates and run."""
+
+    def test_round_trip(self, tmp_path):
+        f = _finding()
+        ruling = {"status": "confirmed", "reason": "sanity check passed"}
+        f["ruling"] = ruling
+        prov.stamp_ruling_confirmation(f, ruling, tmp_path)
+        assert ruling[prov.PROVENANCE_KEY]
+        assert prov.verify_ruling_confirmation(f, tmp_path)
+
+    def test_run_binding(self, tmp_path):
+        f = _finding()
+        ruling = {"status": "confirmed", "reason": "r"}
+        f["ruling"] = ruling
+        prov.stamp_ruling_confirmation(f, ruling, tmp_path / "run-a")
+        assert prov.verify_ruling_confirmation(f, tmp_path / "run-a")
+        # Replay into another run directory fails.
+        assert not prov.verify_ruling_confirmation(f, tmp_path / "run-b")
+
+    def test_status_tamper_fails(self, tmp_path):
+        f = _finding()
+        ruling = {"status": "confirmed", "reason": "r"}
+        f["ruling"] = ruling
+        prov.stamp_ruling_confirmation(f, ruling, tmp_path)
+        ruling["status"] = "exploitable"
+        assert not prov.verify_ruling_confirmation(f, tmp_path)
+
+    def test_reason_tamper_fails(self, tmp_path):
+        f = _finding()
+        ruling = {"status": "confirmed", "reason": "dead branch proven"}
+        f["ruling"] = ruling
+        prov.stamp_ruling_confirmation(f, ruling, tmp_path)
+        ruling["reason"] = "attacker-chosen justification"
+        assert not prov.verify_ruling_confirmation(f, tmp_path)
+
+    def test_finding_swap_fails(self, tmp_path):
+        f = _finding()
+        ruling = {"status": "confirmed", "reason": "r"}
+        f["ruling"] = ruling
+        prov.stamp_ruling_confirmation(f, ruling, tmp_path)
+        # Grafting the stamped ruling onto a different finding fails.
+        other = _finding(function="lookalike")
+        other["ruling"] = dict(ruling)
+        assert not prov.verify_ruling_confirmation(other, tmp_path)
+
+    def test_unstamped_or_non_dict_never_verifies(self, tmp_path):
+        assert not prov.verify_ruling_confirmation(
+            _finding(ruling={"status": "confirmed"}), tmp_path)
+        assert not prov.verify_ruling_confirmation(
+            _finding(ruling="confirmed"), tmp_path)
+        assert not prov.verify_ruling_confirmation(_finding(), tmp_path)
+
+
 class TestSanitiseFindingsEvidence:
     def test_forged_witness_record_stripped_and_ruling_rolled_back(self, tmp_path):
         f = _finding(
@@ -274,10 +330,100 @@ class TestSanitiseFindingsEvidence:
     def test_non_dict_shapes_tolerated(self, tmp_path):
         assert prov.sanitise_findings_evidence(None, tmp_path) == {
             "witness_stripped": 0, "feasibility_demoted": 0,
-            "final_status_demoted": 0, "exploitable_demoted": 0,
+            "final_status_demoted": 0, "confirmation_demoted": 0,
+            "exploitable_demoted": 0,
         }
         prov.sanitise_findings_evidence({"findings": "nope"}, tmp_path)
         prov.sanitise_findings_evidence({"findings": [42, None]}, tmp_path)
+
+
+class TestPlainConfirmedClamp:
+    """Plain "confirmed" is the designed LLM-tier verdict (no mechanical
+    anchor), so the claim itself is forgeable in findings.json. The clamp
+    demotes every unreceipted "confirmed" claim channel (status,
+    final_status, ruling.status) to confirmed_unverified unless the
+    trusted act that accepted it left a ruling-confirmation receipt, or a
+    verified confirming witness execution supports it."""
+
+    def test_unreceipted_status_channel_demoted(self, tmp_path):
+        f = _finding(status="confirmed")
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert f["status"] == "confirmed_unverified"
+        assert stats["confirmation_demoted"] == 1
+
+    def test_unreceipted_final_status_channel_demoted(self, tmp_path):
+        f = _finding(final_status="confirmed")
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert f["final_status"] == "confirmed_unverified"
+        assert stats["confirmation_demoted"] == 1
+
+    def test_unreceipted_ruling_channel_demoted(self, tmp_path):
+        f = _finding(ruling={"status": "confirmed", "reason": "planted"})
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert f["ruling"]["status"] == "confirmed_unverified"
+        assert stats["confirmation_demoted"] == 1
+
+    def test_all_channels_demote_as_one_finding(self, tmp_path):
+        f = _finding(status="confirmed", final_status="confirmed",
+                     ruling={"status": "confirmed"})
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert f["status"] == "confirmed_unverified"
+        assert f["final_status"] == "confirmed_unverified"
+        assert f["ruling"]["status"] == "confirmed_unverified"
+        # One demoted finding, not three.
+        assert stats["confirmation_demoted"] == 1
+
+    def test_receipted_confirmed_survives_all_channels(self, tmp_path):
+        f = _finding(status="confirmed", final_status="confirmed")
+        ruling = {"status": "confirmed", "reason": "Stage D affirmed"}
+        f["ruling"] = ruling
+        prov.stamp_ruling_confirmation(f, ruling, tmp_path)
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert stats["confirmation_demoted"] == 0
+        assert f["status"] == "confirmed"
+        assert f["final_status"] == "confirmed"
+        assert f["ruling"]["status"] == "confirmed"
+
+    def test_receipt_from_other_run_does_not_support(self, tmp_path):
+        f = _finding(status="confirmed")
+        ruling = {"status": "confirmed", "reason": "r"}
+        f["ruling"] = ruling
+        prov.stamp_ruling_confirmation(f, ruling, tmp_path / "other-run")
+        stats = prov.sanitise_findings_evidence(
+            {"findings": [f]}, tmp_path / "this-run")
+        assert stats["confirmation_demoted"] == 1
+        assert f["status"] == "confirmed_unverified"
+        assert f["ruling"]["status"] == "confirmed_unverified"
+
+    def test_verified_confirming_witness_supports(self, tmp_path):
+        f = _finding(status="confirmed")
+        record = {"verdict": "confirmed"}
+        f["witness_execution"] = record
+        prov.stamp_witness_execution(f, record, tmp_path)
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert stats["confirmation_demoted"] == 0
+        assert f["status"] == "confirmed"
+
+    def test_non_confirming_witness_does_not_support(self, tmp_path):
+        # A verified witness record with a non-confirmed verdict is not
+        # support for a plain-"confirmed" claim.
+        f = _finding(status="confirmed")
+        record = {"verdict": "inconclusive"}
+        f["witness_execution"] = record
+        prov.stamp_witness_execution(f, record, tmp_path)
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert stats["confirmation_demoted"] == 1
+        assert f["status"] == "confirmed_unverified"
+
+    def test_non_confirmed_statuses_untouched(self, tmp_path):
+        f = _finding(status="pending", final_status="ruled_out",
+                     ruling={"status": "ruled_out",
+                             "disqualifier": "sanitiser_dead_code"})
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert stats["confirmation_demoted"] == 0
+        assert f["status"] == "pending"
+        assert f["final_status"] == "ruled_out"
+        assert f["ruling"]["status"] == "ruled_out"
 
 
 class TestUnconditionalBooleanClamp:
@@ -297,8 +443,11 @@ class TestUnconditionalBooleanClamp:
         stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
         assert f["is_exploitable"] is False
         assert stats["exploitable_demoted"] == 1
-        # The non-tier final_status itself is not a mechanical claim.
-        assert f["final_status"] == "confirmed"
+        # The plain-"confirmed" clamp demotes the unreceipted claim on
+        # its own channel — independent of the boolean clamp above.
+        assert f["final_status"] == "confirmed_unverified"
+        assert f["status"] == "confirmed_unverified"
+        assert stats["confirmation_demoted"] == 1
 
     def test_junk_boolean_beside_non_tier_final_status_normalised(self, tmp_path):
         # "yes" coerces truthy at display time — junk shapes are

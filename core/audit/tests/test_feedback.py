@@ -76,6 +76,16 @@ def _latest_journal_entry(out_dir: Path, file_path: str,
     return entries.get(f"{file_path}:{function_name}")
 
 
+def _receipt_ruling(finding: dict, report_dir: Path) -> dict:
+    """Stamp a fixture's confirmed ruling the way /validate's trusted
+    acts do. The import sanitises against the report's own directory
+    and demotes unreceipted plain-"confirmed" rulings — these fixtures
+    model a legitimate validation report, not a forged one."""
+    from core.witness.provenance import stamp_ruling_confirmation
+    stamp_ruling_confirmation(finding, finding["ruling"], report_dir)
+    return finding
+
+
 # ---- _classify_verdict ----
 
 class TestClassifyVerdict:
@@ -313,13 +323,13 @@ class TestImportValidationResults:
                              "finding", "Format string confirmed")
 
         report_path = tmp_path / "findings.json"
-        report_path.write_text(json.dumps([{
+        report_path.write_text(json.dumps([_receipt_ruling({
             "file": "src/vuln.c",
             "function": "vuln_fn",
             "ruling": {"status": "confirmed",
                        "evidence_synthesis": {
                            "synthesis": "all stages agree"}},
-        }]))
+        }, tmp_path)]))
 
         result = import_validation_results(
             validation_report=report_path,
@@ -478,10 +488,10 @@ class TestImportValidationResults:
         report_path.write_text(json.dumps([
             {"file": "src/a.c", "function": "fn_a",
              "ruling": {"status": "ruled_out"}},
-            {"file": "src/b.c", "function": "fn_b",
-             "ruling": {"status": "confirmed"}},
-            {"file": "src/c.c", "function": "fn_c",
-             "ruling": {"status": "confirmed"}},
+            _receipt_ruling({"file": "src/b.c", "function": "fn_b",
+                             "ruling": {"status": "confirmed"}}, tmp_path),
+            _receipt_ruling({"file": "src/c.c", "function": "fn_c",
+                             "ruling": {"status": "confirmed"}}, tmp_path),
         ]))
 
         result = import_validation_results(
@@ -700,9 +710,9 @@ class TestConfirmedBeatsDisproven:
         _seed_journal_entry(audit_out, "src/a.c", "fn_a",
                             "finding", "Bug found")
         self._run(tmp_path, [
-            {"file": "src/a.c", "function": "fn_a",
-             "cwe": "CWE-787", "line": 10,
-             "ruling": {"status": "confirmed"}},
+            _receipt_ruling({"file": "src/a.c", "function": "fn_a",
+                             "cwe": "CWE-787", "line": 10,
+                             "ruling": {"status": "confirmed"}}, tmp_path),
             {"file": "src/a.c", "function": "fn_a",
              "cwe": "CWE-476", "line": 40,
              "ruling": {"status": "ruled_out", "reason": "decoy"}},

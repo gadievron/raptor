@@ -100,6 +100,7 @@ _WITNESS_KIND = "witness-execution"
 _FEASIBILITY_KIND = "feasibility-analysis"
 _IRIS_KIND = "iris-tier1-refutation"
 _SMT_KIND = "smt-path-feasibility"
+_RULING_KIND = "ruling-confirmation"
 
 
 def _key_path() -> Path:
@@ -433,6 +434,34 @@ def feasibility_fields(
     }
 
 
+def ruling_confirmation_fields(
+    finding: Mapping[str, Any],
+    ruling: Mapping[str, Any],
+    run_dir: Path | str,
+    *,
+    binding: str | None = None,
+) -> dict:
+    """The exact ruling fields consumers act on, in MAC form.
+
+    Plain ``confirmed`` is the LLM-tier runtime verdict — no
+    mechanical record anchors it by design — so the stamp binds the
+    TRUSTED ACT instead: the pipeline chokepoint that accepted the
+    ruling (the Stage D merge, the orchestrator's sanity pass, the
+    witness stage's upgrade). ``status`` is the claim itself and
+    ``reason`` is the operator-facing justification prose; both are
+    authenticated together with the finding coordinates so a stamped
+    ruling cannot be spliced onto another finding or have its claim
+    or justification rewritten in the file-writable findings
+    artifact."""
+    return {
+        "kind": _RULING_KIND,
+        "run": binding if binding is not None else run_binding(run_dir),
+        "status": str(ruling.get("status") or ""),
+        "reason": str(ruling.get("reason") or ""),
+        **_finding_coords(finding),
+    }
+
+
 def iris_refutation_fields(
     row: Mapping[str, Any],
     run_dir: Path | str,
@@ -615,6 +644,43 @@ def verify_feasibility(
     return verify_feasibility_graded(finding, run_dir) is not None
 
 
+def stamp_ruling_confirmation(
+    finding: Mapping[str, Any],
+    ruling: dict,
+    run_dir: Path | str,
+) -> None:
+    """Stamp a confirmed-tier ruling at the trusted chokepoint that
+    just accepted it (Stage D merge / sanity pass / witness upgrade).
+    No usable key → ruling stays unstamped (demote-on-read)."""
+    nonce = _load_or_create_run_nonce(run_dir)
+    binding = run_binding_nonced(run_dir, nonce) if nonce else None
+    token = mint(
+        ruling_confirmation_fields(finding, ruling, run_dir, binding=binding),
+    )
+    if token:
+        ruling[PROVENANCE_KEY] = token
+        if binding is not None:
+            ruling[BINDING_GRADE_KEY] = GRADE_RUN_NONCE
+
+
+def verify_ruling_confirmation(
+    finding: Mapping[str, Any],
+    run_dir: Path | str,
+) -> bool:
+    """Whether the finding's ruling was accepted by a trusted pipeline
+    chokepoint of THIS install in THIS run directory."""
+    ruling = finding.get("ruling")
+    if not isinstance(ruling, Mapping):
+        return False
+    binding, _grade = _binding_for_verify(ruling, run_dir)
+    if binding is None:
+        return False
+    return verify(
+        ruling_confirmation_fields(finding, ruling, run_dir, binding=binding),
+        ruling.get(PROVENANCE_KEY),
+    )
+
+
 def stamp_iris_refutation(row: dict, run_dir: Path | str) -> None:
     """Stamp a disproven.json row the IRIS Tier-1 gate just produced.
     No usable key → row stays unstamped (ignored-on-read)."""
@@ -760,16 +826,18 @@ def sanitise_findings_evidence(
 
     Mutates the findings in place. Returns
     ``{"witness_stripped": n, "feasibility_demoted": n,
-    "final_status_demoted": n, "exploitable_demoted": n}`` so callers
-    can log what was refused. Verified records are left untouched
-    (including their ruling / final_status consequences); unverified
-    ones lose the mechanical claim and keep only their LLM-tier
-    content (source-analysis fields survive for re-derivation).
+    "final_status_demoted": n, "confirmation_demoted": n,
+    "exploitable_demoted": n}`` so callers can log what was refused.
+    Verified records are left untouched (including their ruling /
+    final_status consequences); unverified ones lose the mechanical
+    claim and keep only their LLM-tier content (source-analysis
+    fields survive for re-derivation).
     """
     stats = {
         "witness_stripped": 0,
         "feasibility_demoted": 0,
         "final_status_demoted": 0,
+        "confirmation_demoted": 0,
         "exploitable_demoted": 0,
     }
     if not isinstance(findings_data, Mapping):
@@ -888,6 +956,47 @@ def sanitise_findings_evidence(
                     demoted = True
             if demoted:
                 stats["final_status_demoted"] += 1
+
+        # Plain-"confirmed" clamp: the runtime-grade confirmation is
+        # the LLM tier by design — no mechanical record anchors it —
+        # so its authority binds to the TRUSTED ACT that accepted it:
+        # a ruling-confirmation stamp minted at a pipeline chokepoint
+        # (Stage D merge / sanity pass / witness upgrade), or a
+        # verified confirming witness execution. status, final_status
+        # and ruling.status each reach display, report and projection
+        # consumers on their own, so every claiming channel is
+        # clamped. Unsupported claims demote to confirmed_unverified —
+        # the designed quarantine tier, still witness-eligible, so a
+        # witness run is exactly what can re-earn the confirmation.
+        ruling = finding.get("ruling")
+        ruling_status = (
+            normalize_status(ruling.get("status"))
+            if isinstance(ruling, dict) else None
+        )
+        claimed_final = normalize_status(finding.get("final_status"))
+        claimed_status = normalize_status(finding.get("status"))
+        if "confirmed" in (claimed_final, claimed_status, ruling_status):
+            supported = verify_ruling_confirmation(finding, run_dir)
+            if not supported:
+                record = finding.get("witness_execution")
+                supported = (
+                    isinstance(record, Mapping)
+                    and str(record.get("verdict") or "") == "confirmed"
+                    and verify_witness_execution(finding, run_dir)
+                )
+            if not supported:
+                demoted = False
+                if claimed_final == "confirmed":
+                    finding["final_status"] = "confirmed_unverified"
+                    demoted = True
+                if claimed_status == "confirmed":
+                    finding["status"] = "confirmed_unverified"
+                    demoted = True
+                if ruling_status == "confirmed" and isinstance(ruling, dict):
+                    ruling["status"] = "confirmed_unverified"
+                    demoted = True
+                if demoted:
+                    stats["confirmation_demoted"] += 1
 
         # Boolean-verdict clamp — runs on EVERY finding, deliberately
         # NOT nested inside the final_status gate above:
@@ -1021,6 +1130,7 @@ __all__ = [
     "key_usable",
     "manifest_content_sha256",
     "mint",
+    "ruling_confirmation_fields",
     "run_binding",
     "run_binding_nonced",
     "sanitise_findings_evidence",
@@ -1028,6 +1138,7 @@ __all__ = [
     "smt_feasibility_fields",
     "stamp_feasibility",
     "stamp_iris_refutation",
+    "stamp_ruling_confirmation",
     "stamp_smt_feasibility",
     "stamp_witness_execution",
     "stamp_witness_manifest",
@@ -1035,6 +1146,7 @@ __all__ = [
     "verify_feasibility",
     "verify_feasibility_graded",
     "verify_iris_refutation",
+    "verify_ruling_confirmation",
     "verify_smt_feasibility",
     "verify_witness_execution",
     "verify_witness_execution_graded",
