@@ -10,8 +10,13 @@ have fired — proof the narrowing is the refiner's work.
 
 import textwrap
 
+import pytest
+
 from core.audit.condition_smt import check_toctou
 from core.audit.toctou_order import OrderVerdict, ToctouRefiner
+
+pytest.importorskip("tree_sitter")
+pytest.importorskip("tree_sitter_c")
 
 
 def _c(body: str) -> str:
