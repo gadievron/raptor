@@ -1815,6 +1815,11 @@
     "note": "Python-owned public export dispatch map for lazy package imports; module and attribute names are package infrastructure, not learned target API vocabulary.",
     "reviewed": "2026-11-03"
   },
+  "core/llm/catalog.py::_payload": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Closed explicit PublicRoute wire projection: route_id/provider/model_name plus bounded model parameters, enabled and role. These are fixed serialized schema keys, not learned function names, detector API lists or credential fields. Explicit projection prevents future private ModelConfig fields leaking into worker catalogs; provider discovery/authorization remains outside this schema."
+  },
   "core/llm/cc_proxy_hosts.py::_PROVIDER_ENV_KEYS": {
     "count": 10,
     "kind": "literal",
@@ -2211,7 +2216,7 @@
   "core/sandbox/seccomp.py::_SECCOMP_BLOCK_SYSV_IPC": {
     "count": 13,
     "kind": "literal",
-    "note": "Linux SysV IPC syscall family denied for restricted-reads filters — kernel ABI vocabulary, same class as _SECCOMP_BLOCK_ALWAYS"
+    "note": "Linux SysV IPC syscall family denied for restricted-reads filters \u2014 kernel ABI vocabulary, same class as _SECCOMP_BLOCK_ALWAYS"
   },
   "core/sandbox/summary.py::_ESCAPE_PRIMITIVE_KEYWORDS": {
     "count": 12,
@@ -2423,10 +2428,10 @@
     "kind": "literal",
     "note": "closed language-grammar keyword set (C/C++/Python/JS/Java/Go/PHP/Ruby/Rust reserved words) that must stay concrete during metavariable-ization - grammar constants, not a learned API/sink vocabulary; over-inclusion only keeps a token concrete (tighter candidate), never looser"
   },
-  "core/tp_harvest/harvest.py::_harvest_one": {
+  "core/tp_harvest/harvest.py::entry": {
     "count": 12,
     "kind": "literal",
-    "note": "persistence schema keys of one harvest-manifest entry (action/record/candidate/label/oracle_verified/timestamps) - a JSON record shape, not a function-name vocabulary"
+    "note": "persistence schema keys of one harvest-manifest entry (action/record/candidate/label/oracle_verified/timestamps) - a JSON record shape, not a function-name vocabulary; keyed on the named literal the emission stamp refactor introduced"
   },
   "core/tp_harvest/labels.py::backlog_pointer": {
     "count": 12,
@@ -3067,9 +3072,9 @@
     "note": "JSON-schema property-name manifest for checklist.json items (source line anchors + binary address anchors) \u2014 schema keys, not a learned name vocabulary"
   },
   "packages/exploitability_validation/schemas.py::FINDING_SCHEMA": {
-    "count": 56,
+    "count": 57,
     "kind": "literal",
-    "note": "Closed finding-schema property names; end_line/start_column/end_column retain imported SARIF spans alongside rule_scope through validation serialization. These are schema fields, not a learned detector vocabulary."
+    "note": "Closed finding-schema property names; end_line/start_column/end_column retain imported SARIF spans alongside rule_scope through validation serialization. These are schema fields, not a learned detector vocabulary. manual_override_mac carries the verdict CLI's claim token through validation serialization - a schema field too."
   },
   "packages/exploitability_validation/schemas.py::HYPOTHESIS_SCHEMA": {
     "count": 11,
@@ -3693,10 +3698,5 @@
     "kind": "literal",
     "note": "Autonomous-run summary dict: counter + provenance KEYS written to the analysis-summary JSON (persistence schema keys, not a name vocabulary); root-module universe addition.",
     "reviewed": "2026-10-31"
-  },
-  "core/llm/catalog.py::_payload": {
-    "count": 10,
-    "kind": "literal",
-    "note": "Closed explicit PublicRoute wire projection: route_id/provider/model_name plus bounded model parameters, enabled and role. These are fixed serialized schema keys, not learned function names, detector API lists or credential fields. Explicit projection prevents future private ModelConfig fields leaking into worker catalogs; provider discovery/authorization remains outside this schema."
   }
 }
