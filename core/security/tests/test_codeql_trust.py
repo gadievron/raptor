@@ -105,56 +105,75 @@ class TestIncompleteEnumeration:
         assert blocked is True
         assert "scan_incomplete" in capsys.readouterr().out
 
-    def test_symlinked_github_to_unreadable_blocks(self, tmp_path, capsys):
-        """The one hiding shape the walk lane cannot see: `.github` as
-        a SYMLINK (symlinked dirs are listed, never entered — no walk
-        error fires) to an unreadable tree holding codeql-config.yml.
-        Only the os.lstat presence probe reaches it; the pathlib-based
-        probe swallowed the EACCES on 3.13+ and scanned nothing."""
-        import os as _os
-        if _os.geteuid() == 0:
-            pytest.skip("root ignores directory mode bits")
+    def test_linked_github_component_blocks(self, tmp_path, capsys):
+        """A SYMLINKED ``.github`` component is a blocking finding in
+        its own right, however clean the tree it aims at: the config's
+        consumers resolve the path themselves, so a verdict earned by
+        following the link proves nothing about what they will read
+        once the link is re-aimed — the same doctrine as the cc gate's
+        symlinked ``.claude``. The link target here is deliberately
+        CLEAN (the historical probe FOLLOWED the link, scanned it, and
+        released a clean verdict). Note the output assertion anchors on
+        the indented finding line, never on a bare substring a path
+        under ``tmp_path`` could satisfy."""
         hidden = tmp_path / "hidden"
         (hidden / "codeql").mkdir(parents=True)
-        (hidden / "codeql" / "codeql-config.yml").write_text("packs: [x]\n")
+        (hidden / "codeql" / "codeql-config.yml").write_text("{}\n")
         repo = tmp_path / "repo"
         repo.mkdir()
         (repo / ".github").symlink_to(hidden)
-        hidden.chmod(0)
-        try:
-            blocked = _check(str(repo))
-        finally:
-            hidden.chmod(0o700)
-        assert blocked is True
-        assert "oversized/unreadable" in capsys.readouterr().out
+        assert _check(str(repo)) is True
+        assert "\n    symlink" in capsys.readouterr().out
 
-    def test_path_present_probe_error_reports_present(self, monkeypatch):
-        """Version-stable probe semantics: pathlib's exists()/is_symlink()
-        raise on probe errors on ≤3.12 and swallow to False on 3.13+ —
-        both wrong here. The os.lstat probe reports EACCES-class errors
-        as present (scanned → blocked) and only ENOENT/ENOTDIR as
-        absent."""
-        from core.security.codeql_trust import _path_present
+    def test_linked_github_codeql_component_blocks(
+            self, tmp_path, capsys):
+        """Same doctrine one component deeper: ``.github/codeql`` as a
+        symlink blocks, even when the linked tree's config is clean."""
+        hidden = tmp_path / "hidden"
+        hidden.mkdir()
+        (hidden / "codeql-config.yml").write_text("{}\n")
+        repo = tmp_path / "repo"
+        (repo / ".github").mkdir(parents=True)
+        (repo / ".github" / "codeql").symlink_to(hidden)
+        assert _check(str(repo)) is True
+        assert "\n    symlink" in capsys.readouterr().out
+
+    def test_github_as_regular_file_is_absent(self, tmp_path, capsys):
+        """A regular file where the ``.github`` directory component
+        would be denotes nothing the config location can mean — absent,
+        clean verdict, exactly as the historical ENOTDIR probe
+        reported."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".github").write_text("not a directory")
+        assert _check(str(repo)) is False
+        assert capsys.readouterr().out == ""
+
+    def test_unprobeable_config_component_blocks(
+            self, tmp_path, monkeypatch, capsys):
+        """Fail-closed probe semantics, preserved from the historical
+        os.lstat presence probe: an EACCES-class error probing the
+        ``.github`` component reads as present-but-unreadable
+        (blocking), never as absent — modes can flip readable again
+        before `codeql database create` runs."""
+        import errno as _errno
         import os as _os
 
-        def _raise(err):
-            def _l(_p):
-                raise OSError(err, _os.strerror(err))
-            return _l
+        from core.security import codeql_trust as trust
+        from core.testing.module_bindings import patch_module_attribute
 
-        import errno as _errno
-        from types import ModuleType
-        from core.security import capped_read
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        real_lstat = _os.lstat
 
-        local_os = ModuleType("probe_os")
-        vars(local_os).update(vars(_os))
-        monkeypatch.setattr(capped_read, "os", local_os)
-        monkeypatch.setattr(local_os, "lstat", _raise(_errno.EACCES))
-        assert _path_present(Path("/probe/denied")) is True
-        monkeypatch.setattr(local_os, "lstat", _raise(_errno.ENOENT))
-        assert _path_present(Path("/probe/gone")) is False
-        monkeypatch.setattr(local_os, "lstat", _raise(_errno.ENOTDIR))
-        assert _path_present(Path("/probe/notdir")) is False
+        def fake_lstat(path, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003, ANN202 — delegating shim, signature mirrors os.lstat
+            if _os.fsdecode(path) == ".github":
+                raise OSError(_errno.EACCES, _os.strerror(_errno.EACCES))
+            return real_lstat(path, *args, **kwargs)
+
+        patch_module_attribute(monkeypatch, trust, "os", "lstat", fake_lstat)
+        assert _check(str(repo)) is True
+        assert "oversized/unreadable" in capsys.readouterr().out
 
     def test_unlistable_target_root_blocks(self, tmp_path, capsys):
         import os as _os

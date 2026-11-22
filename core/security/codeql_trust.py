@@ -82,13 +82,16 @@ system; trust must come from explicit operator intent).
 
 from __future__ import annotations
 
+import errno
 import logging
 import os
 import re
+import stat
 from pathlib import Path
 
-from core.security.capped_read import path_may_exist
 from core.security._trust_common import (
+    _DIR_OBSERVE_FLAGS,
+    _FD_OBSERVE_FLAGS,
     GIT_LINK_MAX_BYTES,
     RAPTOR_DIR as _RAPTOR_DIR,
     FileScan,
@@ -297,10 +300,6 @@ def _is_canonical_pack_ref(ref: str) -> bool:
 _SCAN_SUBJECT = "CodeQL pack config"
 
 
-def _path_present(p: Path) -> bool:
-    return path_may_exist(p)
-
-
 # ---------------------------------------------------------------------------
 # Self-recognition: registered worktrees of RAPTOR's own repo
 # ---------------------------------------------------------------------------
@@ -324,10 +323,25 @@ _read_git_link = read_git_link
 # ---------------------------------------------------------------------------
 
 
-def _scan_pack_file(path: Path) -> FileScan:
-    """Scan a ``codeql-pack.yml`` or ``qlpack.yml``."""
+def _scan_pack_file(
+    path: Path,
+    *,
+    read_name: str | None = None,
+    dir_fd: int | None = None,
+) -> FileScan:
+    """Scan a ``codeql-pack.yml`` or ``qlpack.yml``.
+
+    ``path`` is the DISPLAY path (findings, report rendering). When
+    ``dir_fd`` is given the bytes are read via ``read_name`` RELATIVE
+    to that already-open directory fd (openat semantics) — the walk's
+    live dirfd — so the content observation binds to the directory
+    identity the walk enumerated, never to a re-walk of the display
+    spelling. Without ``dir_fd`` the display path itself is read
+    (direct test calls on standalone files).
+    """
     fs = FileScan(path=path)
-    raw = _read_capped(path)
+    src = Path(read_name) if (dir_fd is not None and read_name) else path
+    raw = _read_capped(src, dir_fd=dir_fd)
     if raw is None:
         fs.findings.append(
             Finding("oversized/unreadable", _truncate(str(path), 120), True)
@@ -423,10 +437,21 @@ def _scan_pack_file(path: Path) -> FileScan:
     return fs
 
 
-def _scan_codeql_config(path: Path) -> FileScan:
-    """Scan a ``.github/codeql/codeql-config.yml``."""
+def _scan_codeql_config(
+    path: Path,
+    *,
+    read_name: str | None = None,
+    dir_fd: int | None = None,
+) -> FileScan:
+    """Scan a ``.github/codeql/codeql-config.yml``.
+
+    ``path``/``read_name``/``dir_fd`` contract as in
+    :func:`_scan_pack_file`: display path, plus an optional
+    fd-anchored read of ``read_name`` relative to ``dir_fd``.
+    """
     fs = FileScan(path=path)
-    raw = _read_capped(path)
+    src = Path(read_name) if (dir_fd is not None and read_name) else path
+    raw = _read_capped(src, dir_fd=dir_fd)
     if raw is None:
         fs.findings.append(
             Finding("oversized/unreadable", _truncate(str(path), 120), True)
@@ -546,11 +571,16 @@ def _scan_repo(
     (see :func:`check_repo_codeql_trust`): the self-recognition gate
     borrows it, so the trusted-self verdict binds to the same inode
     the caller's divergence bracket checks — no second target open for
-    a swap to re-aim between the gate and the bracket. Required (no
-    default): a call site that forgot the fd would silently fall back
-    to the gate's own-open shape — the spelling re-walk the held-fd
-    protocol exists to remove. Pass ``target_fd=None`` only to run the
-    pure walk with no held fd (tests exercising cap/parse behaviour).
+    a swap to re-aim between the gate and the bracket — and the pack
+    WALK below runs on that same fd (``os.fwalk(dir_fd=...)``), so
+    enumeration and every per-file read are anchored to the held inode
+    too: a spelling re-aimed mid-scan can neither hide pack files from
+    the walk nor substitute the bytes it reads. Required (no default):
+    a call site that forgot the fd would silently fall back to the
+    gate's own-open shape — the spelling re-walk the held-fd protocol
+    exists to remove. With ``target_fd=None`` (tests exercising
+    cap/parse behaviour) the scan opens its own observation fd so the
+    one fd-anchored code path runs either way.
     """
     target = Path(resolved_path)
     # Skip RAPTOR's own repo — RAPTOR ships codeql packs under
@@ -566,31 +596,39 @@ def _scan_repo(
                 target, _RAPTOR_DIR, target_fd=target_fd)):
         return ((), False)
 
-    # Walk for pack files. This pre-CodeQL trust gate faces hostile
-    # repos: one shipping ``dir -> /`` (or a symlink loop) must never
-    # steer the walk across the HOST filesystem — unbounded wall
-    # time, and out-of-repo qlpack.yml files surfacing as "repo"
-    # findings. ``pathlib``'s ``**`` recurses into directory symlinks
-    # only via 3.13's ``recurse_symlinks=True`` opt-in (it's
-    # ``glob.glob(recursive=True)`` that followed them by default);
-    # walking with ``os.walk(followlinks=False)`` keeps that refusal
-    # explicit: symlinked directories are listed but never entered.
-    # Dotted dirs (``.git``, ``.claude/worktrees``) are pruned at
-    # walk time except ``.github``, which holds codeql-config.yml
-    # legitimately — the same set the old post-match filter skipped
-    # (and pruned matches never counted toward the cap). Entries
-    # NAMED like a pack file that are symlinks or directories stay
-    # in the match set: the
-    # per-file scan below marks them blocking (symlink / unreadable),
-    # exactly as before. The cap is applied PER PATTERN so a flood of
-    # one filename cannot starve enumeration of the other.
-    pack_files: list[Path] = []
+    # Walk for pack files, ANCHORED to the held observation fd:
+    # ``os.fwalk(".", dir_fd=...)`` enumerates from the held inode (fd
+    # semantics throughout — fwalk opens every subdirectory relative to
+    # its parent's fd), and each matched entry is classified and read
+    # through the live ``dirfd`` the walk yields, so neither the
+    # enumeration nor a single content read ever re-walks the target
+    # SPELLING. A double swap (decoy in after the held open, original
+    # back before the final divergence bracket) that steered the old
+    # ``os.walk(target)`` at the decoy's content now observes only the
+    # held inode. This pre-CodeQL trust gate faces hostile repos: one
+    # shipping ``dir -> /`` (or a symlink loop) must never steer the
+    # walk across the HOST filesystem — ``follow_symlinks=False``
+    # (fwalk's default) keeps that refusal explicit: symlinked
+    # directories are listed but never entered (fwalk confirms each
+    # descent by samestat against the pre-descent lstat). Dotted dirs
+    # (``.git``, ``.claude/worktrees``) are pruned at walk time except
+    # ``.github``, which holds codeql-config.yml legitimately — the
+    # same set the old post-match filter skipped (and pruned matches
+    # never counted toward the cap). Entries NAMED like a pack file
+    # that are symlinks or directories stay in the match set: the
+    # per-file scan marks them blocking (symlink / unreadable), exactly
+    # as before. The cap is applied PER PATTERN so a flood of one
+    # filename cannot starve enumeration of the other.
+    scans: list[FileScan] = []
     capped = False
-    # Walk errors are collected, never swallowed: os.walk's default is
+    # Walk errors are collected, never swallowed: fwalk's default is
     # to skip an unlistable directory silently, so an unreadable (or
     # mid-walk vanishing) subtree yielded a verdict computed from a
     # knowably-incomplete enumeration — the same shape the pack-file
-    # cap already treats as blocking below.
+    # cap already treats as blocking below. A platform without
+    # ``os.fwalk`` (or without dir_fd support under it) lands in the
+    # same lane: no enumeration is not a clean enumeration —
+    # fail-closed, never a fallback to a spelling re-walk.
     walk_errors = 0
 
     def _on_walk_error(e: OSError) -> None:
@@ -606,67 +644,172 @@ def _scan_repo(
                 _safe(_truncate(str(getattr(e, "filename", None) or e),
                                 200)))
 
-    pattern_names = ("codeql-pack.yml", "qlpack.yml")
-    counts = dict.fromkeys(pattern_names, 0)
-    try:
-        for dirpath, dirnames, filenames in os.walk(
-            target, followlinks=False, onerror=_on_walk_error,
-        ):
-            dirnames[:] = sorted(
-                d for d in dirnames
-                if not d.startswith(".") or d == ".github"
-            )
-            entries = set(filenames).union(dirnames)
-            for name in pattern_names:
-                if name not in entries:
-                    continue
-                if counts[name] >= _MAX_PACK_FILES:
-                    capped = True
-                    continue
-                pack_files.append(Path(dirpath) / name)
-                counts[name] += 1
-    except OSError:
-        walk_errors += 1
-
-    if capped:
-        _logger.warning(
-            "CodeQL trust: pack-file scan capped at %d files per "
-            "pattern in %s — additional pack files were NOT inspected; "
-            "treating the incomplete scan as blocking.",
-            _MAX_PACK_FILES, target,
-        )
-
-    config_path = target / ".github" / "codeql" / "codeql-config.yml"
-    if _path_present(config_path):
-        pack_files.append(config_path)
-
-    if not pack_files and not capped and not walk_errors:
-        return ((), False)
-
-    scans: list[FileScan] = []
-    for path in pack_files:
-        # Guarded: pathlib is_symlink() raises on probe errors on
-        # ≤3.12. Unprobeable → not a symlink here; the per-file scan
-        # below then blocks on the unreadable content.
+    def _scan_matched(display: Path, name: str, dirfd: int) -> None:
+        """Classify and scan one matched entry THROUGH the live
+        directory fd: lstat and readlink relative to ``dirfd`` for the
+        symlink finding, capped read relative to ``dirfd`` for the
+        content — the display path is never re-opened."""
         try:
-            _is_link = path.is_symlink()
-        except OSError:
-            _is_link = False
-        if _is_link:
-            fs = FileScan(path=path)
+            is_link = stat.S_ISLNK(os.lstat(name, dir_fd=dirfd).st_mode)
+        except (OSError, NotImplementedError):
+            # Unprobeable → not a symlink here; the capped read below
+            # settles it fail-closed (unreadable → blocking finding).
+            is_link = False
+        if is_link:
+            fs = FileScan(path=display)
             try:
-                tgt = str(path.readlink())
-            except OSError:
+                tgt = os.fsdecode(os.readlink(name, dir_fd=dirfd))
+            except (OSError, NotImplementedError):
                 tgt = "<unreadable>"
             fs.findings.append(Finding("symlink", _truncate(tgt, 120), True))
             scans.append(fs)
-            continue
-        if path.name == "codeql-config.yml":
-            scanned = _scan_codeql_config(path)
+            return
+        if name == "codeql-config.yml":
+            scanned = _scan_codeql_config(display, read_name=name,
+                                          dir_fd=dirfd)
         else:
-            scanned = _scan_pack_file(path)
+            scanned = _scan_pack_file(display, read_name=name, dir_fd=dirfd)
         if scanned.findings:
             scans.append(scanned)
+
+    def _config_component_fd(parent_fd: int, name: str,
+                             display: Path) -> int | None:
+        """Open one directory component of the codeql-config location
+        relative to ``parent_fd`` (O_NOFOLLOW | O_DIRECTORY). None when
+        the component is absent (no finding) or refused (blocking
+        finding appended): a SYMLINKED component is a blocking finding
+        in its own right — the config's consumers resolve the path
+        themselves, so a link vetted-by-following here could be
+        re-aimed after the check (same doctrine as the cc gate's
+        symlinked ``.claude``); an unprobeable/unopenable component is
+        fail-closed unreadable, never absent."""
+        try:
+            st = os.lstat(name, dir_fd=parent_fd)
+        except OSError as e:
+            if e.errno in (errno.ENOENT, errno.ENOTDIR):
+                return None
+            fs = FileScan(path=display)
+            fs.findings.append(Finding(
+                "oversized/unreadable", _truncate(str(display), 120), True))
+            scans.append(fs)
+            return None
+        except NotImplementedError:
+            fs = FileScan(path=display)
+            fs.findings.append(Finding(
+                "oversized/unreadable", _truncate(str(display), 120), True))
+            scans.append(fs)
+            return None
+        if stat.S_ISLNK(st.st_mode):
+            fs = FileScan(path=display)
+            try:
+                tgt = os.fsdecode(os.readlink(name, dir_fd=parent_fd))
+            except (OSError, NotImplementedError):
+                tgt = "<unreadable>"
+            fs.findings.append(Finding("symlink", _truncate(tgt, 120), True))
+            scans.append(fs)
+            return None
+        if not stat.S_ISDIR(st.st_mode):
+            # A regular file where a directory component would be:
+            # nothing the config location can denote — absent, exactly
+            # as the historical ENOTDIR probe reported.
+            return None
+        try:
+            return os.open(name, _DIR_OBSERVE_FLAGS, dir_fd=parent_fd)
+        except (OSError, NotImplementedError):
+            fs = FileScan(path=display)
+            fs.findings.append(Finding(
+                "oversized/unreadable", _truncate(str(display), 120), True))
+            scans.append(fs)
+            return None
+
+    pattern_names = ("codeql-pack.yml", "qlpack.yml")
+    counts = dict.fromkeys(pattern_names, 0)
+
+    own_fd: int | None = None
+    walk_fd = target_fd
+    if walk_fd is None:
+        # Test lane (target_fd=None): open our own observation fd so
+        # the fd-anchored walk below is the only code path. Unopenable
+        # → no enumeration → the walk-error lane blocks below.
+        try:
+            own_fd = os.open(resolved_path, _FD_OBSERVE_FLAGS)
+        except OSError:
+            own_fd = None
+        walk_fd = own_fd
+
+    try:
+        if walk_fd is None or not hasattr(os, "fwalk"):
+            walk_errors += 1
+        else:
+            try:
+                for dirpath, dirnames, filenames, dirfd in os.fwalk(
+                    ".", onerror=_on_walk_error, follow_symlinks=False,
+                    dir_fd=walk_fd,
+                ):
+                    dirnames[:] = sorted(
+                        d for d in dirnames
+                        if not d.startswith(".") or d == ".github"
+                    )
+                    entries = set(filenames).union(dirnames)
+                    for name in pattern_names:
+                        if name not in entries:
+                            continue
+                        if counts[name] >= _MAX_PACK_FILES:
+                            capped = True
+                            continue
+                        _scan_matched(target / dirpath / name, name, dirfd)
+                        counts[name] += 1
+            except (OSError, NotImplementedError):
+                # A non-directory target lands here on the walk's first
+                # open (ENOTDIR), same lane as the historical walk's
+                # top-level error.
+                walk_errors += 1
+
+        if capped:
+            _logger.warning(
+                "CodeQL trust: pack-file scan capped at %d files per "
+                "pattern in %s — additional pack files were NOT "
+                "inspected; treating the incomplete scan as blocking.",
+                _MAX_PACK_FILES, target,
+            )
+
+        # codeql-config.yml at its one fixed location, probed through
+        # the held fd component by component (never a path re-walk of
+        # the spelling): ``.github`` and ``.github/codeql`` must be
+        # real directories reached O_NOFOLLOW-relative to the held
+        # root, then the file itself is classified and read relative
+        # to the innermost fd.
+        if walk_fd is not None:
+            gh_display = target / ".github"
+            gh_fd = _config_component_fd(walk_fd, ".github", gh_display)
+            if gh_fd is not None:
+                cq_display = gh_display / "codeql"
+                try:
+                    cq_fd = _config_component_fd(gh_fd, "codeql", cq_display)
+                finally:
+                    os.close(gh_fd)
+                if cq_fd is not None:
+                    try:
+                        cfg_absent = False
+                        try:
+                            os.lstat("codeql-config.yml", dir_fd=cq_fd)
+                        except OSError as e:
+                            cfg_absent = e.errno in (errno.ENOENT,
+                                                     errno.ENOTDIR)
+                            # Any other probe error: present-but-
+                            # unprobeable — the scan below settles it
+                            # fail-closed.
+                        except NotImplementedError:
+                            pass
+                        if not cfg_absent:
+                            _scan_matched(
+                                cq_display / "codeql-config.yml",
+                                "codeql-config.yml", cq_fd)
+                    finally:
+                        os.close(cq_fd)
+    finally:
+        if own_fd is not None:
+            os.close(own_fd)
 
     if capped:
         # Fail closed: a verdict computed from a knowably-incomplete
@@ -735,19 +878,16 @@ def check_repo_codeql_trust(
     if resolved is None:
         return refuse
     # Held observation fd (shared helper layer): the self-recognition
-    # gate borrows it and the refuse-only divergence bracket below
-    # compares the final spelling against its identity, so the verdict
-    # a consumer acts on is bound to one observed inode. The pack WALK
-    # stays spelling-based (its enumeration cannot be fd-anchored
-    # without rewriting os.walk; a walk-aimed double swap is a
-    # documented residual, dominated by the strictly easier post-return
-    # single swap this bracket narrows — and `codeql database create`
-    # re-checks dispatch-adjacent). On a platform whose os lacks dir_fd
-    # support the gate's back-link reads raise NotImplementedError
-    # inside its catch-all → not-self → the scan RUNS (a RAPTOR
-    # worktree target then blocks on RAPTOR's own shipped packs —
-    # fail-closed, never fail-open; the exact ``target == _RAPTOR_DIR``
-    # skip needs no dir_fd and survives).
+    # gate borrows it, the pack WALK enumerates and reads through it
+    # (``os.fwalk(dir_fd=...)`` — see ``_scan_repo``), and the
+    # refuse-only divergence bracket below compares the final spelling
+    # against its identity, so the verdict a consumer acts on is bound
+    # to one observed inode end to end. On a platform whose os lacks
+    # dir_fd support the gate's back-link reads raise
+    # NotImplementedError inside its catch-all → not-self → the scan
+    # RUNS and its fd-anchored walk blocks fail-closed (walk-error
+    # lane), never falling back to a spelling re-walk; the exact
+    # ``target == _RAPTOR_DIR`` skip needs no dir_fd and survives.
     target_fd, refuse = open_supplied_target(
         resolved, trust_override, subject=_SCAN_SUBJECT)
     if target_fd is None:

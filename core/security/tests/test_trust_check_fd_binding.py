@@ -410,18 +410,23 @@ class TestCodeqlFdBinding:
         assert verdict is True
         assert "changed during" in capsys.readouterr().out
 
-    def test_self_skip_bound_to_held_fd(self, tmp_path, monkeypatch, capsys):
-        """The self-skip inside ``_scan_repo`` must key on the HELD
-        fd's identity, not on a re-open of the spelling: with the fd
-        observing a hostile directory, the registered spelling (real
-        worktree, genuine back-link, a pack file planted inside) must
-        be SCANNED — an own-open shape re-walks the spelling, sees the
-        genuine worktree, and skips the scan entirely."""
+    def test_self_skip_and_walk_bound_to_held_fd(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """The self-skip AND the pack walk inside ``_scan_repo`` must
+        key on the HELD fd's identity, not on a re-open of the
+        spelling: with the fd observing a hostile directory carrying a
+        planted pack file, the registered spelling (real worktree,
+        genuine back-link) must NOT earn the skip — and the scan must
+        surface the planted pack from the HELD inode. An own-open
+        shape re-walks the spelling, sees the genuine worktree, and
+        skips the scan entirely; a spelling-based walk scans the clean
+        worktree and misses the plant."""
         root, wt, _entry = _mk_linked_worktree(tmp_path)
-        (wt / "qlpack.yml").write_text(
-            "name: planted\nextractor: evil\n")
         hostile = tmp_path / "hostile"
         hostile.mkdir()
+        (hostile / "qlpack.yml").write_text(
+            "name: planted\nextractor: evil\n")
         monkeypatch.setattr(
             codeql, "_RAPTOR_DIR", (tmp_path / "raptor").resolve())
         fd = os.open(str(hostile), os.O_RDONLY)
@@ -431,10 +436,16 @@ class TestCodeqlFdBinding:
         finally:
             os.close(fd)
         assert any_blocking is True, (
-            "self-skip re-opened the spelling: the gate trusted the "
-            "directory at the registered path while the held fd — the "
-            "identity the verdict is bracketed against — observed a "
-            "different inode"
+            "self-skip or walk re-opened the spelling: the verdict's "
+            "evidence must come from the held fd — the identity the "
+            "caller's bracket checks — not from the registered path"
+        )
+        assert any(
+            f.label == "extractor"
+            for s in scans for f in s.findings
+        ), (
+            "the planted pack inside the HELD directory was not "
+            "scanned — the walk is not anchored to the held fd"
         )
         # Sanity, other direction: the same call with the fd genuinely
         # on the registered worktree is self → skipped.
@@ -445,3 +456,69 @@ class TestCodeqlFdBinding:
         finally:
             os.close(fd_wt)
         assert scans == () and any_blocking is False
+
+    def test_walk_evidence_survives_spelling_restore(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """DOUBLE SWAP: swap a clean decoy in at the spelling right
+        after the held-fd open, then swap the observed directory BACK
+        immediately before the closing bracket's lstat. The bracket
+        passes — the spelling denotes the held inode again — so walk
+        anchoring alone decides the verdict: a spelling-based walk
+        scanned the clean decoy and releases the clean verdict; the
+        fd-anchored walk read the held (dangerous) directory even
+        while it sat renamed aside, and must refuse with the pack
+        finding."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "qlpack.yml").write_text("name: planted\nextractor: evil\n")
+        decoy = tmp_path / "decoy"
+        decoy.mkdir()
+        resolved = repo.resolve()
+        aside = tmp_path / "aside"
+        monkeypatch.setattr(
+            codeql, "_RAPTOR_DIR", (tmp_path / "raptor").resolve())
+
+        def _swap_in_decoy() -> None:
+            os.rename(resolved, aside)
+            os.rename(decoy, resolved)
+
+        state = _arm_action_after_target_open(
+            monkeypatch, resolved, _swap_in_decoy)
+
+        restored = {"done": False}
+        real_lstat = os.lstat
+
+        def fake_lstat(path, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003, ANN202 — delegating shim, signature mirrors os.lstat
+            try:
+                is_target = Path(os.fsdecode(path)) == resolved
+            except TypeError:
+                is_target = False
+            if state["swapped"] and not restored["done"] and is_target:
+                restored["done"] = True
+                os.rename(resolved, tmp_path / "decoy-out")
+                os.rename(aside, resolved)
+            return real_lstat(path, *args, **kwargs)
+
+        patch_module_attribute(
+            monkeypatch, _trust_common, "os", "lstat", fake_lstat)
+        verdict = codeql.check_repo_codeql_trust(
+            str(repo), trust_override=False)
+        assert state["swapped"] and restored["done"], (
+            "probe wiring: the double swap did not complete"
+        )
+        out = capsys.readouterr().out
+        assert "changed during" not in out, (
+            "probe wiring: the bracket fired — the swap-back must land "
+            "before the closing lstat so walk anchoring alone decides"
+        )
+        assert verdict is True, (
+            "spelling-anchored walk: the verdict was derived from the "
+            "decoy at the spelling, not from the directory the held fd "
+            "observes — a double swap laundered a dangerous pack "
+            "through a clean verdict"
+        )
+        assert "extractor" in out, (
+            "the dangerous pack inside the held directory never "
+            "surfaced as a finding"
+        )
