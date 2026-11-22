@@ -8,7 +8,9 @@ from types import SimpleNamespace
 
 from core.orchestration.joern_binary_scan import (
     ARTIFACT_NAME,
+    MAX_ARTIFACT_ERRORS,
     MAX_ARTIFACT_HITS,
+    MAX_FLOW_STEPS,
     run_joern_binary_scan,
 )
 
@@ -40,8 +42,9 @@ class FakeClient:
         self.stopped = False
         self.bound = None
 
-    def import_cpg(self, cpg_path, *, timeout=None):
+    def import_cpg(self, cpg_path, **kwargs):
         self.bound = Path(cpg_path)
+        self.bind_kwargs = kwargs
         return self.bind_ok
 
     def query(self, cpgql, *, timeout=None):
@@ -118,9 +121,10 @@ class TestHappyPath:
     def test_ansi_coloured_count_echo_parsed(self, tmp_path):
         # Live regression: the REPL echo is SGR-coloured and a naive
         # digit scrape concatenated the colour-code digits (91 became
-        # 330366032091).
+        # 330366032091). The VALUE token is coloured here so the test
+        # pins the SGR strip itself, not just the '=' anchor.
         raw = ("\x1b[33mval\x1b[0m \x1b[36mres6\x1b[0m: "
-               "\x1b[32mInt\x1b[0m = 91\n")
+               "\x1b[32mInt\x1b[0m = \x1b[32m91\x1b[0m\n")
         client = FakeClient(script_output=_done(), method_count_raw=raw)
         outcome, _ = _run(tmp_path, client)
         assert outcome.method_count == 91
@@ -131,9 +135,46 @@ class TestHappyPath:
         assert outcome.method_count is None
 
     def test_c_profile_selected(self, tmp_path):
+        from packages.joern.lang_config import profile_for
         client = FakeClient(script_output=_done())
         _run(tmp_path, client)
-        assert client.lang_profile is not None
+        assert client.lang_profile is profile_for("c")
+
+    def test_import_timeout_not_borrowed_from_query_timeout(self, tmp_path):
+        # Binding a large Ghidra CPG is governed by the tunables'
+        # import timeout; the much shorter per-query timeout must not
+        # silently override it.
+        client = FakeClient(script_output=_done())
+        _run(tmp_path, client)
+        assert client.bind_kwargs == {}
+
+    def test_hits_sorted_by_decimal_address(self, tmp_path):
+        # 0xf < 0x99 < 0x100 numerically but not lexicographically —
+        # the sort (and therefore the post-sort cap) must use the
+        # decimal address.
+        output = "\n".join([
+            _hit("call-to-gets", 256),
+            _hit("call-to-gets", 15),
+            _hit("call-to-gets", 153),
+            _done(),
+        ])
+        outcome, _ = _run(tmp_path, FakeClient(script_output=output))
+        doc = json.loads(outcome.artifact_path.read_text())
+        addresses = [h["address"] for h in doc["structural_hits"]]
+        assert addresses == ["0xf", "0x99", "0x100"]
+
+    def test_non_integer_addresses_rejected(self, tmp_path):
+        # A float truncates silently and a bool is type confusion —
+        # neither is an address.
+        output = "\n".join([
+            'JOERN_SCANHIT:{"query":"call-to-gets","line":4.9,'
+            '"function":"f","code":"gets"}',
+            'JOERN_SCANHIT:{"query":"call-to-gets","line":true,'
+            '"function":"f","code":"gets"}',
+            _done(),
+        ])
+        outcome, _ = _run(tmp_path, FakeClient(script_output=output))
+        assert outcome.structural_hit_count == 0
 
     def test_duplicate_hits_deduplicated(self, tmp_path):
         output = "\n".join([
@@ -151,6 +192,41 @@ class TestHappyPath:
         outcome, _ = _run(tmp_path,
                           FakeClient(script_output="\n".join(lines)))
         assert outcome.structural_hit_count == MAX_ARTIFACT_HITS
+
+    def test_flow_steps_capped(self, tmp_path):
+        steps = [{"function": "f", "line": 1053929 + i, "code": "RDI"}
+                 for i in range(MAX_FLOW_STEPS + 20)]
+        client = FakeClient(flows=[FakeFlow(steps)], script_output=_done())
+        outcome, _ = _run(tmp_path, client)
+        doc = json.loads(outcome.artifact_path.read_text())
+        assert len(doc["taint_flows"][0]["steps"]) == MAX_FLOW_STEPS
+
+    def test_artifact_errors_capped(self, tmp_path):
+        client = FakeClient(
+            taint_errors=[f"tier error {i}" for i in
+                          range(MAX_ARTIFACT_ERRORS + 30)],
+            script_output=_done())
+        outcome, _ = _run(tmp_path, client)
+        doc = json.loads(outcome.artifact_path.read_text())
+        assert len(doc["errors"]) == MAX_ARTIFACT_ERRORS
+
+    def test_stale_artifact_cleared_before_scan(self, tmp_path):
+        # A previous run's artifact in a reused out_dir must not
+        # survive an early failure of this run.
+        binary = tmp_path / "target"
+        binary.write_bytes(b"\x7fELF")
+        out_dir = tmp_path / "run"
+        out_dir.mkdir()
+        (out_dir / ARTIFACT_NAME).write_text('{"engine": "stale"}')
+
+        def build_fail(binary, out, *, timeout, errors_out=None):
+            return None
+
+        outcome = run_joern_binary_scan(
+            binary, out_dir, build_fn=build_fail,
+            client_factory=lambda: FakeClient())
+        assert outcome.artifact_path is None
+        assert not (out_dir / ARTIFACT_NAME).exists()
 
 
 class TestSentinelDiscipline:

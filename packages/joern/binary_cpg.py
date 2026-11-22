@@ -19,11 +19,13 @@ Containment matches the other JVM spawns in this package
 (:mod:`packages.joern.runner`, :mod:`packages.joern.slicing`): the
 binary is HOSTILE INPUT — Ghidra parses it but never executes it, the
 spawn is sandboxed with the network blocked and CPU limits sized to
-the wall timeout, and JVM/Ghidra scratch (``HOME``, ``TMPDIR``,
-``user.home`` — Ghidra writes project state under the home dir) is
-pinned inside the run-owned output directory. Failures report through
-``errors_out`` and return ``None``; callers book that as "no graph",
-never as a verdict about the binary.
+the wall timeout, the JVM heap is bounded (``-J-Xmx``) and admitted
+against the host-global heap ledger for the build's duration, and
+JVM/Ghidra scratch (``HOME``, ``TMPDIR``, ``user.home`` — Ghidra
+writes project state under the home dir) is pinned inside the
+run-owned output directory. Failures report through ``errors_out``
+and return ``None``; callers book that as "no graph", never as a
+verdict about the binary.
 """
 
 from __future__ import annotations
@@ -33,8 +35,9 @@ import os
 import subprocess
 from pathlib import Path
 
+from .heap_ledger import heap_admission
 from .prereqs import _joern_parse_path, joern_tool_paths
-from .tunables import sandbox_cpu_limits
+from .tunables import JoernTunables, sandbox_cpu_limits
 
 logger = logging.getLogger(__name__)
 
@@ -114,50 +117,61 @@ def build_ghidra_cpg(
     # build's result.
     cpg_path.unlink(missing_ok=True)
 
-    cmd = [ghidra_bin, str(binary_path), "-o", str(cpg_path)]
+    # Same fail-closed heap posture as build_cpg/run_query: the Ghidra
+    # JVM never runs with the platform-default (unbounded, un-ledgered)
+    # heap — a hostile binary drives Ghidra's analysis memory use.
+    tunables = JoernTunables.from_tuning()
+    if tunables.heap_mb is None:
+        _record_error(errors_out, "ghidra2cpg requires a bounded heap")
+        return None
 
     from .runner import _default_sandbox_runner, _jvm_scratch_command
-    cmd = _jvm_scratch_command(cmd, output_dir)
     runner = subprocess_runner or _default_sandbox_runner()
 
     try:
-        proc = runner(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            target=str(binary_path.parent),
-            output=str(output_dir),
-            block_network=True,
-            tool_paths=joern_tool_paths(),
-            limits=sandbox_cpu_limits(timeout),
-        )
-    except TypeError as exc:
-        if subprocess_runner is None or "unexpected keyword argument" not in str(exc):
-            _record_error(errors_out, f"sandbox rejected ghidra2cpg: {exc}")
-            return None
-        try:
-            # Injected stub runners without the sandbox kwargs. cwd is
-            # still pinned: any cwd-relative Ghidra write must land in
-            # the run-owned output dir (mirrors the runner.py fallback).
-            proc = runner(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                cwd=str(output_dir),
-            )
-        except subprocess.TimeoutExpired:
-            _record_error(errors_out, f"ghidra2cpg timed out after {timeout}s")
-            return None
-        except OSError as e:
-            _record_error(errors_out, f"ghidra2cpg failed to spawn: {e}")
-            return None
+        with heap_admission(tunables.heap_mb, derived=tunables.heap_is_derived,
+                            require_capacity=True) as granted_mb:
+            # The launcher strips -J flags itself before the tool
+            # parses its own arguments.
+            cmd = [ghidra_bin, f"-J-Xmx{granted_mb}m",
+                   str(binary_path), "-o", str(cpg_path)]
+            cmd = _jvm_scratch_command(cmd, output_dir)
+
+            try:
+                proc = runner(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    target=str(binary_path.parent),
+                    output=str(output_dir),
+                    block_network=True,
+                    tool_paths=joern_tool_paths(),
+                    limits=sandbox_cpu_limits(timeout),
+                )
+            except TypeError as exc:
+                if (subprocess_runner is None
+                        or "unexpected keyword argument" not in str(exc)):
+                    _record_error(
+                        errors_out, f"sandbox rejected ghidra2cpg: {exc}")
+                    return None
+                # Injected stub runners without the sandbox kwargs. cwd
+                # is still pinned: any cwd-relative Ghidra write must
+                # land in the run-owned output dir (mirrors runner.py).
+                proc = runner(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    cwd=str(output_dir),
+                )
     except subprocess.TimeoutExpired:
         _record_error(errors_out, f"ghidra2cpg timed out after {timeout}s")
         return None
     except OSError as e:
-        _record_error(errors_out, f"ghidra2cpg failed to spawn: {e}")
+        # Heap-admission refusals (no ledger capacity) and spawn
+        # failures both land here — either way no graph was built.
+        _record_error(errors_out, f"ghidra2cpg could not run: {e}")
         return None
 
     if proc.returncode != 0:

@@ -347,6 +347,87 @@ def test_corpus_rejects_missing_directory(tmp_path: Path) -> None:
     assert rc == 2
 
 
+def test_joern_subcommand_accepts_flags() -> None:
+    args = _build_parser().parse_args([
+        "joern", "/tmp/bin", "--out", "/tmp/out",
+        "--query-timeout", "120", "--build-timeout", "600",
+    ])
+    assert args.target == "/tmp/bin"
+    assert args.out == "/tmp/out"
+    assert args.query_timeout == 120
+    assert args.build_timeout == 600
+
+
+def _joern_outcome(**overrides):
+    from types import SimpleNamespace
+    base = dict(artifact_path=None, method_count=91, taint_flow_count=2,
+                structural_hit_count=3, degraded=False, errors=[])
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+def test_joern_lifecycle_success(tmp_path: Path, capsys) -> None:
+    binary = tmp_path / "target"
+    binary.write_bytes(b"\x7fELF")
+    out = tmp_path / "out"
+    artifact = out / "joern-binary-scan.json"
+    with (
+        patch("packages.joern.prereqs.is_available", return_value=True),
+        patch("packages.joern.binary_cpg.ghidra2cpg_path",
+              return_value="/opt/joern/ghidra2cpg"),
+        patch("core.orchestration.joern_binary_scan.run_joern_binary_scan",
+              return_value=_joern_outcome(artifact_path=artifact)) as scan,
+        patch("packages.binary_analysis.cli.start_run") as start_run,
+        patch("packages.binary_analysis.cli.complete_run") as complete_run,
+        patch("packages.binary_analysis.cli.fail_run") as fail_run,
+    ):
+        rc = main(["joern", str(binary), "--out", str(out)])
+    assert rc == 0
+    start_run.assert_called_once_with(
+        out.resolve(), "understand", target=str(binary.resolve()))
+    complete_run.assert_called_once_with(out.resolve())
+    fail_run.assert_not_called()
+    _, kwargs = scan.call_args
+    assert kwargs == {"query_timeout_s": None, "build_timeout_s": None}
+    stdout = capsys.readouterr().out
+    assert "Mode: joern" in stdout
+    assert "not confirmed findings" in stdout
+
+
+def test_joern_prereq_gate_refuses_before_lifecycle(tmp_path: Path) -> None:
+    binary = tmp_path / "target"
+    binary.write_bytes(b"\x7fELF")
+    with (
+        patch("packages.joern.prereqs.is_available", return_value=False),
+        patch("packages.binary_analysis.cli.start_run") as start_run,
+    ):
+        rc = main(["joern", str(binary), "--out", str(tmp_path / "out")])
+    assert rc == 2
+    start_run.assert_not_called()
+
+
+def test_joern_no_artifact_fails_run(tmp_path: Path, capsys) -> None:
+    binary = tmp_path / "target"
+    binary.write_bytes(b"\x7fELF")
+    out = tmp_path / "out"
+    with (
+        patch("packages.joern.prereqs.is_available", return_value=True),
+        patch("packages.joern.binary_cpg.ghidra2cpg_path",
+              return_value="/opt/joern/ghidra2cpg"),
+        patch("core.orchestration.joern_binary_scan.run_joern_binary_scan",
+              return_value=_joern_outcome(
+                  errors=["ghidra2cpg exited 1"], degraded=True)),
+        patch("packages.binary_analysis.cli.start_run"),
+        patch("packages.binary_analysis.cli.complete_run") as complete_run,
+        patch("packages.binary_analysis.cli.fail_run") as fail_run,
+    ):
+        rc = main(["joern", str(binary), "--out", str(out)])
+    assert rc == 1
+    complete_run.assert_not_called()
+    fail_run.assert_called_once()
+    assert "ghidra2cpg exited 1" in fail_run.call_args[0][1]
+
+
 def test_corpus_summary_scrubs_hostile_family_keys(tmp_path: Path, capsys) -> None:
     corpus = tmp_path / "samples"
     corpus.mkdir()

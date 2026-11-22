@@ -993,6 +993,17 @@ def _run_joern(args: argparse.Namespace) -> int:
             query_timeout_s=args.query_timeout,
             build_timeout_s=args.build_timeout,
         )
+        if outcome.artifact_path is None:
+            # No artifact at all (frontend missing/failed/unwritable) —
+            # the run produced nothing bindable.
+            reason = "; ".join(
+                sanitise_for_terminal(e, max_len=200)
+                for e in outcome.errors[:3]
+            ) or "no artifact produced"
+            fail_run(out_dir, f"joern binary scan failed: {reason}")
+            print(f"raptor-binary: joern failed: {reason}", file=sys.stderr)
+            return 1
+        complete_run(out_dir)
     except KeyboardInterrupt:
         fail_run(out_dir, "joern binary scan interrupted")
         raise
@@ -1005,17 +1016,6 @@ def _run_joern(args: argparse.Namespace) -> int:
         print(f"raptor-binary: joern failed: {detail}", file=sys.stderr)
         return 1
 
-    if outcome.artifact_path is None:
-        # No artifact at all (frontend missing/failed/unwritable) — the
-        # run produced nothing bindable.
-        reason = "; ".join(
-            sanitise_for_terminal(e, max_len=200) for e in outcome.errors[:3]
-        ) or "no artifact produced"
-        fail_run(out_dir, f"joern binary scan failed: {reason}")
-        print(f"raptor-binary: joern failed: {reason}", file=sys.stderr)
-        return 1
-
-    complete_run(out_dir)
     print("Mode: joern (ghidra2cpg bridge; mechanical sweeps)")
     print(f"Methods recovered: {outcome.method_count}")
     print(f"Taint flows: {outcome.taint_flow_count}")

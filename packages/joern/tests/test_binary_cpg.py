@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from types import SimpleNamespace
 
 import pytest
@@ -30,6 +31,24 @@ def fake_launcher(monkeypatch):
                         lambda: "/opt/joern/ghidra2cpg")
 
 
+@pytest.fixture(autouse=True)
+def fake_heap(monkeypatch):
+    """Deterministic heap tuning + a recording admission stub."""
+    calls = []
+
+    @contextlib.contextmanager
+    def admission(requested_mb, *, derived, require_capacity=False, **kwargs):
+        calls.append((requested_mb, derived, require_capacity))
+        yield requested_mb
+
+    monkeypatch.setattr(binary_cpg, "heap_admission", admission)
+    monkeypatch.setattr(
+        binary_cpg, "JoernTunables",
+        SimpleNamespace(from_tuning=lambda: SimpleNamespace(
+            heap_mb=512, heap_is_derived=True)))
+    return calls
+
+
 def _writer_runner(out_dir, *, payload=b"CPG", returncode=0, record=None):
     """Sandbox-kwarg-accepting fake that writes cpg.bin."""
     def runner(cmd, **kwargs):
@@ -43,7 +62,7 @@ def _writer_runner(out_dir, *, payload=b"CPG", returncode=0, record=None):
 
 
 class TestCommandShape:
-    def test_cmd_order_and_sandbox_kwargs(self, binary, out_dir):
+    def test_cmd_order_and_sandbox_kwargs(self, binary, out_dir, fake_heap):
         seen = []
         errors = []
         cpg = binary_cpg.build_ghidra_cpg(
@@ -62,13 +81,16 @@ class TestCommandShape:
         assert any(e.startswith("_JAVA_OPTIONS=") and resolved_out in e
                    for e in cmd)
         i = cmd.index("/opt/joern/ghidra2cpg")
-        assert cmd[i + 1] == str(binary.resolve())
-        assert cmd[i + 2:i + 4] == ["-o", str(out_dir.resolve() / "cpg.bin")]
+        assert cmd[i + 1] == "-J-Xmx512m"
+        assert cmd[i + 2] == str(binary.resolve())
+        assert cmd[i + 3:i + 5] == ["-o", str(out_dir.resolve() / "cpg.bin")]
         assert kwargs["block_network"] is True
         assert kwargs["target"] == str(binary.resolve().parent)
         assert kwargs["output"] == resolved_out
         assert kwargs["timeout"] == 42
         assert "limits" in kwargs and "tool_paths" in kwargs
+        # The JVM heap was admitted against the ledger for the build.
+        assert fake_heap == [(512, True, True)]
 
     def test_stub_runner_falls_back_to_cwd_pin(self, binary, out_dir):
         seen = []
@@ -83,6 +105,56 @@ class TestCommandShape:
                                           subprocess_runner=stub)
         assert cpg is not None
         assert seen == [str(out_dir.resolve())]
+
+
+class TestHeapContainment:
+    def test_unbounded_heap_refused_before_spawn(self, binary, out_dir,
+                                                 monkeypatch):
+        monkeypatch.setattr(
+            binary_cpg, "JoernTunables",
+            SimpleNamespace(from_tuning=lambda: SimpleNamespace(
+                heap_mb=None, heap_is_derived=False)))
+        seen = []
+        errors = []
+        assert binary_cpg.build_ghidra_cpg(
+            binary, out_dir,
+            subprocess_runner=_writer_runner(out_dir, record=seen),
+            errors_out=errors) is None
+        assert seen == []
+        assert any("bounded heap" in e for e in errors)
+
+    def test_admission_refusal_refuses_build(self, binary, out_dir,
+                                             monkeypatch):
+        @contextlib.contextmanager
+        def no_capacity(requested_mb, *, derived, require_capacity=False,
+                        **kwargs):
+            raise OSError("heap ledger: no capacity")
+            yield  # pragma: no cover
+
+        monkeypatch.setattr(binary_cpg, "heap_admission", no_capacity)
+        seen = []
+        errors = []
+        assert binary_cpg.build_ghidra_cpg(
+            binary, out_dir,
+            subprocess_runner=_writer_runner(out_dir, record=seen),
+            errors_out=errors) is None
+        assert seen == []
+        assert any("could not run" in e for e in errors)
+
+    def test_granted_heap_lands_in_cmd(self, binary, out_dir, monkeypatch):
+        @contextlib.contextmanager
+        def clamping(requested_mb, *, derived, require_capacity=False,
+                     **kwargs):
+            yield 256
+
+        monkeypatch.setattr(binary_cpg, "heap_admission", clamping)
+        seen = []
+        binary_cpg.build_ghidra_cpg(
+            binary, out_dir,
+            subprocess_runner=_writer_runner(out_dir, record=seen))
+        cmd, _ = seen[0]
+        assert "-J-Xmx256m" in cmd
+        assert "-J-Xmx512m" not in cmd
 
 
 class TestFailurePaths:

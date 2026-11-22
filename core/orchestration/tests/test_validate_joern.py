@@ -534,3 +534,72 @@ class TestAttachSliceEvidence:
         assert ev["node_count"] == 1
         assert ev["nodes"][0]["code"] == ""
         assert ev["edges"] == []
+
+    def test_idless_nodes_fabricate_no_edges(self):
+        # Nodes without an id must anchor no edges: id-less membership
+        # against None once let {"src": null, "dst": null} edges (and
+        # edges with absent endpoints) through as def-use evidence that
+        # never existed.
+        doc = {"$type": "DataFlowSlice",
+               "nodes": [{"parentMethod": "f", "lineNumber": 1},
+                         {"parentMethod": "f", "lineNumber": 2}],
+               "edges": [{"label": "REACHING_DEF"},
+                         {"src": None, "dst": None,
+                          "label": "REACHING_DEF"}]}
+        ev = attach_slice_evidence({"function": "f"}, doc)
+        assert ev["available"] is True
+        assert ev["node_count"] == 2
+        assert all(n["id"] is None for n in ev["nodes"])
+        assert ev["edges"] == []
+
+    def test_unhashable_node_id_never_raises(self):
+        doc = {"$type": "DataFlowSlice",
+               "nodes": [{"parentMethod": "f", "id": ["not", "hashable"],
+                          "lineNumber": 1},
+                         {"parentMethod": "f", "id": {"nor": "this"},
+                          "lineNumber": 2}],
+               "edges": [{"src": ["not", "hashable"],
+                          "dst": {"nor": "this"}}]}
+        ev = attach_slice_evidence({"function": "f"}, doc)
+        assert ev["available"] is True
+        assert all(n["id"] is None for n in ev["nodes"])
+        assert ev["edges"] == []
+
+    def test_all_mirrored_fields_bounded(self):
+        # Every mirrored string is attacker-influenced slice text —
+        # the code cap alone once left name/file/label (and string
+        # ids) copied verbatim.
+        doc = {"$type": "DataFlowSlice",
+               "nodes": [{"parentMethod": "f", "id": "i" * 5000,
+                          "name": "n" * 5000, "parentFile": "p" * 5000,
+                          "label": "l" * 5000, "code": "c" * 5000,
+                          "lineNumber": 1}],
+               "edges": []}
+        ev = attach_slice_evidence({"function": "f"}, doc)
+        node = ev["nodes"][0]
+        assert len(node["id"]) <= 64
+        assert len(node["name"]) <= 120
+        assert len(node["file"]) <= 500
+        assert len(node["label"]) <= 40
+        assert len(node["code"]) <= 200
+
+    def test_non_integer_line_coerced_to_zero(self):
+        doc = {"$type": "DataFlowSlice",
+               "nodes": [{"parentMethod": "f", "id": 1,
+                          "lineNumber": {"evil": True}},
+                         {"parentMethod": "f", "id": 2,
+                          "lineNumber": True}],
+               "edges": []}
+        ev = attach_slice_evidence({"function": "f"}, doc)
+        assert [n["line"] for n in ev["nodes"]] == [0, 0]
+
+    def test_edge_flood_capped(self):
+        from core.orchestration.validate_joern import MAX_SLICE_EDGES
+        doc = {"$type": "DataFlowSlice",
+               "nodes": [{"parentMethod": "f", "id": 1, "lineNumber": 1},
+                         {"parentMethod": "f", "id": 2, "lineNumber": 2}],
+               "edges": [{"src": 1, "dst": 2, "label": "REACHING_DEF"}
+                         for _ in range(MAX_SLICE_EDGES + 100)]}
+        ev = attach_slice_evidence({"function": "f"}, doc)
+        assert len(ev["edges"]) == MAX_SLICE_EDGES
+        assert ev["truncated"] is True

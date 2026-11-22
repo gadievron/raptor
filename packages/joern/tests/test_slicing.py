@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from types import SimpleNamespace
 
@@ -42,6 +43,24 @@ def fake_launcher(monkeypatch):
                         lambda: "/opt/joern/joern-slice")
 
 
+@pytest.fixture(autouse=True)
+def fake_heap(monkeypatch):
+    """Deterministic heap tuning + a recording admission stub."""
+    calls = []
+
+    @contextlib.contextmanager
+    def admission(requested_mb, *, derived, require_capacity=False, **kwargs):
+        calls.append((requested_mb, derived, require_capacity))
+        yield requested_mb
+
+    monkeypatch.setattr(slicing, "heap_admission", admission)
+    monkeypatch.setattr(
+        slicing, "JoernTunables",
+        SimpleNamespace(from_tuning=lambda: SimpleNamespace(
+            heap_mb=512, heap_is_derived=True)))
+    return calls
+
+
 def _writer_runner(out_dir, doc=VALID_DOC, returncode=0, record=None):
     """Sandbox-kwarg-accepting fake that writes the slice document."""
     def runner(cmd, **kwargs):
@@ -56,7 +75,7 @@ def _writer_runner(out_dir, doc=VALID_DOC, returncode=0, record=None):
 
 
 class TestCommandShape:
-    def test_argument_order_and_sandbox_kwargs(self, cpg, out_dir):
+    def test_argument_order_and_sandbox_kwargs(self, cpg, out_dir, fake_heap):
         seen = []
         errors = []
         doc = slicing.run_data_flow_slice(
@@ -73,20 +92,24 @@ class TestCommandShape:
         assert f"HOME={resolved_out}" in cmd
         assert any(e.startswith("_JAVA_OPTIONS=") and resolved_out in e
                    for e in cmd)
-        # Load-bearing CLI order: subcommand options BEFORE the CPG
-        # positional, top-level options after it (the tool silently
-        # ignores a positional placed before the subcommand options).
+        # Load-bearing CLI order: the launcher-stripped -J heap flag,
+        # then subcommand options BEFORE the CPG positional, top-level
+        # options after it (the tool silently ignores a positional
+        # placed before the subcommand options).
         i = cmd.index("/opt/joern/joern-slice")
         tail = cmd[i:]
-        assert tail[1:4] == ["data-flow", "--slice-depth", "12"]
-        assert tail[4] == str(cpg.resolve())
-        assert tail[5:7] == ["-o", str(out_dir.resolve() / "dataflow-slice")]
+        assert tail[1] == "-J-Xmx512m"
+        assert tail[2:5] == ["data-flow", "--slice-depth", "12"]
+        assert tail[5] == str(cpg.resolve())
+        assert tail[6:8] == ["-o", str(out_dir.resolve() / "dataflow-slice")]
         # Containment mirrors the CPG-build spawn.
         assert kwargs["block_network"] is True
         assert kwargs["output"] == resolved_out
         assert kwargs["target"] == str(cpg.resolve().parent)
         assert "limits" in kwargs and "tool_paths" in kwargs
         assert kwargs["timeout"] == 300
+        # The JVM heap was admitted against the ledger for the spawn.
+        assert fake_heap == [(512, True, True)]
 
     def test_filters_appended_after_positional(self, cpg, out_dir):
         seen = []
@@ -151,6 +174,70 @@ class TestRefusals:
             errors_out=errors) is None
         assert any("non-printable" in e for e in errors)
 
+    @pytest.mark.parametrize("depth", [0, -5, "12", 12.5, True])
+    def test_bad_slice_depth_refused_before_spawn(self, cpg, out_dir, depth):
+        # The errors-out contract holds for a bad depth too: record and
+        # return None, never raise, never pass a junk flag to the tool.
+        seen = []
+        errors = []
+        assert slicing.run_data_flow_slice(
+            cpg, out_dir, slice_depth=depth,
+            subprocess_runner=_writer_runner(out_dir, record=seen),
+            errors_out=errors) is None
+        assert seen == []
+        assert any("slice depth" in e for e in errors)
+
+
+class TestHeapContainment:
+    def test_unbounded_heap_refused_before_spawn(self, cpg, out_dir,
+                                                 monkeypatch):
+        monkeypatch.setattr(
+            slicing, "JoernTunables",
+            SimpleNamespace(from_tuning=lambda: SimpleNamespace(
+                heap_mb=None, heap_is_derived=False)))
+        seen = []
+        errors = []
+        assert slicing.run_data_flow_slice(
+            cpg, out_dir,
+            subprocess_runner=_writer_runner(out_dir, record=seen),
+            errors_out=errors) is None
+        assert seen == []
+        assert any("bounded heap" in e for e in errors)
+
+    def test_admission_refusal_refuses_run(self, cpg, out_dir, monkeypatch):
+        @contextlib.contextmanager
+        def no_capacity(requested_mb, *, derived, require_capacity=False,
+                        **kwargs):
+            raise OSError("heap ledger: no capacity")
+            yield  # pragma: no cover
+
+        monkeypatch.setattr(slicing, "heap_admission", no_capacity)
+        seen = []
+        errors = []
+        assert slicing.run_data_flow_slice(
+            cpg, out_dir,
+            subprocess_runner=_writer_runner(out_dir, record=seen),
+            errors_out=errors) is None
+        assert seen == []
+        assert any("could not run" in e for e in errors)
+
+    def test_granted_heap_lands_in_cmd(self, cpg, out_dir, monkeypatch):
+        # A clamped grant (not the requested value) is what reaches
+        # the JVM.
+        @contextlib.contextmanager
+        def clamping(requested_mb, *, derived, require_capacity=False,
+                     **kwargs):
+            yield 256
+
+        monkeypatch.setattr(slicing, "heap_admission", clamping)
+        seen = []
+        slicing.run_data_flow_slice(
+            cpg, out_dir, subprocess_runner=_writer_runner(out_dir,
+                                                           record=seen))
+        cmd, _ = seen[0]
+        assert "-J-Xmx256m" in cmd
+        assert "-J-Xmx512m" not in cmd
+
 
 class TestFailurePaths:
     def test_nonzero_exit_returns_none(self, cpg, out_dir):
@@ -195,6 +282,35 @@ class TestFailurePaths:
             subprocess_runner=_writer_runner(out_dir, doc="{not json"),
             errors_out=errors) is None
         assert any("unreadable" in e for e in errors)
+
+    def test_hostile_deeply_nested_document_contained(self, cpg, out_dir):
+        # A pathologically nested document blows the parser's recursion
+        # limit; the tri-state contract (record + None) must hold.
+        depth = 100_000
+        nested = ("[" * depth) + ("]" * depth)
+        errors = []
+        assert slicing.run_data_flow_slice(
+            cpg, out_dir,
+            subprocess_runner=_writer_runner(out_dir, doc=nested),
+            errors_out=errors) is None
+        assert any("unreadable" in e for e in errors)
+
+    def test_symlinked_document_refused(self, cpg, out_dir, tmp_path):
+        # A symlink where the slicer writes a regular file is planted —
+        # following it would read outside the run-owned directory.
+        outside = tmp_path / "outside.json"
+        outside.write_text(json.dumps(VALID_DOC))
+
+        def linker(cmd, **kwargs):
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "dataflow-slice.json").symlink_to(outside)
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        errors = []
+        assert slicing.run_data_flow_slice(
+            cpg, out_dir, subprocess_runner=linker,
+            errors_out=errors) is None
+        assert any("symlink" in e for e in errors)
 
     def test_wrong_shape_returns_none(self, cpg, out_dir):
         bad = {"$type": "Slice", "nodes": [], "edges": []}

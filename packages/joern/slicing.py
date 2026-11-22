@@ -19,6 +19,11 @@ path in :mod:`packages.joern.runner`:
 * sandboxed spawn (network blocked, tool roots declared, CPU limits
   sized to the wall timeout), JVM scratch pinned inside the run-owned
   output directory via ``_jvm_scratch_command``;
+* bounded JVM heap, admitted against the host-global heap ledger for
+  the spawn's duration (the same ``-J-Xmx`` + ``heap_admission``
+  discipline as :func:`packages.joern.runner.run_query`) — an
+  unbounded or unadmittable heap refuses rather than over-committing
+  memory concurrent runs believe is free;
 * the output JSON is size-bounded before it is read
   (:data:`MAX_SLICE_BYTES`) — a pathological or hostile CPG must not
   balloon the orchestrator;
@@ -37,15 +42,15 @@ tests.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import re
 import subprocess
 from pathlib import Path
 
+from .heap_ledger import heap_admission
 from .prereqs import _joern_parse_path, joern_tool_paths
-from .tunables import sandbox_cpu_limits
+from .tunables import JoernTunables, sandbox_cpu_limits
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +133,12 @@ def run_data_flow_slice(
     if not slice_bin:
         _record_error(errors_out, "joern-slice launcher not installed")
         return None
+    if (isinstance(slice_depth, bool) or not isinstance(slice_depth, int)
+            or slice_depth < 1):
+        _record_error(
+            errors_out,
+            f"slice depth must be a positive integer: {slice_depth!r}")
+        return None
     if method_filter is not None and not _IDENTIFIER_RE.fullmatch(method_filter):
         _record_error(
             errors_out,
@@ -144,57 +155,66 @@ def run_data_flow_slice(
     # as this run's result.
     out_json.unlink(missing_ok=True)
 
-    # Canonical argument order (see module docstring): command options,
-    # then the CPG positional, then top-level options.
-    cmd = [slice_bin, "data-flow", "--slice-depth", str(int(slice_depth)),
-           str(cpg_path), "-o", str(out_base)]
-    if file_filter is not None:
-        cmd.extend(["--file-filter", file_filter])
-    if method_filter is not None:
-        cmd.extend(["--method-name-filter", f"^{method_filter}$"])
+    # Same fail-closed heap posture as run_query: the slicer JVM never
+    # runs with the platform-default (unbounded, un-ledgered) heap.
+    tunables = JoernTunables.from_tuning()
+    if tunables.heap_mb is None:
+        _record_error(errors_out, "joern-slice requires a bounded heap")
+        return None
 
     from .runner import _default_sandbox_runner, _jvm_scratch_command
-    cmd = _jvm_scratch_command(cmd, output_dir)
     runner = subprocess_runner or _default_sandbox_runner()
 
     try:
-        proc = runner(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            target=str(cpg_path.parent),
-            output=str(output_dir),
-            block_network=True,
-            tool_paths=joern_tool_paths(),
-            limits=sandbox_cpu_limits(timeout),
-        )
-    except TypeError as exc:
-        if subprocess_runner is None or "unexpected keyword argument" not in str(exc):
-            _record_error(errors_out, f"sandbox rejected joern-slice: {exc}")
-            return None
-        try:
-            # Injected stub runners without the sandbox kwargs. cwd is
-            # still pinned: any cwd-relative JVM write must land in the
-            # run-owned output dir (mirrors the runner.py fallback).
-            proc = runner(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                cwd=str(output_dir),
-            )
-        except subprocess.TimeoutExpired:
-            _record_error(errors_out, f"joern-slice timed out after {timeout}s")
-            return None
-        except OSError as e:
-            _record_error(errors_out, f"joern-slice failed to spawn: {e}")
-            return None
+        with heap_admission(tunables.heap_mb, derived=tunables.heap_is_derived,
+                            require_capacity=True) as granted_mb:
+            # Canonical argument order (see module docstring): the
+            # launcher strips -J flags itself, then command options,
+            # the CPG positional, and top-level options last.
+            cmd = [slice_bin, f"-J-Xmx{granted_mb}m", "data-flow",
+                   "--slice-depth", str(slice_depth),
+                   str(cpg_path), "-o", str(out_base)]
+            if file_filter is not None:
+                cmd.extend(["--file-filter", file_filter])
+            if method_filter is not None:
+                cmd.extend(["--method-name-filter", f"^{method_filter}$"])
+            cmd = _jvm_scratch_command(cmd, output_dir)
+
+            try:
+                proc = runner(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    target=str(cpg_path.parent),
+                    output=str(output_dir),
+                    block_network=True,
+                    tool_paths=joern_tool_paths(),
+                    limits=sandbox_cpu_limits(timeout),
+                )
+            except TypeError as exc:
+                if (subprocess_runner is None
+                        or "unexpected keyword argument" not in str(exc)):
+                    _record_error(
+                        errors_out, f"sandbox rejected joern-slice: {exc}")
+                    return None
+                # Injected stub runners without the sandbox kwargs. cwd
+                # is still pinned: any cwd-relative JVM write must land
+                # in the run-owned output dir (mirrors runner.py).
+                proc = runner(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    cwd=str(output_dir),
+                )
     except subprocess.TimeoutExpired:
         _record_error(errors_out, f"joern-slice timed out after {timeout}s")
         return None
     except OSError as e:
-        _record_error(errors_out, f"joern-slice failed to spawn: {e}")
+        # Heap-admission refusals (no ledger capacity) and spawn
+        # failures both land here — either way the slice did not run.
+        _record_error(errors_out, f"joern-slice could not run: {e}")
         return None
 
     if proc.returncode != 0:
@@ -206,15 +226,25 @@ def run_data_flow_slice(
     if not out_json.is_file():
         _record_error(errors_out, "joern-slice exited 0 but wrote no document")
         return None
+    if out_json.is_symlink():
+        # Defence in depth: the slicer writes a regular file; a symlink
+        # here is planted, and following it would read outside the
+        # run-owned directory.
+        _record_error(errors_out, "slice document is a symlink — refused")
+        return None
     size = out_json.stat().st_size
     if size > MAX_SLICE_BYTES:
         _record_error(
             errors_out,
             f"slice document too large ({size} bytes > {MAX_SLICE_BYTES})")
         return None
+    from core.json import load_json
     try:
-        doc = json.loads(out_json.read_text(encoding="utf-8", errors="replace"))
-    except (OSError, ValueError) as e:
+        # strict=True surfaces the parse error for errors_out;
+        # RecursionError covers a hostile deeply-nested document
+        # (same containment as core.json.load_json's non-strict lane).
+        doc = load_json(out_json, strict=True, max_bytes=MAX_SLICE_BYTES)
+    except (OSError, ValueError, RecursionError) as e:
         _record_error(errors_out, f"slice document unreadable: {e}")
         return None
     if (not isinstance(doc, dict)

@@ -518,8 +518,39 @@ def confirm_finding_flow(
 #: Per-finding cap on slice nodes mirrored into the evidence record.
 MAX_SLICE_NODES = 80
 
+#: Per-finding cap on mirrored edges — a hostile document can repeat
+#: edges between two kept nodes without limit, so the node cap alone
+#: does not bound the record.
+MAX_SLICE_EDGES = 400
+
 #: Per-node cap on the mirrored code excerpt (target-derived text).
 _SLICE_CODE_CAP = 200
+
+#: Caps on the other target-derived node strings. Everything mirrored
+#: out of the slice document is attacker-influenced text; nothing is
+#: copied unbounded.
+_SLICE_NAME_CAP = 120
+_SLICE_FILE_CAP = 500
+_SLICE_LABEL_CAP = 40
+_SLICE_ID_CAP = 64
+
+
+def _slice_str(value: Any, cap: int) -> str:
+    """Bounded string mirror of one slice-document field."""
+    return value[:cap] if isinstance(value, str) else ""
+
+
+def _slice_id(value: Any) -> int | str | None:
+    """Node/edge id, constrained to hashable scalar forms.
+
+    Anything else (lists, dicts, floats, bools, None) returns ``None``
+    — the node is still mirrored as context, but it anchors no edges.
+    """
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value:
+        return value[:_SLICE_ID_CAP]
+    return None
 
 
 def attach_slice_evidence(
@@ -533,10 +564,13 @@ def attach_slice_evidence(
     ``slice_doc`` is the whole-program document returned by
     :func:`packages.joern.slicing.run_data_flow_slice`; nodes whose
     ``parentMethod`` equals the finding's ``function`` are selected,
-    ordered by line, capped at ``max_nodes`` (``truncated: true`` when
-    the cap bites), with the reaching-definition edges among the
-    selected nodes. The record is mirrored onto the finding as
-    ``joern_slice_evidence`` and follows the tri-state convention:
+    ordered by line, capped at ``max_nodes``, with the
+    reaching-definition edges among the selected nodes (capped at
+    :data:`MAX_SLICE_EDGES`; ``truncated: true`` when either cap
+    bites). Every mirrored field is validated and bounded — the slice
+    document is target-derived text. The record is mirrored onto the
+    finding as ``joern_slice_evidence`` and follows the tri-state
+    convention:
 
     * ``available: true`` — slice ran; ``nodes``/``edges`` carry the
       def-use context. ``node_count: 0`` means the slicer saw no
@@ -579,23 +613,41 @@ def attach_slice_evidence(
     nodes = []
     kept_ids = set()
     for n in kept:
-        node_id = n.get("id")
-        kept_ids.add(node_id)
-        code = n.get("code")
+        # Every mirrored field is attacker-influenced slice text: ids
+        # are constrained to hashable scalars (an id-less node anchors
+        # no edges — membership against None would fabricate def-use
+        # edges that never existed) and strings are capped.
+        node_id = _slice_id(n.get("id"))
+        if node_id is not None:
+            kept_ids.add(node_id)
+        line = n.get("lineNumber")
         nodes.append({
             "id": node_id,
-            "label": n.get("label", ""),
-            "code": code[:_SLICE_CODE_CAP] if isinstance(code, str) else "",
-            "name": n.get("name", ""),
-            "line": n.get("lineNumber", 0),
-            "file": n.get("parentFile", ""),
+            "label": _slice_str(n.get("label"), _SLICE_LABEL_CAP),
+            "code": _slice_str(n.get("code"), _SLICE_CODE_CAP),
+            "name": _slice_str(n.get("name"), _SLICE_NAME_CAP),
+            "line": line if isinstance(line, int)
+            and not isinstance(line, bool) else 0,
+            "file": _slice_str(n.get("parentFile"), _SLICE_FILE_CAP),
         })
-    edges = [
-        {"src": e.get("src"), "dst": e.get("dst"), "label": e.get("label", "")}
-        for e in (raw_edges if isinstance(raw_edges, list) else [])
-        if isinstance(e, dict)
-        and e.get("src") in kept_ids and e.get("dst") in kept_ids
-    ]
+    edges = []
+    for e in (raw_edges if isinstance(raw_edges, list) else []):
+        if not isinstance(e, dict):
+            continue
+        src = _slice_id(e.get("src"))
+        dst = _slice_id(e.get("dst"))
+        if src is None or dst is None:
+            continue
+        if src not in kept_ids or dst not in kept_ids:
+            continue
+        edges.append({
+            "src": src,
+            "dst": dst,
+            "label": _slice_str(e.get("label"), _SLICE_LABEL_CAP),
+        })
+        if len(edges) >= MAX_SLICE_EDGES:
+            truncated = True
+            break
 
     evidence = {
         "available": True,

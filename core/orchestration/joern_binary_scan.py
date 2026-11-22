@@ -43,6 +43,11 @@ ARTIFACT_NAME = "joern-binary-scan.json"
 MAX_ARTIFACT_FLOWS = 100
 MAX_ARTIFACT_HITS = 400
 
+#: Bound on steps mirrored per flow and on error strings mirrored into
+#: the artifact — both carry target-derived text.
+MAX_FLOW_STEPS = 100
+MAX_ARTIFACT_ERRORS = 50
+
 _PRECISION_NOTE = (
     "address-level evidence from a Ghidra-recovered graph: locations"
     " are virtual addresses, arguments are registers, literal"
@@ -89,14 +94,16 @@ def _parse_count(raw: str) -> int | None:
 
 
 def _addr(value: Any) -> tuple[int, str] | None:
-    """(decimal, hex-string) from a record's address-bearing field."""
-    try:
-        n = int(value)
-    except (TypeError, ValueError, OverflowError):
+    """(decimal, hex-string) from a record's address-bearing field.
+
+    Integers only — a float would silently truncate and a bool is a
+    type confusion, not an address.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
         return None
-    if n <= 0:
+    if value <= 0:
         return None
-    return n, hex(n)
+    return value, hex(value)
 
 
 def _structural_hits(
@@ -142,7 +149,10 @@ def _structural_hits(
             f" {done_recs[0].get('queries')!r}, expected"
             f" {_STRUCTURAL_QUERY_COUNT}")
 
-    entries: list[dict[str, Any]] = []
+    # Sort on the DECIMAL address (hex strings order lexicographically:
+    # '0x99' > '0x100'), so the post-sort cap keeps the lowest-address
+    # hits per query rather than a lexicographically-biased subset.
+    keyed: list[tuple[str, int, dict[str, Any]]] = []
     seen: set[tuple[str, int, str]] = set()
     for rec in hits:
         if not isinstance(rec, dict):
@@ -162,7 +172,7 @@ def _structural_hits(
         if key in seen:
             continue
         seen.add(key)
-        entries.append({
+        keyed.append((query, addr[0], {
             "query": query,
             "rule_id": f"joern-{query}",
             "cwe": meta["cwe"],
@@ -171,9 +181,9 @@ def _structural_hits(
             "function": function,
             "address": addr[1],
             "code": str(rec.get("code", ""))[:200],
-        })
-    entries.sort(key=lambda e: (e["query"], e["address"]))
-    return entries[:MAX_ARTIFACT_HITS]
+        }))
+    keyed.sort(key=lambda item: (item[0], item[1]))
+    return [entry for _, _, entry in keyed[:MAX_ARTIFACT_HITS]]
 
 
 def _flow_entries(flows: list[Any]) -> list[dict[str, Any]]:
@@ -181,7 +191,7 @@ def _flow_entries(flows: list[Any]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for flow in flows[:MAX_ARTIFACT_FLOWS]:
         steps = []
-        for s in getattr(flow, "steps", None) or []:
+        for s in (getattr(flow, "steps", None) or [])[:MAX_FLOW_STEPS]:
             if hasattr(s, "to_dict"):
                 s = s.to_dict()
             if not isinstance(s, dict):
@@ -207,15 +217,28 @@ def run_joern_binary_scan(
 ) -> JoernBinaryScanOutcome:
     """Build a Ghidra CPG from ``binary_path`` and run the C sweeps.
 
-    Writes ``<out_dir>/joern-binary-scan.json`` when any sweep
-    produced output; the Ghidra build scratch (CPG included) lives in
-    ``<out_dir>/joern-ghidra/``. ``build_fn`` / ``client_factory`` are
-    test seams for the frontend build and the graph client.
+    Writes ``<out_dir>/joern-binary-scan.json`` whenever the CPG binds
+    — including degraded runs where the sweeps themselves failed (the
+    artifact then carries ``degraded: true`` and the errors); only a
+    build or bind failure skips the write. The Ghidra build scratch
+    (CPG included) lives in ``<out_dir>/joern-ghidra/``. ``build_fn``
+    / ``client_factory`` are test seams for the frontend build and the
+    graph client.
     """
     outcome = JoernBinaryScanOutcome()
     t0 = time.monotonic()
     binary_path = Path(binary_path)
     out_dir = Path(out_dir)
+
+    # A previous run's artifact in a reused out_dir must never survive
+    # an early failure of THIS run and impersonate its result. If the
+    # stale file cannot be removed, refuse rather than risk it.
+    try:
+        (out_dir / ARTIFACT_NAME).unlink(missing_ok=True)
+    except OSError as error:
+        outcome.errors.append(f"could not clear stale artifact: {error}")
+        outcome.degraded = True
+        return outcome
 
     try:
         from packages.joern.binary_cpg import (
@@ -260,7 +283,10 @@ def run_joern_binary_scan(
         factory = client_factory or (
             lambda: GraphClient.from_tunables(tunables))
         srv = factory()
-        if not srv.import_cpg(outcome.cpg_path, timeout=timeout):
+        # No timeout override: binding a large Ghidra CPG is governed
+        # by the tunables' import_timeout_s (default 900 s), not the
+        # much shorter per-query timeout.
+        if not srv.import_cpg(outcome.cpg_path):
             outcome.errors.append("graph service could not bind the CPG")
             outcome.degraded = True
             outcome.elapsed_s = time.monotonic() - t0
@@ -323,8 +349,8 @@ def run_joern_binary_scan(
         "taint_flows": taint_entries,
         "structural_hit_count": outcome.structural_hit_count,
         "structural_hits": structural_entries,
-        "queries_failed": list(outcome.queries_failed),
-        "errors": [str(e)[:300] for e in outcome.errors],
+        "queries_failed": list(outcome.queries_failed)[:MAX_ARTIFACT_ERRORS],
+        "errors": [str(e)[:300] for e in outcome.errors[:MAX_ARTIFACT_ERRORS]],
         "degraded": outcome.degraded,
         "elapsed_s": round(outcome.elapsed_s, 1),
     }
