@@ -95,11 +95,13 @@ from core.security._trust_common import (
     Finding,
     is_registered_worktree_of_self as _is_registered_worktree_of_self,
     mask as _mask,
+    open_supplied_target,
     read_git_link,
     read_trust_config as _read_capped,
     render_scan_report,
     resolve_supplied_target,
     safe_text as _safe,
+    supplied_target_diverged,
     truncate as _truncate,
 )
 
@@ -522,7 +524,10 @@ def _scan_codeql_config(path: Path) -> FileScan:
 # ---------------------------------------------------------------------------
 
 
-def _scan_repo(resolved_path: str) -> tuple[tuple[FileScan, ...], bool]:
+def _scan_repo(
+    resolved_path: str,
+    target_fd: int | None = None,
+) -> tuple[tuple[FileScan, ...], bool]:
     """Pure scan: returns (scans, any_blocking). Deliberately NOT
     cached. The pack-file set comes from a recursive walk, so no cheap
     fingerprint can prove freshness (a qlpack.yml written deep in the
@@ -534,7 +539,13 @@ def _scan_repo(resolved_path: str) -> tuple[tuple[FileScan, ...], bool]:
     affordable: the check fires once per ``codeql database create``
     (packages/codeql/database_manager.py), and two rglob passes are
     noise next to a DB build measured in minutes. The pack-file-cap
-    warning fires on every call, which is at most once per DB create."""
+    warning fires on every call, which is at most once per DB create.
+
+    ``target_fd`` is the caller's held observation fd on the target
+    (see :func:`check_repo_codeql_trust`): the self-recognition gate
+    borrows it, so the trusted-self verdict binds to the same inode
+    the caller's divergence bracket checks — no second target open for
+    a swap to re-aim between the gate and the bracket."""
     target = Path(resolved_path)
     # Skip RAPTOR's own repo — RAPTOR ships codeql packs under
     # packages/llm_analysis/codeql_packs/ that would always flag
@@ -545,7 +556,8 @@ def _scan_repo(resolved_path: str) -> tuple[tuple[FileScan, ...], bool]:
     # worktree registry plus a bidirectional link check, fail closed
     # (_is_registered_worktree_of_self).
     if (target == _RAPTOR_DIR
-            or _is_registered_worktree_of_self(target, _RAPTOR_DIR)):
+            or _is_registered_worktree_of_self(
+                target, _RAPTOR_DIR, target_fd=target_fd)):
         return ((), False)
 
     # Walk for pack files. This pre-CodeQL trust gate faces hostile
@@ -716,15 +728,37 @@ def check_repo_codeql_trust(
         repo_path, trust_override, subject=_SCAN_SUBJECT)
     if resolved is None:
         return refuse
-    scans, any_blocking = _scan_repo(resolved)
-    if scans:
-        target = Path(resolved)
-        # Rendering (core.security._trust_common.render_scan_report)
-        # stays separated from ``_scan_repo`` so the scan stays
-        # side-effect free.
-        render_scan_report(target, scans, any_blocking, trust_override,
-                           subject=_SCAN_SUBJECT)
-    return any_blocking and not trust_override
+    # Held observation fd (shared helper layer): the self-recognition
+    # gate borrows it and the refuse-only divergence bracket below
+    # compares the final spelling against its identity, so the verdict
+    # a consumer acts on is bound to one observed inode. The pack WALK
+    # stays spelling-based (its enumeration cannot be fd-anchored
+    # without rewriting os.walk; a walk-aimed double swap is a
+    # documented residual, dominated by the strictly easier post-return
+    # single swap this bracket narrows — and `codeql database create`
+    # re-checks dispatch-adjacent).
+    target_fd, refuse = open_supplied_target(
+        resolved, trust_override, subject=_SCAN_SUBJECT)
+    if target_fd is None:
+        return refuse
+    try:
+        scans, any_blocking = _scan_repo(resolved, target_fd)
+        if scans:
+            target = Path(resolved)
+            # Rendering (core.security._trust_common.render_scan_report)
+            # stays separated from ``_scan_repo`` so the scan stays
+            # side-effect free.
+            render_scan_report(target, scans, any_blocking, trust_override,
+                               subject=_SCAN_SUBJECT)
+        # Refuse-only identity bracket: conjunctive, runs after the
+        # scan and the rendering — it can refuse a clean verdict whose
+        # target was swapped mid-scan, never wave anything through.
+        if supplied_target_diverged(
+                target_fd, resolved, trust_override, _SCAN_SUBJECT):
+            return True
+        return any_blocking and not trust_override
+    finally:
+        os.close(target_fd)
 
 
 __all__ = [

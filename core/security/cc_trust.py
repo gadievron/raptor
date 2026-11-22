@@ -66,15 +66,19 @@ from functools import lru_cache
 from pathlib import Path
 
 from core.security._trust_common import (
+    _DIR_OBSERVE_FLAGS,
+    _FD_OBSERVE_FLAGS,
     RAPTOR_DIR as _RAPTOR_DIR,
     FileScan,
     Finding,
     is_registered_worktree_of_self as _is_registered_worktree_of_self,
     mask as _mask,
+    open_supplied_target,
     read_trust_config as _read_capped,
     render_scan_report,
     resolve_supplied_target,
     safe_text as _safe,
+    supplied_target_diverged,
     truncate as _truncate,
 )
 from core.security.credential_env import (
@@ -688,6 +692,16 @@ def check_repo_claude_trust(repo_path: str, trust_override: bool | None = None) 
                 context the module flag doesn't capture.
         False → force strict. Tests, or code paths that want hard enforcement
                 regardless of what the user opted into elsewhere.
+
+    Held-fd protocol (shared helper layer): the resolved target is
+    opened ONCE and every observation the verdict rests on is anchored
+    to that fd — self-recognition borrows it (``target_fd``), config
+    evidence is read relative to it (``dir_fd``), and a refuse-only
+    identity bracket (:func:`supplied_target_diverged`) re-checks, just
+    before the verdict is released, that the target spelling still
+    denotes the observed inode. One inode backs the whole check; a
+    spelling swapped mid-check refuses instead of mixing evidence from
+    two directories.
     """
     if not repo_path:
         return False
@@ -700,34 +714,147 @@ def check_repo_claude_trust(repo_path: str, trust_override: bool | None = None) 
         repo_path, trust_override, subject=_SCAN_SUBJECT)
     if resolved is None:
         return refuse
-    scans, any_blocking = _scan_cached(resolved,
-                                       _read_config_state(Path(resolved)))
-    # Print side-effects live OUTSIDE the cache. Pre-fix the print() calls
-    # were inside `_check_cached` which was @lru_cache'd — so the operator
-    # only saw the warning on the FIRST identical call per process; every
-    # subsequent invocation silently returned the cached verdict with no
-    # visible diagnostic. Re-emit the rendering on each invocation so the
-    # warning isn't suppressed by cache-friendly callers (e.g. an
-    # orchestrator that re-checks the same repo per finding).
-    if scans:
-        target = Path(resolved)
-        render_scan_report(target, scans, any_blocking, trust_override,
-                           subject=_SCAN_SUBJECT)
-    return any_blocking and not trust_override
+    target = Path(resolved)
+    target_fd, refuse = open_supplied_target(
+        resolved, trust_override, subject=_SCAN_SUBJECT)
+    if target_fd is None:
+        return refuse
+    try:
+        # Self-recognition OUTSIDE the scan cache, bound to the held
+        # fd: RAPTOR's own repo (its .claude config legitimately ships
+        # hooks/helpers that would always flag) and registered
+        # worktrees of it (recognised strictly from RAPTOR's OWN
+        # worktree registry plus a bidirectional link check, fail
+        # closed — the shared _trust_common.is_registered_worktree_of_
+        # self, same gate as codeql's skip) are the operator's own
+        # trust domain. Evaluated per call, never cached: a registry
+        # entry pruned mid-process is honoured on the NEXT check
+        # instead of leaving a trusted verdict cached for that
+        # (path, config-bytes) pair. Even the self verdict rides the
+        # divergence bracket — it is keyed to the spelling a consumer
+        # dispatches against.
+        try:
+            if (target == _RAPTOR_DIR
+                    or _is_registered_worktree_of_self(
+                        target, _RAPTOR_DIR, target_fd=target_fd)):
+                return supplied_target_diverged(
+                    target_fd, resolved, trust_override, _SCAN_SUBJECT)
+            config_state = _read_config_state(target, dir_fd=target_fd)
+        except NotImplementedError:
+            # Platform without dir_fd support: never fall back to path
+            # re-walks (that would reopen the swap windows the held fd
+            # exists to close) — classify every candidate unreadable,
+            # which the scanner already treats as dangerous.
+            config_state = tuple(
+                ("unreadable",) for _ in _config_candidates(target))
+        scans, any_blocking = _scan_cached(resolved, config_state)
+        # Print side-effects live OUTSIDE the cache. Pre-fix the print()
+        # calls were inside `_check_cached` which was @lru_cache'd — so
+        # the operator only saw the warning on the FIRST identical call
+        # per process; every subsequent invocation silently returned the
+        # cached verdict with no visible diagnostic. Re-emit the
+        # rendering on each invocation so the warning isn't suppressed
+        # by cache-friendly callers (e.g. an orchestrator that re-checks
+        # the same repo per finding).
+        if scans:
+            render_scan_report(target, scans, any_blocking, trust_override,
+                               subject=_SCAN_SUBJECT)
+        # Refuse-only identity bracket: the verdict is released against
+        # the SPELLING, so the spelling must still denote the inode the
+        # evidence came from. Runs after the scan (it can only refuse,
+        # never grant) and after the rendering (the operator sees both
+        # the findings and the divergence message).
+        if supplied_target_diverged(
+                target_fd, resolved, trust_override, _SCAN_SUBJECT):
+            return True
+        return any_blocking and not trust_override
+    finally:
+        os.close(target_fd)
+
+
+# The authoritative (kind, path components) list of config files this
+# scanner reads — single source for the scan, the cache fingerprint,
+# and the fd-anchored read walk; a file added here is automatically
+# fingerprinted. Components are relative to the target so the read
+# path can anchor each step to a held directory fd.
+_CONFIG_SPECS = (
+    ("settings", (".claude", "settings.json")),
+    ("settings", (".claude", "settings.local.json")),
+    ("mcp",      (".mcp.json",)),
+)
 
 
 def _config_candidates(target: Path) -> list[tuple[str, Path]]:
-    """The authoritative (kind, path) list of config files this scanner
-    reads. Single source for both the scan and the cache fingerprint —
-    a file added here is automatically fingerprinted."""
+    """``_CONFIG_SPECS`` spelled as (kind, path) under ``target`` —
+    the display/report shape."""
     return [
-        ("settings", target / ".claude" / "settings.json"),
-        ("settings", target / ".claude" / "settings.local.json"),
-        ("mcp",      target / ".mcp.json"),
+        (kind, target.joinpath(*parts)) for kind, parts in _CONFIG_SPECS
     ]
 
 
-def _read_config_state(target: Path) -> tuple:
+def _read_one_config(name: str, at_fd: int) -> tuple:
+    """One candidate's state entry, read RELATIVE to ``at_fd`` — the
+    single-component leg of :func:`_read_config_state`'s fd-anchored
+    walk. Same entry shapes and errno doctrine as the caller."""
+    try:
+        st = os.lstat(name, dir_fd=at_fd)
+    except OSError as e:
+        # Only "nothing there" means absent. Any other lstat failure
+        # (EACCES, EIO, ELOOP, ...) means a candidate EXISTS in some
+        # form the checker cannot see — and the CC session (same uid,
+        # a later moment, possibly changed modes) might read it fine.
+        # "absent" would wave that through; classify unreadable, which
+        # the scanner already treats as dangerous.
+        if e.errno in (errno.ENOENT, errno.ENOTDIR):
+            return ("absent",)
+        return ("unreadable",)
+    if stat.S_ISLNK(st.st_mode):
+        try:
+            tgt = os.readlink(name, dir_fd=at_fd)
+        except OSError:
+            tgt = "<unreadable>"
+        return ("symlink", str(tgt))
+    raw = _read_capped(Path(name), dir_fd=at_fd)
+    if raw is None:
+        return ("unreadable",)
+    return ("content", raw)
+
+
+def _classify_claude_dir_failure(target_fd: int) -> tuple:
+    """State entry for BOTH ``.claude`` settings candidates when the
+    O_NOFOLLOW | O_DIRECTORY component open was refused with ENOTDIR /
+    ELOOP ("exists, not an openable real directory"). A refuse-only
+    lstat distinguishes the shapes — it classifies a failure, never
+    substitutes for the open:
+
+      symlink   → ("symlink", payload): CC itself follows ``.claude``
+                  at dispatch, so a symlinked config dir is a blocking
+                  finding in its own right — trusting whatever it aims
+                  at NOW proves nothing about dispatch time.
+      regular / other non-dir → ("absent",): nothing CC reads as a
+                  config dir (the historical verdict for a file-shaped
+                  ``.claude`` and for non-directory targets).
+      directory → ("unreadable",): it was not openable as one a moment
+                  ago — divergence under the check's feet; fail closed.
+    """
+    try:
+        st = os.lstat(".claude", dir_fd=target_fd)
+    except OSError as e:
+        if e.errno in (errno.ENOENT, errno.ENOTDIR):
+            return ("absent",)
+        return ("unreadable",)
+    if stat.S_ISLNK(st.st_mode):
+        try:
+            payload = os.readlink(".claude", dir_fd=target_fd)
+        except OSError:
+            payload = "<unreadable>"
+        return ("symlink", f".claude -> {payload}")
+    if stat.S_ISDIR(st.st_mode):
+        return ("unreadable",)
+    return ("absent",)
+
+
+def _read_config_state(target: Path, *, dir_fd: int | None = None) -> tuple:
     """One-pass read of the candidate config files, in candidate order.
 
     Each entry is a self-describing tuple:
@@ -747,78 +874,86 @@ def _read_config_state(target: Path) -> tuple:
     the verdict is computed over the SAME read (never a second disk
     read), a mid-check swap cannot poison a key with another
     content's verdict.
+
+    ``dir_fd`` is the caller's held observation fd on the target (the
+    held-fd protocol — see :func:`check_repo_claude_trust`): every
+    component step is then walked WITH openat semantics from that fd
+    (``.claude`` opened once, O_NOFOLLOW | O_DIRECTORY; each file
+    lstat'ed/read relative to its parent fd), so the evidence is bound
+    to the directory identity the verdict is bound to — a target
+    spelling re-aimed mid-check cannot substitute the config bytes.
+    Without it (compat path: direct test callers), the target is
+    opened here and the same fd-anchored walk runs against that
+    short-lived fd. May raise NotImplementedError on platforms without
+    dir_fd support — the caller fails closed; a path re-walk fallback
+    would silently reopen the swap windows this walk closes.
     """
-    entries: list[tuple] = []
-    for _kind, p in _config_candidates(target):
+    own_fd: int | None = None
+    if dir_fd is None:
         try:
-            st = os.lstat(p)
+            own_fd = os.open(str(target), _FD_OBSERVE_FLAGS)
         except OSError as e:
-            # Only "nothing there" means absent. Any other lstat
-            # failure (EACCES, EIO, ELOOP, ...) means a candidate
-            # EXISTS in some form the checker cannot see — and the CC
-            # session (same uid, a later moment, possibly changed
-            # modes) might read it fine. "absent" would wave that
-            # through; classify unreadable, which the scanner already
-            # treats as dangerous.
-            if e.errno in (errno.ENOENT, errno.ENOTDIR):
-                entries.append(("absent",))
+            shape = (("absent",)
+                     if e.errno in (errno.ENOENT, errno.ENOTDIR)
+                     else ("unreadable",))
+            return tuple(shape for _ in _CONFIG_SPECS)
+        dir_fd = own_fd
+    try:
+        entries: list[tuple] = []
+        # ``.claude`` opened ONCE for both settings candidates — the
+        # directory component is part of the evidence path, so it gets
+        # the same no-follow fd discipline as the files under it.
+        claude_fd: int | None = None
+        claude_failure: tuple | None = None
+        try:
+            claude_fd = os.open(".claude", _DIR_OBSERVE_FLAGS,
+                                dir_fd=dir_fd)
+        except OSError as e:
+            if e.errno == errno.ENOENT:
+                claude_failure = ("absent",)
+            elif e.errno in (errno.ENOTDIR, errno.ELOOP):
+                claude_failure = _classify_claude_dir_failure(dir_fd)
             else:
-                entries.append(("unreadable",))
-            continue
-        if stat.S_ISLNK(st.st_mode):
-            try:
-                tgt = os.readlink(p)
-            except OSError:
-                tgt = "<unreadable>"
-            entries.append(("symlink", str(tgt)))
-            continue
-        raw = _read_capped(p)
-        if raw is None:
-            entries.append(("unreadable",))
-        else:
-            entries.append(("content", raw))
-    return tuple(entries)
+                claude_failure = ("unreadable",)
+        try:
+            for _kind, parts in _CONFIG_SPECS:
+                if parts[0] == ".claude":
+                    if claude_fd is None:
+                        entries.append(claude_failure)
+                    else:
+                        entries.append(
+                            _read_one_config(parts[1], claude_fd))
+                else:
+                    entries.append(_read_one_config(parts[0], dir_fd))
+        finally:
+            if claude_fd is not None:
+                os.close(claude_fd)
+        return tuple(entries)
+    finally:
+        if own_fd is not None:
+            os.close(own_fd)
 
 
 @lru_cache(maxsize=64)
 def _scan_cached(resolved_path: str,
                  config_state: tuple) -> tuple[tuple["FileScan", ...], bool]:
-    """Pure scan: returns (scans, any_blocking). Cached on
+    """Pure CONTENT scan: returns (scans, any_blocking). Cached on
     (resolved_path, config_state) where the state carries the config
     files' CONTENT (see `_read_config_state`) — the verdict is derived
     from exactly the bytes in the key, so any config change forces a
     re-scan and no stat-forgeable fingerprint can revive a stale
     verdict. Side-effect free so repeated cache hits don't suppress
-    operator-visible warnings (handled in the caller)."""
-    target = Path(resolved_path)
-    # Skip RAPTOR's own repo — RAPTOR's own .claude config (hooks and
-    # helpers it legitimately ships) would always flag if scanned.
-    # Operator running RAPTOR against itself is implicitly trusted. A
-    # git worktree of RAPTOR itself (e.g. a pristine source-only
-    # checkout used as an audit target) is the same trust domain —
-    # recognised strictly from RAPTOR's OWN worktree registry plus a
-    # bidirectional link check, fail closed (the shared helper
-    # _trust_common.is_registered_worktree_of_self, same code as the
-    # codeql gate's skip). Cache note: the recognition input (RAPTOR's
-    # own .git/worktrees registry — trusted-side state only the
-    # operator's `git worktree add/remove` mutates, never the target)
-    # is not part of the cache key. A registry entry ADDED mid-process
-    # leaves an already-cached scan verdict in place (conservative:
-    # the operator's own worktree keeps being scanned until a new
-    # process). An entry PRUNED mid-process leaves a trusted verdict
-    # cached for that (path, config-bytes) pair — reusing it requires
-    # planting config files BYTE-IDENTICAL to the trusted worktree's
-    # own. The config BYTES were already trusted at that path, but the
-    # verdict attaches to the directory: relative hook/helper commands
-    # in those bytes would resolve against whatever non-config files
-    # sit beside them at the recaptured path. That exposure is
-    # strictly narrower than (same capability as) the stale-registry
-    # residual documented on the shared helper (operator control:
-    # `git worktree prune`).
-    if (target == _RAPTOR_DIR
-            or _is_registered_worktree_of_self(target, _RAPTOR_DIR)):
-        return ((), False)
+    operator-visible warnings (handled in the caller).
 
+    Deliberately carries NO self-recognition: the RAPTOR-repo /
+    registered-worktree skip lives in :func:`check_repo_claude_trust`,
+    evaluated per call against the held target fd. Inside the cache it
+    keyed a trusted verdict to mutable state outside the cache key
+    (RAPTOR's own worktree registry) — a registry entry pruned
+    mid-process left a trusted verdict cached for that
+    (path, config-bytes) pair. Everything cached here is now a pure
+    function of the key."""
+    target = Path(resolved_path)
     candidates = _config_candidates(target)
     scans: list[FileScan] = []
     for (kind, path), state in zip(candidates, config_state):

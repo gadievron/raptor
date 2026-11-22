@@ -162,15 +162,18 @@ class TestIncompleteEnumeration:
             pytest.skip("root ignores directory mode bits")
         repo = tmp_path / "repo"
         repo.mkdir()
-        # stat needs only traversal to the dir (parent +x); listing
-        # needs the dir's own read bit — mode 0 is stat-able, unlistable
+        # stat needs only traversal to the dir (parent +x); the
+        # held-fd observation open needs the dir's own read bit — mode
+        # 0 is stat-able but unopenable, refused at the open before
+        # any walk runs (the walk lane's scan_incomplete covers
+        # unlistable SUBTREES; the root is vetted by the fd protocol).
         repo.chmod(0)
         try:
             blocked = _check(str(repo))
         finally:
             repo.chmod(0o700)
         assert blocked is True
-        assert "scan_incomplete" in capsys.readouterr().out
+        assert "cannot examine" in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------

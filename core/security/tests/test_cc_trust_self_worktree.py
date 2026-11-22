@@ -1,6 +1,8 @@
 """Worktree-of-self recognition in the cc trust gate's self-skip.
 
-The self-scan skip in ``core.security.cc_trust._scan_cached`` must
+The self-scan skip in ``core.security.cc_trust.check_repo_claude_trust``
+(evaluated per call against the held target fd, outside the content
+cache) must
 treat a git worktree REGISTERED IN RAPTOR'S OWN GIT METADATA as self
 (same trust domain as ``_RAPTOR_DIR`` itself), while everything a
 hostile target can forge on its own side — a fake ``.git`` back-link

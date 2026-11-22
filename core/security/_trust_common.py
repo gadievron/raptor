@@ -55,13 +55,16 @@ RAPTOR_DIR = Path(__file__).resolve().parents[2]
 MAX_TRUST_CONFIG_BYTES = 1_000_000
 
 
-def read_trust_config(path: Path) -> bytes | None:
+def read_trust_config(path: Path, *, dir_fd: int | None = None) -> bytes | None:
     """Read up to ``MAX_TRUST_CONFIG_BYTES``; delegates the hardened
     open/read (O_NOFOLLOW, non-regular refusal, cap) to
     :func:`core.security.capped_read.read_capped`. None = refuse
     (fail-closed: callers treat an unreadable candidate as a blocking
-    finding, never as absent)."""
-    return read_capped(path, MAX_TRUST_CONFIG_BYTES)
+    finding, never as absent). ``dir_fd`` anchors a RELATIVE ``path``
+    to an already-open directory fd (openat semantics), pinning the
+    read to an identity the caller has vetted instead of to a re-walk
+    of its spelling."""
+    return read_capped(path, MAX_TRUST_CONFIG_BYTES, dir_fd=dir_fd)
 
 
 # ---------------------------------------------------------------------------
@@ -113,28 +116,51 @@ def read_git_link_with_stat(
     return text, st
 
 
-# One flag set for every directory observation the self-recognition
-# gate makes (the vetted target and each candidate's registered root):
-# with O_NOFOLLOW and O_DIRECTORY together, a symlink final component
-# and anything else that is not a directory are both refused at the
-# open (Linux surfaces both as ENOTDIR once O_DIRECTORY is in the
-# set); O_NONBLOCK is belt-and-braces for a FIFO planted at a vacated
-# path (O_DIRECTORY already refuses non-directories before FIFO open
-# semantics engage); and the fstat of the returned fd carries type,
-# ownership, and identity in one atomic observation of one inode — no
-# second path walk for a swap to re-aim.
-_DIR_OBSERVE_FLAGS = (
+# Base flag set for every no-follow observation open the trust gates
+# make: O_NOFOLLOW refuses a symlink final component, O_NONBLOCK keeps
+# a FIFO planted at a vacated path from hanging the open, O_CLOEXEC
+# keeps the fd from leaking across an unrelated concurrent exec — and
+# the fstat of the returned fd carries type, ownership, and identity
+# in one atomic observation of one inode, no second path walk for a
+# swap to re-aim. ``open_supplied_target`` uses this base set (a
+# stat-able non-directory target keeps its historical verdict — its
+# config candidates read as absent through the fd — so classification
+# happens on the fstat, not at the open).
+_FD_OBSERVE_FLAGS = (
     os.O_RDONLY
     | getattr(os, "O_NOFOLLOW", 0)
-    | getattr(os, "O_DIRECTORY", 0)
     | getattr(os, "O_NONBLOCK", 0)
     | getattr(os, "O_CLOEXEC", 0)
 )
 
+# Directory-observation variant — the self-recognition gate's opens
+# (the vetted target and each candidate's registered root) and the cc
+# gate's ``.claude`` component open. With O_NOFOLLOW and O_DIRECTORY
+# together, a symlink final component and anything else that is not a
+# directory are both refused at the open (Linux surfaces both as
+# ENOTDIR once O_DIRECTORY is in the set).
+_DIR_OBSERVE_FLAGS = _FD_OBSERVE_FLAGS | getattr(os, "O_DIRECTORY", 0)
 
-def is_registered_worktree_of_self(target: Path, raptor_dir: Path) -> bool:
+
+def is_registered_worktree_of_self(
+    target: Path,
+    raptor_dir: Path,
+    *,
+    target_fd: int | None = None,
+) -> bool:
     """True iff ``target`` (already resolved) is a git worktree of
     RAPTOR's own repo, proven by BOTH sides of the worktree link.
+
+    ``target_fd`` (keyword-only) lets a caller that already holds an
+    observation fd on the target (see :func:`open_supplied_target`)
+    BORROW it to the gate: the recognition verdict then binds to the
+    identity of that very fd — the same inode the caller's other
+    evidence reads are anchored to — instead of a second open of the
+    target spelling, which a swap between the caller's open and the
+    gate's open could re-aim. The fd is never closed here (the caller
+    owns its lifetime) and must observe a real directory (fstat
+    S_ISDIR, else not self). Without it the gate opens the target
+    itself, as before.
 
     ``raptor_dir`` is supplied by each gate (its module-level
     ``_RAPTOR_DIR``, normally this module's :data:`RAPTOR_DIR`) rather
@@ -211,6 +237,18 @@ def is_registered_worktree_of_self(target: Path, raptor_dir: Path) -> bool:
         # candidates, fail closed.
         if not worktrees_dir.is_dir():
             return False
+        if target_fd is not None:
+            # Borrowed observation fd: the caller opened the target
+            # once (O_NOFOLLOW discipline) and anchors ALL its evidence
+            # to that fd — binding recognition to the same inode means
+            # no second target open exists for a swap to re-aim. Never
+            # closed here; must be a real directory.
+            st_target = os.fstat(target_fd)
+            if not stat.S_ISDIR(st_target.st_mode):
+                return False
+            return _match_registered_worktree(
+                worktrees_dir, target, target_fd, st_target,
+            )
         # The caller's question is about ONE directory: observe the
         # vetted target exactly once — a single O_NOFOLLOW |
         # O_DIRECTORY open held for the whole walk. Its fstat is the
@@ -222,18 +260,18 @@ def is_registered_worktree_of_self(target: Path, raptor_dir: Path) -> bool:
         # target (callers pass resolved paths; refuse if one does not)
         # or anything non-directory is refused at the open.
         try:
-            target_fd = os.open(str(target), _DIR_OBSERVE_FLAGS)
+            own_fd = os.open(str(target), _DIR_OBSERVE_FLAGS)
         except OSError:
             return False
         try:
-            st_target = os.fstat(target_fd)
+            st_target = os.fstat(own_fd)
             if not stat.S_ISDIR(st_target.st_mode):
                 return False
             return _match_registered_worktree(
-                worktrees_dir, target, target_fd, st_target,
+                worktrees_dir, target, own_fd, st_target,
             )
         finally:
-            os.close(target_fd)
+            os.close(own_fd)
     except Exception:
         # Fail closed: recognition is best-effort — anything
         # surprising means "not self" and the caller's normal scan
@@ -518,6 +556,93 @@ def resolve_supplied_target(
               f"({safe_text(str(reason))}) — treating as dangerous")
         return None, True
     return resolved, False
+
+
+def open_supplied_target(
+    resolved: str,
+    trust_override: bool,
+    subject: str,
+) -> tuple[int | None, bool]:
+    """Open one held observation fd on an already-resolved target.
+
+    The held-fd protocol: a trust gate opens its SUPPLIED target
+    exactly once (O_NOFOLLOW, no O_DIRECTORY — a stat-able non-
+    directory target keeps its historical "nothing to scan" verdict,
+    classified by the fstat downstream) and anchors every subsequent
+    observation to that fd — self-recognition (borrowed via the gate's
+    ``target_fd``), config evidence reads (``dir_fd``), and the final
+    :func:`supplied_target_diverged` identity bracket. One inode backs
+    the whole verdict; a spelling swapped mid-check can substitute
+    nothing.
+
+    Returns ``(fd, refuse)`` with the same contract shape as
+    :func:`resolve_supplied_target`: an open fd (caller owns closing
+    it; ``refuse`` is False), or ``(None, refuse)`` when the target
+    cannot be opened — refused fail-closed with the same
+    operator-facing message, downgraded to warn-and-proceed by the
+    trust override.
+    """
+    try:
+        return os.open(resolved, _FD_OBSERVE_FLAGS), False
+    except OSError as e:
+        reason = getattr(e, "strerror", None) or type(e).__name__
+        shown = truncate(safe_text(resolved), limit=200)
+        if trust_override:
+            print(f"raptor: cannot examine {shown} for {subject} "
+                  f"({safe_text(str(reason))}) — proceeding "
+                  f"(trust override active)")
+            return None, False
+        print(f"raptor: cannot examine {shown} for {subject} "
+              f"({safe_text(str(reason))}) — treating as dangerous")
+        return None, True
+
+
+def supplied_target_diverged(
+    target_fd: int,
+    resolved: str,
+    trust_override: bool,
+    subject: str,
+) -> bool:
+    """REFUSE-ONLY identity bracket closing a trust check (True = the
+    verdict must not be released as clean).
+
+    A gate's verdict is keyed to the target SPELLING: consumers act on
+    that spelling after the check returns and the held fd is closed.
+    This bracket re-walks the spelling ONCE, at the end, and compares
+    ``os.lstat(resolved)`` identity against the held fd's fstat —
+    lstat deliberately, so a symlink raced into the spelling diverges
+    categorically (its own inode never matches the held directory's)
+    instead of being followed to wherever it aims. Any mismatch, or
+    any error on either observation, means the directory the evidence
+    came from is no longer what the spelling denotes: refuse.
+
+    Conjunctive and refuse-only by construction — it runs only after
+    the evidence scan and can never wave anything through; the trust
+    override downgrades the refusal to warn-and-proceed, matching
+    every other override lane. It narrows, not closes, the post-return
+    window: after the bracket there is still no fd handoff into the
+    spawned tool, but a swap must now land in the far smaller gap
+    between this lstat and the consumer's use instead of anywhere
+    during the scan.
+    """
+    try:
+        st_now = os.lstat(resolved)
+        st_held = os.fstat(target_fd)
+        if (st_now.st_dev, st_now.st_ino) == (st_held.st_dev,
+                                              st_held.st_ino):
+            return False
+        reason = "replaced"
+    except OSError as e:
+        reason = getattr(e, "strerror", None) or type(e).__name__
+    shown = truncate(safe_text(resolved), limit=200)
+    if trust_override:
+        print(f"raptor: {shown} changed during the {subject} check "
+              f"({safe_text(str(reason))}) — proceeding "
+              f"(trust override active)")
+        return False
+    print(f"raptor: {shown} changed during the {subject} check "
+          f"({safe_text(str(reason))}) — treating as dangerous")
+    return True
 
 
 def render_scan_report(
