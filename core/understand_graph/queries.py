@@ -635,18 +635,27 @@ def coverage_residual(
         # older ingests or merged from elsewhere — their ungraded
         # nodes (no provenance key) fail the extract and the path
         # stays reported, the safe direction.
+        # Status-gated too: only a TERMINAL validated verdict retires
+        # a path. A verified row with a non-terminal status
+        # (inconclusive, a *_unverified quarantine tier) attests
+        # examination, not resolution — old ingests minted VALIDATES
+        # edges status-blind, so the edge alone is not the authority.
+        from core.witness.provenance import TERMINAL_VALIDATED_STATUSES
+        terminal = sorted(TERMINAL_VALIDATED_STATUSES)
         snapshot = _snapshot_by_id(conn, snapshot_id)
         if snapshot is None or not snapshot["target_path"]:
             return set()
         target = str(snapshot["target_path"])
         rows = conn.execute(
-            """
+            f"""
             SELECT DISTINCT ep.props_json AS entry_props, sk.props_json AS sink_props
             FROM edges v
             JOIN nodes vo ON vo.id = v.src_id AND vo.kind = 'verified_outcome'
                          AND vo.stale = 0 AND vo.snapshot_id = v.snapshot_id
                          AND json_extract(vo.props_json, '$.provenance')
                              = 'verified'
+                         AND json_extract(vo.props_json, '$.status')
+                             IN ({",".join("?" for _ in terminal)})
             JOIN snapshots vs ON vs.id = vo.snapshot_id
                          AND (vs.target_path = ? OR vs.target_path = ?)
             JOIN nodes fl ON fl.id = v.dst_id AND fl.kind = 'unchecked_flow'
@@ -661,7 +670,7 @@ def coverage_residual(
                          AND sk.stale = 0 AND sk.snapshot_id = fl.snapshot_id
             WHERE v.kind = 'VALIDATES' AND v.stale = 0
             """,
-            (target, str(Path(target).resolve()), snapshot_id),
+            (*terminal, target, str(Path(target).resolve()), snapshot_id),
         ).fetchall()
         validated: set[tuple[str, str]] = set()
         for row in rows:

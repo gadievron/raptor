@@ -134,6 +134,63 @@ def test_planted_provenance_key_is_overwritten(tmp_path: Path) -> None:
     assert _residual_sinks(graph, target) == {"SINK-1", "SINK-2"}
 
 
+def test_verified_non_terminal_status_never_suppresses(
+    tmp_path: Path,
+) -> None:
+    """The MAC is necessary but not sufficient: a run-bound verified
+    row whose status is non-terminal (a genuine inconclusive, a
+    quarantine tier, or a planted row laundered through a writer that
+    stamped every projection) attests examination, not resolution —
+    no VALIDATES edge mints and the path stays in the residual."""
+    target, run = tmp_path / "target", tmp_path / "run"
+    graph = _write_two_flow_run(run, target)
+    save_outcomes(run, [
+        {"finding_id": "FLOW-1", "status": "inconclusive"},
+        {"finding_id": "FLOW-2", "status": "ruled_out_unverified"},
+    ])
+    assert ingest_validation_outcomes(run, str(target)) is not None
+
+    assert _node_provenances(graph) == {journal_mac.ROW_VERIFIED}
+    assert _validates_targets(graph) == []
+    assert _residual_sinks(graph, target) == {"SINK-1", "SINK-2"}
+
+
+def test_verified_rule_out_is_terminal_and_suppresses(
+    tmp_path: Path,
+) -> None:
+    """Control direction for the terminal-status gate: a stamped
+    rule-out is a finished verdict and retires its path."""
+    target, run = tmp_path / "target", tmp_path / "run"
+    graph = _write_two_flow_run(run, target)
+    save_outcomes(run, [{"finding_id": "FLOW-1", "status": "ruled_out"}])
+    assert ingest_validation_outcomes(run, str(target)) is not None
+
+    assert _validates_targets(graph) == ["unchecked_flow://FLOW-1"]
+    assert _residual_sinks(graph, target) == {"SINK-2"}
+
+
+def test_residual_refuses_non_terminal_status_on_old_graph(
+    tmp_path: Path,
+) -> None:
+    """Query-side belt: older ingests minted VALIDATES edges
+    status-blind, so a legacy graph can hold an edge from a verified
+    outcome node whose status never resolved anything — the residual
+    must refuse it, not trust the edge."""
+    target, run = tmp_path / "target", tmp_path / "run"
+    graph = _write_two_flow_run(run, target)
+    save_outcomes(run, [dict(_ROW)])
+    assert ingest_validation_outcomes(run, str(target)) is not None
+    assert _residual_sinks(graph, target) == {"SINK-2"}
+
+    # Model the legacy graph: rewrite the status, keep grade and edge.
+    with graph_write_txn(graph) as conn:
+        conn.execute(
+            "UPDATE nodes SET props_json = json_set(props_json,"
+            " '$.status', 'inconclusive') WHERE kind='verified_outcome'")
+    assert _validates_targets(graph) == ["unchecked_flow://FLOW-1"]
+    assert _residual_sinks(graph, target) == {"SINK-1", "SINK-2"}
+
+
 def test_residual_refuses_ungraded_outcome_nodes(tmp_path: Path) -> None:
     """Query-side belt: a graph whose VALIDATES edges already exist
     but whose outcome nodes carry no ``verified`` grade (built by an

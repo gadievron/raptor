@@ -539,8 +539,20 @@ def ingest_validation_outcomes(run_dir: Path, target_path: Optional[str] = None,
     filters, but never a VALIDATES edge: the path stays in the
     residual and re-earns on its next live /validate run, which
     stamps.
+
+    The MAC alone is necessary but not sufficient: only a TERMINAL
+    validated status (``TERMINAL_VALIDATED_STATUSES`` — the confirm
+    family plus receipted rule-outs) mints a VALIDATES edge. A
+    verified row whose status is non-terminal (``inconclusive``, a
+    ``*_unverified`` quarantine tier) records that the finding was
+    looked at, not that the path was resolved — suppressing the
+    residual on it would retire a path nothing actually validated.
+    The writer already withholds the stamp from unanchored terminal
+    claims; this gate is the belt for rows minted by older writers.
     """
     from core.coverage import journal_mac
+    from core.status import normalize_status
+    from core.witness.provenance import TERMINAL_VALIDATED_STATUSES
 
     run_dir = Path(run_dir)
     outcomes = load_json(run_dir / "validation-outcomes.json")
@@ -571,6 +583,7 @@ def ingest_validation_outcomes(run_dir: Path, target_path: Optional[str] = None,
             }
             run_binding = journal_mac.audit_log_run_binding(run_dir)
             unverified_refs = 0
+            non_terminal_refs = 0
             for outcome in _list(outcomes):
                 status = str(outcome.get("status") or outcome.get("verdict") or "inconclusive")
                 finding_ref = outcome.get("finding_id") or outcome.get("finding") or ""
@@ -587,6 +600,14 @@ def ingest_validation_outcomes(run_dir: Path, target_path: Optional[str] = None,
                 if finding_ref and provenance != journal_mac.ROW_VERIFIED:
                     # Telemetry node only — no suppression authority.
                     unverified_refs += 1
+                    continue
+                if (finding_ref
+                        and (normalize_status(status) or "")
+                        not in TERMINAL_VALIDATED_STATUSES):
+                    # Verified but non-terminal: the row attests
+                    # examination, not resolution — no VALIDATES edge,
+                    # the path stays in the residual.
+                    non_terminal_refs += 1
                     continue
                 if finding_ref:
                     # Exact-identity join, never substring LIKE: a short
@@ -624,6 +645,15 @@ def ingest_validation_outcomes(run_dir: Path, target_path: Optional[str] = None,
                 f"telemetry, VALIDATES suppression withheld (affected "
                 f"paths stay in the residual; a live /validate re-earns "
                 f"and stamps)",
+                file=sys.stderr,
+            )
+        if non_terminal_refs:
+            print(
+                f"graph: validation ingest: {non_terminal_refs} outcome "
+                f"row(s) with a non-terminal status — recorded as "
+                f"telemetry, VALIDATES suppression withheld (only a "
+                f"terminal validated verdict retires a path from the "
+                f"residual)",
                 file=sys.stderr,
             )
     except INGEST_SKIP_EXCEPTIONS as exc:

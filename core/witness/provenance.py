@@ -765,6 +765,23 @@ FEASIBILITY_TIER_STATUSES = frozenset({
 #: must never vouch for a confirm-direction claim beside it.
 _RECEIPT_CONFIRM_STATUSES = frozenset({"confirmed"}) | FEASIBILITY_TIER_STATUSES
 
+#: Statuses a trusted act can legitimately rule out with: the
+#: disproven family. A finished /validate leaves these only behind a
+#: mechanically verified refutation (witness execution with verdict
+#: ``refuted``) — the stage-merge chokepoint quarantines every other
+#: rule-out as ``ruled_out_unverified``.
+RULE_OUT_STATUSES: frozenset[str] = frozenset({"ruled_out", "disproven"})
+
+#: Terminal validated statuses — the verdicts a finished /validate can
+#: legitimately leave on a finding, and the ONLY statuses that may
+#: retire an attack path from ``coverage_residual``. Everything else
+#: (``inconclusive``, the ``*_unverified`` quarantine tiers,
+#: ``needs_witness``, …) means the path was NOT resolved and must stay
+#: in the residual.
+TERMINAL_VALIDATED_STATUSES: frozenset[str] = (
+    _RECEIPT_CONFIRM_STATUSES | RULE_OUT_STATUSES
+)
+
 #: Feasibility verdicts whose Stage-F mapping (validation-helper
 #: VERDICT_MAP / orchestrator verdict_to_status) reaches the
 #: exploitable family — the only verdicts that legitimately derive
