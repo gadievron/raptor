@@ -222,18 +222,23 @@ def test_coerce_manual_override_shared_convention() -> None:
 
 def test_sage_fp_skip_honours_manual_override() -> None:
     """Wiring pin: the /agentic SAGE prior-verdict skip gates on the
-    per-finding manual_override via the shared coercion — previously
-    only the run-wide env kill switch applied."""
+    per-finding manual_override — previously only the run-wide env
+    kill switch applied — and on the VERIFIED claim
+    (core.run.verdict_mac), never the raw attacker-writable field."""
     from pathlib import Path
     root = Path(__file__).resolve().parents[3]
     src = (root / "packages" / "llm_analysis" / "agent.py").read_text(
         encoding="utf-8")
     recall_at = src.index("recall_prior_finding_verdict(")
-    gate_at = src.index(
-        "coerce_manual_override(\n"
-        "                            finding.get(\"manual_override\"))")
-    assert gate_at < recall_at, (
-        "the manual_override gate must run before the SAGE recall"
+    # agent.py has several verified_manual_override gates (fixture
+    # pre-flight, guard dominance, fail-open); the pin wants the one
+    # IMMEDIATELY guarding the SAGE recall, so look backwards from the
+    # recall and require it nearby.
+    gate_at = src.rindex(
+        "if verified_manual_override(finding):", 0, recall_at)
+    assert recall_at - gate_at < 1500, (
+        "the manual_override gate must immediately precede the SAGE "
+        "recall"
     )
 
 

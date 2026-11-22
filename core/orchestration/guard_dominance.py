@@ -223,6 +223,8 @@ def apply_to_findings(
 
     Returns ``{"checked", "refuted", "corroborated", "demoted_paths"}``.
     """
+    from core.run.verdict_mac import verified_manual_override
+
     stats = {"checked": 0, "refuted": 0, "corroborated": 0,
              "demoted_paths": 0}
 
@@ -261,7 +263,11 @@ def apply_to_findings(
         if (isinstance(ruling_status, str)
                 and ruling_status.strip().lower() in NEGATIVE_VERDICTS):
             continue
-        if finding.get("manual_override"):
+        # VERIFIED operator opt-out only — the findings container is
+        # attacker bytes, so a bare flag (any truthy value, including
+        # junk strings) carries no bypass authority without the
+        # verdict-CLI claim token (core.run.verdict_mac).
+        if verified_manual_override(finding):
             continue
         if finding.get("guard_dominance"):
             continue  # already checked

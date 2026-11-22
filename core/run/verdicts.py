@@ -196,6 +196,14 @@ def set_manual_override(
     field). Clearing removes both keys — the neutral state, not
     ``false`` (an explicit false is still an operator statement).
 
+    Each set claim is stamped with this install's verdict MAC
+    (``core.run.verdict_mac`` — the chokepoints demote an unstamped
+    flag to absent, findings files being attacker bytes). When no
+    usable key is available the edit persists UNSTAMPED with a
+    warning: the flag is visible but carries no bypass authority
+    until re-applied under a working key. Clearing removes the token
+    with the keys.
+
     Writes each touched artifact once (atomic ``save_json``).
     Returns ``(changed, failed)`` — artifacts rewritten, and
     artifacts where an edit could NOT be applied (became unreadable /
@@ -207,6 +215,8 @@ def set_manual_override(
     refs (analysis reports) are skipped — a verdict edit never
     rewrites a report.
     """
+    from core.run.verdict_mac import TOKEN_KEY, mint_override_token
+
     by_artifact: dict[Path, list[FindingRef]] = {}
     for ref in refs:
         if not ref.editable:
@@ -246,8 +256,24 @@ def set_manual_override(
                 if reason and f.get("manual_override_reason") != reason:
                     f["manual_override_reason"] = reason
                     mutated = True
+                # Stamp AFTER the fields land — the claim token binds
+                # the record's current reason. No usable key: persist
+                # unstamped (visible but authority-less) and warn.
+                token = mint_override_token(f)
+                if token is None:
+                    logger.warning(
+                        "verdicts: no usable verdict-MAC key — "
+                        "manual_override on %s persisted UNSTAMPED: "
+                        "the suppression chokepoints will ignore it "
+                        "until it is re-applied under a working key",
+                        artifact,
+                    )
+                elif f.get(TOKEN_KEY) != token:
+                    f[TOKEN_KEY] = token
+                    mutated = True
             else:
-                for key in ("manual_override", "manual_override_reason"):
+                for key in ("manual_override", "manual_override_reason",
+                            TOKEN_KEY):
                     if key in f:
                         del f[key]
                         mutated = True

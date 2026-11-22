@@ -169,12 +169,36 @@ class TestApplyToFindings:
         {"manual_override": True},
         {"guard_dominance": {"outcome": "refuted"}},
     ])
-    def test_out_of_play_findings_skipped(self, monkeypatch, mutate):
+    def test_out_of_play_findings_skipped(self, monkeypatch, tmp_path,
+                                          mutate):
         calls = _patch_query(monkeypatch, "refuted")
         finding = _finding(**mutate)
+        if "manual_override" in mutate:
+            # The skip honours only the VERIFIED operator claim — mint
+            # it the way ``raptor-review verdict tp`` does, against an
+            # isolated key store.
+            from core.run.verdict_mac import stamp_manual_override
+            monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+            assert stamp_manual_override(finding)
         stats = apply_to_findings([finding], [], Path("/t"), object())
         assert stats["checked"] == 0
         assert calls == []
+
+    def test_planted_manual_override_stays_in_play(self, monkeypatch,
+                                                   tmp_path):
+        # The findings container is attacker bytes: a bare
+        # ``manual_override: true`` with no verifiable claim token must
+        # NOT opt the finding out of mechanical refutation.
+        from core.run.verdict_mac import TOKEN_KEY
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+        _patch_query(monkeypatch, "inconclusive")
+        planted = _finding(manual_override=True)
+        spliced = _finding(fid="FIND-0002",
+                           manual_override=True,
+                           **{TOKEN_KEY: "0" * 64})
+        stats = apply_to_findings(
+            [planted, spliced], [], Path("/t"), object())
+        assert stats["checked"] == 2
 
     @pytest.mark.parametrize("ruling", [
         # Skip-too-wide is the harmful other direction: positive,

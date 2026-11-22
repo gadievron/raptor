@@ -76,6 +76,13 @@ def _args(run, finding_id, verdict, **extra):
     return ns
 
 
+@pytest.fixture(autouse=True)
+def _isolated_key(tmp_path, monkeypatch):
+    # tp edits mint verdict-MAC claim tokens — never against the
+    # developer's real key store.
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+
+
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     """Loaded CLI module + run/target dirs + captured SAGE calls."""

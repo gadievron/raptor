@@ -227,11 +227,13 @@ class TestPreflightDoesNotSkipOnCandidateVerdict:
 
 class TestManualOverrideBypassesPreflight:
     def test_manual_override_skips_fixture_detection_entirely(
-        self, agent, checklist, repo, tmp_path,
+        self, agent, checklist, repo, tmp_path, monkeypatch,
     ):
-        """manual_override=True on the finding bypasses the pre-
+        """A VERIFIED manual_override on the finding bypasses the pre-
         flight; the LLM analysis runs normally even when path +
         reachability would have triggered ``true``."""
+        from core.run.verdict_mac import stamp_manual_override
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
         finding = _finding(
             "tests/conftest.py", "setup_user",
             fid="F-OVERRIDE",
@@ -241,6 +243,9 @@ class TestManualOverrideBypassesPreflight:
                 "endpoint in prod under DEBUG=1"
             ),
         )
+        # Mint the claim the way ``raptor-review verdict tp`` does —
+        # a bare flag carries no bypass authority.
+        assert stamp_manual_override(finding)
         findings_in = tmp_path / "findings_in.json"
         findings_in.write_text(json.dumps([finding]))
 
@@ -267,10 +272,12 @@ class TestManualOverrideBypassesPreflight:
 
 class TestMixedBatch:
     def test_mixed_batch_telemetry(
-        self, agent, checklist, repo, tmp_path,
+        self, agent, checklist, repo, tmp_path, monkeypatch,
     ):
         """Three findings: fixture (skip), prod (run), fixture-with-
         override (run). Telemetry should reflect each path."""
+        from core.run.verdict_mac import stamp_manual_override
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
         findings = [
             _finding("tests/conftest.py", "setup_user", fid="F-FIX"),
             _finding("src/api.py", "save_upload", fid="F-PROD"),
@@ -279,6 +286,7 @@ class TestMixedBatch:
                 fid="F-OVERRIDE", manual_override=True,
             ),
         ]
+        assert stamp_manual_override(findings[2])
         findings_in = tmp_path / "findings_in.json"
         findings_in.write_text(json.dumps(findings))
 

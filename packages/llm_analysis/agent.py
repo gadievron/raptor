@@ -57,6 +57,7 @@ from core.llm.transcript import (
 from core.logging import get_logger
 from core.paths import confine, strip_file_uri
 from core.run.finding_status import read_verdict
+from core.run.verdict_mac import verified_manual_override
 from core.source import read_contained_text_capped, split_lines
 from core.source.windows import read_text_line_window_capped
 from core.progress import HackerProgress
@@ -3826,14 +3827,17 @@ class AutonomousSecurityAgentV2:
                 # annotation directly. Only the high-confidence
                 # ``true`` case skips; ``candidate`` (path matches
                 # but reachability uncertain) still runs the LLM
-                # so it can verify. ``manual_override`` operator
-                # flag bypasses pre-flight entirely.
+                # so it can verify. A VERIFIED ``manual_override``
+                # operator flag bypasses pre-flight entirely
+                # (core.run.verdict_mac — the finding dict is
+                # attacker bytes, so the flag alone carries no
+                # authority).
                 #
                 # See core/inventory/fixture_detection for the
                 # path + reachability gate logic; mirrors the
                 # /validate Stage D [D-1] integration.
                 fixture_skipped_this = False
-                if checklist and not finding.get("manual_override"):
+                if checklist and not verified_manual_override(finding):
                     try:
                         from core.inventory.fixture_detection import (
                             detect_fixture,
@@ -3875,9 +3879,11 @@ class AutonomousSecurityAgentV2:
                                     "entry point. See harness_evidence "
                                     "for the path-pattern match and "
                                     "reachability check that confirmed "
-                                    "this. To override, set "
-                                    "``manual_override: true`` on the "
-                                    "finding and re-run."
+                                    "this. To override, run "
+                                    "``raptor-review verdict <id> tp`` "
+                                    "(mints the verified "
+                                    "manual_override claim) and "
+                                    "re-run."
                                 ),
                                 "fixture_demotion": True,
                                 "harness_evidence": (
@@ -3929,7 +3935,8 @@ class AutonomousSecurityAgentV2:
                             repo_root=Path(self.repo_path),
                             allow_unreachable=getattr(
                                 self, "allow_unreachable", False),
-                            manual_override=finding.get("manual_override"),
+                            manual_override=verified_manual_override(
+                                finding),
                         )
                         if decision is not None:
                             verdict, reason = decision  # type: ignore[assignment]
@@ -3982,9 +3989,6 @@ class AutonomousSecurityAgentV2:
                 # the LLM call entirely.
                 sage_fp_skipped_this = False
                 try:
-                    from core.analysis.reach_chokepoint import (
-                        coerce_manual_override,
-                    )
                     from core.sage.hooks import (
                         compute_finding_source_hash,
                         recall_prior_finding_verdict,
@@ -3995,9 +3999,11 @@ class AutonomousSecurityAgentV2:
                     # Per-finding operator opt-out — the same
                     # manual_override the sibling chokepoints honour
                     # (reachability suppression); previously only the
-                    # run-wide env kill switch applied here.
-                    if coerce_manual_override(
-                            finding.get("manual_override")):
+                    # run-wide env kill switch applied here. VERIFIED
+                    # only: a prior FP verdict here is operator-tier
+                    # suppression, so the bypass needs the operator's
+                    # claim token (core.run.verdict_mac).
+                    if verified_manual_override(finding):
                         _rel = ""
                     if _rel and _fn and _rule and _line > 0:
                         _src_hash = compute_finding_source_hash(
@@ -4064,7 +4070,7 @@ class AutonomousSecurityAgentV2:
                 # no cached CPG exists — the server is only started
                 # lazily for the first finding that binds.
                 gd_skipped_this = False
-                if not finding.get("manual_override"):
+                if not verified_manual_override(finding):
                     try:
                         gd_evidence = self._guard_dominance_refute(finding)
                         if gd_evidence is not None:
@@ -4076,9 +4082,11 @@ class AutonomousSecurityAgentV2:
                                     + gd_evidence.get("reason", "")
                                     + " (CFG dominance via Joern — see "
                                     "guard_dominance for the dominator "
-                                    "sites). To override, set "
-                                    "``manual_override: true`` on the "
-                                    "finding and re-run."
+                                    "sites). To override, run "
+                                    "``raptor-review verdict <id> tp`` "
+                                    "(mints the verified "
+                                    "manual_override claim) and "
+                                    "re-run."
                                 ),
                                 "guard_dominance_refutation": True,
                                 "guard_dominance": gd_evidence,
@@ -4124,7 +4132,7 @@ class AutonomousSecurityAgentV2:
                 # as tool corroboration — evidence, never a verdict.
                 # Mirrors the guard-dominance (P23) consumption shape.
                 fo_skipped_this = False
-                if not finding.get("manual_override"):
+                if not verified_manual_override(finding):
                     try:
                         from core.orchestration.fail_open_channel import (
                             FAIL_OPEN_CHANNEL_CAP,
@@ -4148,9 +4156,10 @@ class AutonomousSecurityAgentV2:
                                     + fo_receipt.get("reason", "")
                                     + " (mechanical handler/site "
                                     "receipts — see fail_open). To "
-                                    "override, set ``manual_override:"
-                                    " true`` on the finding and "
-                                    "re-run."
+                                    "override, run ``raptor-review "
+                                    "verdict <id> tp`` (mints the "
+                                    "verified manual_override claim) "
+                                    "and re-run."
                                 ),
                                 "fail_open_refutation": True,
                                 "fail_open": fo_receipt,

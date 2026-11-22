@@ -1217,6 +1217,11 @@ class AutonomousCodeQLAnalyzer:
         # ``properties`` key) and --allow-unreachable are honored here
         # exactly as they are there; the previous inline
         # ``may_suppress`` copy silently ignored manual_override.
+        # VERIFIED only (core.run.verdict_mac): SARIF lives in the
+        # sandbox-writable run dir, so a bare flag is forgeable by
+        # the scanned target — without the verdict-CLI claim token it
+        # demotes to absent. The run-wide operator opt-out here is
+        # --allow-unreachable.
         suppress = False
         suppressed_func = ""
         if reachability_verdict:
@@ -1225,8 +1230,10 @@ class AutonomousCodeQLAnalyzer:
                 rel_path, func_name, line_start = loc
                 suppressed_func = func_name
                 from core.analysis.reach_chokepoint import check_suppress
+                from core.run.verdict_mac import verified_manual_override
                 # loc is non-None only when the inventory is a dict
                 # (see _locate_finding_function).
+                _props = sarif_result.get("properties")
                 suppress = check_suppress(
                     checklist=self._reachability_inventory,
                     file_path=rel_path,
@@ -1235,9 +1242,9 @@ class AutonomousCodeQLAnalyzer:
                     repo_root=repo_path,
                     allow_unreachable=self._allow_unreachable,
                     manual_override=(
-                        sarif_result.get("manual_override")
-                        or (sarif_result.get("properties") or {}).get(
-                            "manual_override")
+                        verified_manual_override(sarif_result)
+                        or verified_manual_override(
+                            _props if isinstance(_props, dict) else {})
                     ),
                 ) is not None
         if suppress:

@@ -4,6 +4,13 @@ manual_override edits on run-dir findings artifacts."""
 import json
 from pathlib import Path
 
+import pytest
+
+from core.run.verdict_mac import (
+    TOKEN_KEY,
+    stamp_manual_override,
+    verify_manual_override,
+)
 from core.run.verdicts import (
     finding_coords,
     finding_rule_id,
@@ -11,6 +18,13 @@ from core.run.verdicts import (
     resolve_finding,
     set_manual_override,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_key(tmp_path, monkeypatch):
+    # set_manual_override mints verdict-MAC claim tokens — never
+    # against the developer's real key store.
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
 
 
 def _write_findings(run_dir: Path, findings, rel="findings.json",
@@ -165,14 +179,43 @@ class TestSetManualOverride:
         assert "manual_override_reason" not in rec
 
     def test_idempotent_set_rewrites_nothing(self, tmp_path):
-        path = _write_findings(tmp_path, [
-            _finding("f-1", manual_override=True,
-                     manual_override_reason="r"),
-        ])
+        stamped = _finding("f-1", manual_override=True,
+                           manual_override_reason="r")
+        stamp_manual_override(stamped)
+        path = _write_findings(tmp_path, [stamped])
         before = path.stat().st_mtime_ns
         matches, _ = resolve_finding([tmp_path], "f-1")
         assert set_manual_override(matches, True, "r") == ([], [])
         assert path.stat().st_mtime_ns == before
+
+    def test_set_stamps_verifiable_claim_token(self, tmp_path):
+        path = _write_findings(tmp_path, [_finding("f-1")])
+        matches, _ = resolve_finding([tmp_path], "f-1")
+        set_manual_override(matches, True, "operator says real")
+        (rec,) = json.loads(path.read_text(encoding="utf-8"))
+        assert verify_manual_override(rec)
+
+    def test_clear_removes_claim_token(self, tmp_path):
+        stamped = _finding("f-1", manual_override=True,
+                           manual_override_reason="r")
+        stamp_manual_override(stamped)
+        path = _write_findings(tmp_path, [stamped])
+        matches, _ = resolve_finding([tmp_path], "f-1")
+        set_manual_override(matches, False)
+        (rec,) = json.loads(path.read_text(encoding="utf-8"))
+        assert TOKEN_KEY not in rec
+
+    def test_reason_change_restamps(self, tmp_path):
+        stamped = _finding("f-1", manual_override=True,
+                           manual_override_reason="old")
+        stamp_manual_override(stamped)
+        path = _write_findings(tmp_path, [stamped])
+        matches, _ = resolve_finding([tmp_path], "f-1")
+        changed, _failed = set_manual_override(matches, True, "new")
+        assert changed == [path]
+        (rec,) = json.loads(path.read_text(encoding="utf-8"))
+        assert rec["manual_override_reason"] == "new"
+        assert verify_manual_override(rec)
 
     def test_container_shape_preserved(self, tmp_path):
         path = _write_findings(tmp_path, [_finding("f-1")], wrapped=True)

@@ -14,6 +14,8 @@ Usage::
 
     from core.analysis.reach_chokepoint import check_suppress
 
+    from core.run.verdict_mac import verified_manual_override
+
     decision = check_suppress(
         checklist=checklist_inventory,
         file_path=finding_file,
@@ -21,7 +23,7 @@ Usage::
         line=finding_line,
         repo_root=repo_path,
         allow_unreachable=cli_allow_unreachable,
-        manual_override=finding.get("manual_override"),
+        manual_override=verified_manual_override(finding),
     )
     if decision is not None:
         verdict, reason = decision
@@ -95,7 +97,10 @@ def check_suppress(
     is unreachable via a SOUND, corpus-earned witness that licenses
     suppression. Returns ``None`` when:
 
-      * ``manual_override`` is truthy (operator opted out explicitly),
+      * ``manual_override`` is truthy — callers pass the VERIFIED
+        claim (``core.run.verdict_mac.verified_manual_override``),
+        never the raw finding field: findings files are attacker
+        bytes and a bare flag carries no bypass authority,
       * ``allow_unreachable`` is True (CLI opted out globally),
       * the checklist is missing or empty,
       * path or module derivation fails,
@@ -148,9 +153,10 @@ def check_suppress(
         f"Reachability chokepoint: the finding's enclosing function "
         f"({rel}:{function_name}) is unreachable via a SOUND, corpus-"
         f"earned witness ({verdict}). No exploit is reachable in this "
-        f"build / deployment surface. To override, set "
-        f"``manual_override: true`` on the finding and re-run, or "
-        f"pass ``--allow-unreachable`` to evaluate the function's "
+        f"build / deployment surface. To override, run "
+        f"``raptor-review verdict <id> tp`` (mints the verified "
+        f"manual_override claim) and re-run, or pass "
+        f"``--allow-unreachable`` to evaluate the function's "
         f"inherent vulnerability shape regardless of deployment "
         f"reachability."
     )
