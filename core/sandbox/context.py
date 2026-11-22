@@ -3433,8 +3433,19 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         if exclude_tmp_baseline:
             writable_paths = []
         elif _use_private_scratch:
+            # Minted at the DE-BRANDED temp base, not gettempdir():
+            # the child reads this exact path from TMPDIR (see the env
+            # steering in run()), and under the launcher gettempdir()
+            # is <base>/raptor-<euid>/session-<pid>-<rand>/tmp — one
+            # getenv would hand hostile code the framework name, the
+            # euid and the session pid. No fallback on failure: silently
+            # re-branding the path would defeat the point, and the base
+            # is a parent of a dir that just resolved.
+            from core.run.tmp_reaper import strip_branded_family
             _private_scratch_dir = _tempfile.mkdtemp(
-                prefix=".scr-")
+                prefix=".scr-",
+                dir=str(strip_branded_family(
+                    Path(_tempfile.gettempdir()).resolve())))
             # The reaper lists this prefix; a sandboxed campaign
             # (uncapped fuzz durations) legitimately holds the dir
             # mtime-quiet past the age floor while its TMPDIR still
@@ -3993,7 +4004,18 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         else:
             import shutil as _shutil
             import tempfile as _tf
-            _persona_tmpdir = _tf.mkdtemp(prefix=".fp-")
+            from core.run.tmp_reaper import strip_branded_family
+            # Minted at the DE-BRANDED temp base: apply_overlay
+            # bind-mounts these files over /proc/cpuinfo and friends in
+            # the mount-ns child, and the mountinfo root field of each
+            # bind shows the full SOURCE path — a persona home under the
+            # launcher's raptor-<euid>/session-… family would therefore
+            # disclose the framework name, the euid and the session pid
+            # to the very process the persona is hiding them from.
+            _persona_tmpdir = _tf.mkdtemp(
+                prefix=".fp-",
+                dir=str(strip_branded_family(
+                    Path(_tf.gettempdir()).resolve())))
             _effective_cpu_count = cpu_count if cpu_count is not None else 4
             try:
                 # strict rides ON the persona: apply_overlay (in the
@@ -5312,7 +5334,13 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                 return list(writable_paths or []), _env_for_target
 
             import tempfile as _tempfile_mountless
-            scratch = _tempfile_mountless.mkdtemp(prefix=".scr-")
+            from core.run.tmp_reaper import strip_branded_family
+            # De-branded base for the same reason as the legacy demotion
+            # path's scratch: this path is the child's TMPDIR.
+            scratch = _tempfile_mountless.mkdtemp(
+                prefix=".scr-",
+                dir=str(strip_branded_family(
+                    Path(_tempfile_mountless.gettempdir()).resolve())))
             _demoted_scratch_dirs.append(scratch)
             from core.run.scratch import keepalive_register
             keepalive_register(scratch)

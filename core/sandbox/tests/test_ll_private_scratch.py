@@ -20,6 +20,7 @@ import os
 import sys
 import tempfile
 import unittest
+from pathlib import PurePath
 from unittest.mock import patch
 
 import pytest
@@ -104,6 +105,16 @@ class TestRestrictedLandlockOnlyScratch(unittest.TestCase):
                          f"output dir must stay writable: {res}")
         self.assertIn(".scr-", res["tmpdir"] or "",
                       "TMPDIR must steer tools to the private scratch")
+        # The child reads this exact path back with one getenv — under
+        # the launcher it must not carry the branded raptor-<euid>
+        # family or the session-<pid> component (de-branded mint; a
+        # bare-pytest run's unbranded base passes trivially).
+        scratch_parts = PurePath(res["tmpdir"] or "").parts
+        self.assertFalse(
+            any(p == f"raptor-{os.geteuid()}" or p.startswith("session-")
+                for p in scratch_parts),
+            f"branded component visible in the child's TMPDIR: "
+            f"{res['tmpdir']}")
         self.assertTrue(r.sandbox_info.get("private_scratch"),
                         "sandbox_info must stamp the private-scratch posture")
 

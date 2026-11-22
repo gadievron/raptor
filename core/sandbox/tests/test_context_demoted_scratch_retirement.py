@@ -2,6 +2,7 @@
 
 import builtins
 from contextlib import contextmanager
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -45,8 +46,22 @@ def _exercise_directory_cleanup(tmp_path, body_failure, stage, route):
     def forbidden(*args, **kwargs):
         pytest.fail('unexpected native dispatch or probe')
 
+    # The context's tempfile view reports a branded launcher-session
+    # temp dir; every child-visible mint must land at the DE-BRANDED
+    # base (the family component stripped), never inside the session
+    # path the child could read back from TMPDIR or mountinfo. A
+    # test-owned family keeps this hermetic under a launcher-nested
+    # run, where tmp_path itself lies inside the REAL raptor-<euid>
+    # family and stripping it would cut above tmp_path; the helper's
+    # euid-default wiring is pinned by test_debranded_child_scratch.py.
+    from core.run.tmp_reaper import strip_branded_family
+    family = f'raptor-{os.geteuid()}-retire'
+    branded_tmp = tmp_path / family / 'session-1-2' / 'tmp'
+    branded_tmp.mkdir(parents=True)
+
     def allocate(**kwargs):
         assert kwargs['prefix'] == ('.fp-' if route == 'persona' else '.scr-')
+        assert kwargs.pop('dir') == str(tmp_path)
         path = tempfile.mkdtemp(dir=tmp_path, **kwargs)
         owned.append(path)
         info = Path(path).stat()
@@ -133,10 +148,16 @@ def _exercise_directory_cleanup(tmp_path, body_failure, stage, route):
         ),
     }
     absolute = {
-        'tempfile': module_function_view(tempfile, bindings={'mkdtemp': allocate}),
+        'tempfile': module_function_view(tempfile, bindings={
+            'mkdtemp': allocate, 'gettempdir': lambda: str(branded_tmp),
+        }),
         'shutil': module_function_view(shutil, bindings={'rmtree': remove}),
         'core.run.scratch': SimpleNamespace(
             keepalive_register=register, keepalive_unregister=unregister,
+        ),
+        'core.run.tmp_reaper': SimpleNamespace(
+            strip_branded_family=lambda base: strip_branded_family(
+                base, family),
         ),
     }
 
