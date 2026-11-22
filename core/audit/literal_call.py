@@ -117,6 +117,11 @@ def check_literal_calls(source, function_name, verb, hypothesis, integer_abi, si
     if verb == "check-array-bounds" and not has_array_read_goal(hypothesis):
         result["reason"] = "closed positive array read goal required"
         return result
+    if verb == "check-array-bounds" and parse_array_access_claim(hypothesis) is None:
+        # Pointer-dereference claims bind in the function-scoped oracle only;
+        # this caller frame replays promoted subscript arithmetic.
+        result["reason"] = "a subscript access claim is required"
+        return result
     result["binding"] = literal_call_binding(source, function_name, verb, hypothesis, abi, site_lines, language)
     parser = _get_parser(language)
     if parser is None:
@@ -244,6 +249,8 @@ def literal_call_witness_valid(reply, call, verb, hypothesis, integer_abi):
         obligation = ArrayAccess(**raw) if verb == "check-array-bounds" else ArithmeticOperation(**raw)
         if obligation.status != "bound":
             return False
+        if verb == "check-array-bounds" and obligation.index_semantics != "promoted":
+            return False  # pointer displacements have no caller-tuple replay here
         values = validate_integer_witness(arguments, parameters, obligation.premises, integer_abi)
         if values is None:
             return False

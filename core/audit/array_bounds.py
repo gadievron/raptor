@@ -17,7 +17,8 @@ from core.smt_solver.path_feasibility import PathCondition, check_path_feasibili
 from core.smt_solver.sizeof_model import builtin_integer_sizeof
 
 from .arithmetic_operation import _INTEGER_LITERAL_RE, _unwrap
-from .array_index import affine_access_claim, evaluate_array_index, index_expression, source_index
+from .array_index import (affine_access_claim, evaluate_array_index, evaluate_pointer_index,
+                          index_expression, pointer_access_claim, pointer_dereference_shape, source_index)
 from .arithmetic_guards import guards_for_operation
 from .arithmetic_types import common_integer_type, has_builtin_integer_type, integer_type, model_for_integer_terms
 from .condition_extraction import _get_parser
@@ -61,6 +62,11 @@ class ArrayAccess:
     parameters: tuple[tuple[str, str], ...] = ()
     index_operator: str = ""
     index_offset: int = 0
+    # "promoted": the index expression computes in its promoted integer type
+    # (subscripts and whole-addend dereferences). "pointer": a trailing
+    # literal displacement applies as mathematical pointer arithmetic after
+    # the index joins the pointer, so it never wraps in the index's type.
+    index_semantics: str = "promoted"
 
 
 def parse_array_access_claim(hypothesis, *, access_kind="read"):
@@ -91,6 +97,13 @@ def parse_array_access_claim(hypothesis, *, access_kind="read"):
             return None
         selected = pair
     return selected
+
+
+def pointer_read_claim(hypothesis):
+    """One quoted dereference read claim; write wording never binds a read."""
+    if not isinstance(hypothesis, str) or _WRITE_CLAIM.search(hypothesis):
+        return None
+    return pointer_access_claim(hypothesis)
 
 
 def _nodes(root):
@@ -125,6 +138,12 @@ def _bind_array_access(source, hypothesis, *, language, integer_abi, candidate_o
     claim = parse_array_access_claim(hypothesis, access_kind=access_kind)
     affine = affine_access_claim(hypothesis)
     index_operator, index_offset = affine[2:] if affine is not None else ("", 0)
+    index_semantics, dereference = "promoted", None
+    if claim is None and access_kind == "read":
+        dereference = pointer_read_claim(hypothesis)
+        if dereference is not None:
+            claim = dereference[0], dereference[1]
+            index_operator, index_offset, index_semantics = dereference[2:]
     if abi is None or claim is None or language not in {"c", "cpp"} or len(source) > _MAX_SOURCE_CHARS:
         return ArrayAccess("unavailable", "target ABI, atomic access claim, or supported source unavailable")
     try:
@@ -158,6 +177,8 @@ def _bind_array_access(source, hypothesis, *, language, integer_abi, candidate_o
     if body_nodes is None:
         return ArrayAccess("unavailable", "function body unavailable")
     frame_nodes = _FRAME_NODES | {"assignment_expression", "expression_statement"} if access_kind == "write" else _FRAME_NODES
+    if dereference is not None:
+        frame_nodes = _FRAME_NODES | {"pointer_expression"}
     if any(node.type not in frame_nodes for node in body_nodes):
         return ArrayAccess("unavailable", "frame syntax or effects are unsupported")
     parameters = function_declarator.child_by_field_name("parameters")
@@ -178,19 +199,40 @@ def _bind_array_access(source, hypothesis, *, language, integer_abi, candidate_o
         parameter_types.append((text(name), text(type_node)))
     if len(set(parameter_names)) != len(parameter_names) or claim[0] in parameter_names:
         return ArrayAccess("unavailable", "parameter binding is ambiguous")
-    accesses = [node for node in body_nodes if node.type == "subscript_expression"]
-    if len(accesses) != 1:
-        return ArrayAccess("unavailable", "one actual array access required")
-    target = accesses[0]
-    array = _unwrap(target.child_by_field_name("argument"))
-    index = _unwrap(target.child_by_field_name("index"))
-    if language == "cpp":
-        indices = target.child_by_field_name("indices")
-        index = _unwrap(indices.named_children[0]) if indices is not None and len(indices.named_children) == 1 else None
-    index_shape = source_index(index, data)
-    if (array is None or array.type != "identifier" or index_shape is None
-            or (text(array), index_shape[0]) != claim or index_shape[1:] != (index_operator, index_offset)):
-        return ArrayAccess("unavailable", "claim does not bind one atomic source access")
+    if dereference is not None:
+        shapes = [(node, pointer_dereference_shape(node, data)) for node in body_nodes
+                  if node.type == "pointer_expression"]
+        accesses = [(node, shape) for node, shape in shapes if shape is not None]
+        if len(accesses) != 1:
+            return ArrayAccess("unavailable", "one actual array access required")
+        target, shape = accesses[0]
+        # Any pointer or subscript expression outside the one admitted
+        # dereference could alias or move the object; decline it all.
+        if any(node.type in {"pointer_expression", "subscript_expression"}
+               and not (target.start_byte <= node.start_byte and node.end_byte <= target.end_byte)
+               for node in body_nodes):
+            return ArrayAccess("unavailable", "another pointer or subscript use requires value-flow modeling")
+        array, index = shape[0], shape[5]
+        # The source spelling must carry the exact claimed arithmetic kind:
+        # `*(Data + Index + 1)` (pointer displacement) never binds a claim
+        # written `*(Data + (Index + 1))` (promoted addend), or vice versa.
+        if (text(array), shape[1], shape[2], shape[3], shape[4]) != (
+                claim[0], claim[1], index_operator, index_offset, index_semantics):
+            return ArrayAccess("unavailable", "claim does not bind one atomic source access")
+    else:
+        accesses = [node for node in body_nodes if node.type == "subscript_expression"]
+        if len(accesses) != 1:
+            return ArrayAccess("unavailable", "one actual array access required")
+        target = accesses[0]
+        array = _unwrap(target.child_by_field_name("argument"))
+        index = _unwrap(target.child_by_field_name("index"))
+        if language == "cpp":
+            indices = target.child_by_field_name("indices")
+            index = _unwrap(indices.named_children[0]) if indices is not None and len(indices.named_children) == 1 else None
+        index_shape = source_index(index, data)
+        if (array is None or array.type != "identifier" or index_shape is None
+                or (text(array), index_shape[0]) != claim or index_shape[1:] != (index_operator, index_offset)):
+            return ArrayAccess("unavailable", "claim does not bind one atomic source access")
     statement = target.parent
     while statement is not None and statement.type == "parenthesized_expression":
         statement = statement.parent
@@ -281,7 +323,11 @@ def _bind_array_access(source, hypothesis, *, language, integer_abi, candidate_o
                 return ArrayAccess("unavailable", "other return effects are unsupported")
     premises = ()
     if not candidate_only:
-        extra = {'selected_value': index} if index_operator else {}
+        # A promoted compound index must establish its own definedness. A
+        # pointer displacement evaluates only the bare index identifier;
+        # its literal adjustment is pointer arithmetic whose sole hazard is
+        # the bounds condition this obligation already checks.
+        extra = {'selected_value': index} if index_operator and index_semantics == "promoted" else {}
         guards = guards_for_operation(body, guard_target, data, [claim[1]],
                                       language=language, integer_abi=abi, **extra)
         if guards.status == "unavailable":
@@ -304,10 +350,27 @@ def _bind_array_access(source, hypothesis, *, language, integer_abi, candidate_o
                        line=target.start_point[0] + 1, column=target.start_point[1] + 1,
                        profile=model.profile, width=kind.promoted_width, signed=kind.promoted_signed,
                        premises=premises, domains=model.domains, types=model.types,
-                       parameters=tuple(parameter_types), index_operator=index_operator, index_offset=index_offset)
+                       parameters=tuple(parameter_types), index_operator=index_operator,
+                       index_offset=index_offset, index_semantics=index_semantics)
+
+
+def _obligation(access):
+    expression = index_expression(access)
+    outside = f"{expression} < 0 OR {expression} >= {access.extent}"
+    if access.index_semantics == "pointer":
+        # Forming `Array + Index` already requires 0 <= Index <= extent
+        # (one past the end at most) before the displacement applies.
+        return f"{access.index} < 0 OR {access.index} > {access.extent} OR {outside}"
+    return outside
 
 
 def _solve_access(access):
+    if access.index_semantics not in {"promoted", "pointer"}:
+        return None, None
+    if access.index_semantics == "pointer" and (
+            access.index_operator not in {"+", "-"}
+            or not 0 <= access.index_offset <= (1 << (access.width - 1)) - 1):
+        return None, None
     profile = BVProfile(access.width, access.signed)
     guards = [PathCondition(text, index) for index, text in enumerate(access.premises + access.domains)]
     if guards:
@@ -316,26 +379,57 @@ def _solve_access(access):
             return entry, None
     variables = {}
     index = make_var(access.index, variables, profile=profile)
-    if access.index_operator:
-        offset = z3.BitVecVal(access.index_offset, access.width)
-        if access.index_operator == '%':
-            index = z3.SRem(index, offset) if access.signed else z3.URem(index, offset)
-        elif access.index_operator == '&':
-            index = index & offset
-        else:
-            index = index + offset if access.index_operator == '+' else index - offset
-    outside = z3.Or(lt(index, z3.BitVecVal(0, access.width), access.signed),
-                    ge(index, z3.BitVecVal(access.extent, access.width), access.signed))
-    result = check_verb_feasibility([(f"{index_expression(access)} < 0 OR {index_expression(access)} >= {access.extent}", outside)],
+    if access.index_semantics == "pointer":
+        # The displacement is mathematical: widen so Index ± offset cannot
+        # wrap (|value| < 2**width, offset < 2**(width-1)), then compare
+        # signed. Both the formed pointer and the dereference must stay in
+        # the object, so the undisplaced index is constrained as well.
+        wide = access.width + 2
+        base = z3.SignExt(2, index) if access.signed else z3.ZeroExt(2, index)
+        offset = z3.BitVecVal(access.index_offset, wide)
+        adjusted = base + offset if access.index_operator == '+' else base - offset
+        outside = z3.Or(lt(base, z3.BitVecVal(0, wide), True),
+                        ge(base, z3.BitVecVal(access.extent + 1, wide), True),
+                        lt(adjusted, z3.BitVecVal(0, wide), True),
+                        ge(adjusted, z3.BitVecVal(access.extent, wide), True))
+    else:
+        if access.index_operator:
+            offset = z3.BitVecVal(access.index_offset, access.width)
+            if access.index_operator == '%':
+                index = z3.SRem(index, offset) if access.signed else z3.URem(index, offset)
+            elif access.index_operator == '&':
+                index = index & offset
+            else:
+                index = index + offset if access.index_operator == '+' else index - offset
+        outside = z3.Or(lt(index, z3.BitVecVal(0, access.width), access.signed),
+                        ge(index, z3.BitVecVal(access.extent, access.width), access.signed))
+    result = check_verb_feasibility([(_obligation(access), outside)],
                                     guards, variables, profile=profile, reduce_constraints=False)
     return None, result
+
+
+def _witness_violation(access, model, abi):
+    """Independently replay the access; (index, violation) or (None, None)."""
+    if access.index_semantics == "pointer":
+        replay = evaluate_pointer_index(access, model, abi)
+        if replay is None:
+            return None, None
+        intermediate, final = replay
+        return final, (intermediate < 0 or intermediate > access.extent
+                       or final < 0 or final >= access.extent)
+    if access.index_semantics != "promoted":
+        return None, None
+    index = evaluate_array_index(access, model, abi)
+    if index is None:
+        return None, None
+    return index, index < 0 or index >= access.extent
 
 
 def _valid_witness(access, model, abi):
     if validate_integer_witness(model, access.parameters, access.premises, abi) is None:
         return False
-    index = evaluate_array_index(access, model, abi)
-    return index is not None and (index < 0 or index >= access.extent)
+    index, violation = _witness_violation(access, model, abi)
+    return index is not None and violation is True
 
 
 def has_array_read_goal(hypothesis):
@@ -387,6 +481,6 @@ def check_array_bounds(source, hypothesis, *, language, integer_abi=None):
         if not _valid_witness(access, model, integer_abi):
             details.update(violation=None, reason="witness does not satisfy the source obligation")
             return details
-        details.update(model=model, witness_index=evaluate_array_index(access, model, integer_abi),
-                       obligation=f"{index_expression(access)} < 0 OR {index_expression(access)} >= {access.extent}")
+        details.update(model=model, witness_index=_witness_violation(access, model, integer_abi)[0],
+                       obligation=_obligation(access))
     return details

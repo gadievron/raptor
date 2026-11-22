@@ -2768,10 +2768,12 @@ def run_smt_verb_direct(
     # Prefer a source safety obligation over a guessed numeric bounds model
     # when the claim names an access and the target integer layout is known.
     if verb == "check-oob":
-        from .array_bounds import has_array_write_goal, parse_array_access_claim
+        from .array_bounds import has_array_write_goal, parse_array_access_claim, pointer_read_claim
         from .integer_abi import resolve_integer_abi
         access_kind = "write" if has_array_write_goal(hypothesis) else "read"
-        if resolve_integer_abi(integer_abi) is not None and parse_array_access_claim(hypothesis, access_kind=access_kind) is not None:
+        named_access = parse_array_access_claim(hypothesis, access_kind=access_kind) is not None or (
+            access_kind == "read" and pointer_read_claim(hypothesis) is not None)
+        if resolve_integer_abi(integer_abi) is not None and named_access:
             bound = _smt_verb_in_subprocess(
                 file_path=file_path, function_name=function_name, verb="check-array-bounds",
                 source=source, hypothesis=hypothesis, target_path=target_path, integer_abi=integer_abi,

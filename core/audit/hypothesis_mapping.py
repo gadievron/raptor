@@ -366,9 +366,10 @@ def hypothesis_to_smt_verb(hypothesis: str) -> str | None:
     for keyword, verb in _SMT_HYPOTHESIS_VERBS:
         if keyword in hyp_lower:
             if verb == "check-oob":
-                from .array_bounds import has_array_write_goal, parse_array_access_claim
+                from .array_bounds import has_array_write_goal, parse_array_access_claim, pointer_read_claim
                 kind = "write" if has_array_write_goal(hypothesis) else "read"
-                if parse_array_access_claim(hypothesis, access_kind=kind) is not None:
+                if parse_array_access_claim(hypothesis, access_kind=kind) is not None or (
+                        kind == "read" and pointer_read_claim(hypothesis) is not None):
                     return "check-array-bounds"
             return verb
     # Keyword-pair gaps here (and in the cocci mapping below) are
