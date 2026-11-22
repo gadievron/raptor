@@ -215,7 +215,11 @@ def set_manual_override(
     refs (analysis reports) are skipped — a verdict edit never
     rewrites a report.
     """
-    from core.run.verdict_mac import TOKEN_KEY, mint_override_token
+    from core.run.verdict_mac import (
+        TOKEN_KEY,
+        mint_override_token,
+        verify_manual_override,
+    )
 
     by_artifact: dict[Path, list[FindingRef]] = {}
     for ref in refs:
@@ -242,6 +246,7 @@ def set_manual_override(
         wanted_ids = {r.finding_id for r in artifact_refs}
         found_ids: set[str] = set()
         mutated = False
+        unstamped = 0
         for f in findings_list:
             if not isinstance(f, dict):
                 continue
@@ -253,21 +258,30 @@ def set_manual_override(
                 if f.get("manual_override") is not True:
                     f["manual_override"] = True
                     mutated = True
-                if reason and f.get("manual_override_reason") != reason:
-                    f["manual_override_reason"] = reason
+                if reason:
+                    if f.get("manual_override_reason") != reason:
+                        f["manual_override_reason"] = reason
+                        mutated = True
+                elif (
+                    f.get("manual_override_reason")
+                    and not verify_manual_override(f)
+                ):
+                    # The operator gave no rationale this edit and
+                    # nothing vouches for the one already in the
+                    # record (findings files are attacker bytes):
+                    # minting now would launder the planted text
+                    # under this operator's fresh stamp — an
+                    # "operator rationale" the operator never wrote.
+                    # A VERIFIED existing reason is genuine prior
+                    # operator history and is kept.
+                    del f["manual_override_reason"]
                     mutated = True
                 # Stamp AFTER the fields land — the claim token binds
                 # the record's current reason. No usable key: persist
                 # unstamped (visible but authority-less) and warn.
                 token = mint_override_token(f)
                 if token is None:
-                    logger.warning(
-                        "verdicts: no usable verdict-MAC key — "
-                        "manual_override on %s persisted UNSTAMPED: "
-                        "the suppression chokepoints will ignore it "
-                        "until it is re-applied under a working key",
-                        artifact,
-                    )
+                    unstamped += 1
                 elif f.get(TOKEN_KEY) != token:
                     f[TOKEN_KEY] = token
                     mutated = True
@@ -277,6 +291,16 @@ def set_manual_override(
                     if key in f:
                         del f[key]
                         mutated = True
+        if unstamped:
+            # Once per artifact, not per record — the key is the same
+            # for every mint, so one line carries the whole story.
+            logger.warning(
+                "verdicts: no usable verdict-MAC key — "
+                "manual_override on %d record(s) in %s persisted "
+                "UNSTAMPED: the suppression chokepoints will ignore "
+                "them until re-applied under a working key",
+                unstamped, artifact,
+            )
         missing = wanted_ids - found_ids
         if missing:
             # The record vanished between resolution and rewrite (the

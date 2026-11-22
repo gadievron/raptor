@@ -64,8 +64,9 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from core.json.utils import dumps_canonical
 from core.logging import get_logger
@@ -237,9 +238,16 @@ def verified_manual_override(finding: Mapping[str, Any]) -> bool:
     if verify_manual_override(finding):
         return True
     from core.project.findings_utils import get_finding_id
+    from core.run.verdicts import finding_coords
 
-    fid = sanitise_for_terminal(
-        str(get_finding_id(dict(finding)) or "?"), max_len=120)
+    fid = str(get_finding_id(dict(finding)) or "")
+    if not fid:
+        # Keying the warn-once on a literal "?" would collapse every
+        # id-less finding into one warning; fall back to the file /
+        # function coordinates a verdict edit resolves on.
+        rel, fn, _line = finding_coords(dict(finding))
+        fid = f"{rel or '?'}:{fn or '?'}"
+    fid = sanitise_for_terminal(fid, max_len=120)
     if fid not in _warned_findings:
         _warned_findings.add(fid)
         logger.warning(

@@ -131,3 +131,17 @@ class TestVerifiedManualOverride:
         text = caplog.text
         assert "FIND-WARN-01" in text
         assert "raptor-review verdict" in text
+
+    def test_idless_findings_warn_per_coordinates(self, caplog):
+        # Keying the warn-once on a literal "?" collapsed every
+        # id-less finding into one warning — the second planted flag
+        # demoted silently. Fall back to file:function coordinates.
+        import logging
+        a = _finding(file="src/warn-a.c", function="alpha")
+        b = _finding(file="src/warn-b.c", function="beta")
+        del a["id"], b["id"]
+        with caplog.at_level(logging.WARNING):
+            assert not vm.verified_manual_override(a)
+            assert not vm.verified_manual_override(b)
+        assert "src/warn-a.c:alpha" in caplog.text
+        assert "src/warn-b.c:beta" in caplog.text

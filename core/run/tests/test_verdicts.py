@@ -217,6 +217,38 @@ class TestSetManualOverride:
         assert rec["manual_override_reason"] == "new"
         assert verify_manual_override(rec)
 
+    def test_reasonless_set_drops_unverified_planted_reason(self, tmp_path):
+        # tp without a rationale must not launder a pre-planted
+        # manual_override_reason (findings files are attacker bytes)
+        # under the operator's fresh claim stamp — that would mint an
+        # "operator rationale" the operator never wrote.
+        path = _write_findings(tmp_path, [
+            _finding("f-1",
+                     manual_override_reason="planted: verified safe"),
+        ])
+        matches, _ = resolve_finding([tmp_path], "f-1")
+        changed, failed = set_manual_override(matches, True)
+        assert changed == [path]
+        assert failed == []
+        (rec,) = json.loads(path.read_text(encoding="utf-8"))
+        assert rec["manual_override"] is True
+        assert "manual_override_reason" not in rec
+        assert verify_manual_override(rec)
+
+    def test_reasonless_set_keeps_verified_prior_reason(self, tmp_path):
+        # A reason already covered by a verified claim token is
+        # genuine operator history; a later reasonless re-apply
+        # keeps it.
+        stamped = _finding("f-1", manual_override=True,
+                           manual_override_reason="earlier operator note")
+        stamp_manual_override(stamped)
+        path = _write_findings(tmp_path, [stamped])
+        matches, _ = resolve_finding([tmp_path], "f-1")
+        set_manual_override(matches, True)
+        (rec,) = json.loads(path.read_text(encoding="utf-8"))
+        assert rec["manual_override_reason"] == "earlier operator note"
+        assert verify_manual_override(rec)
+
     def test_container_shape_preserved(self, tmp_path):
         path = _write_findings(tmp_path, [_finding("f-1")], wrapped=True)
         matches, _ = resolve_finding([tmp_path], "f-1")
