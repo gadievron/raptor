@@ -149,6 +149,20 @@ class TestDigestSubset:
         os.mkfifo(db / "db-python" / "default" / "pipe")
         assert database_content_digest(db) is None
 
+    def test_hardlinked_file_refuses(self, manager, tmp_path):
+        # A hard link is a second dirent to the same inode: the bytes
+        # can be rewritten from OUTSIDE the tree after the verdict,
+        # and analyze's writable bind writes the shared inode wherever
+        # else it is linked — hostile shape in any region.
+        outside = tmp_path / "outside.bin"
+        outside.write_bytes(b"\x06" * 32)
+        for rel in ("db-python/default/linked.rel", "results/linked"):
+            db = _plant_db(manager)
+            os.link(outside, db / rel)
+            assert database_content_digest(db) is None, rel
+            import shutil
+            shutil.rmtree(db.parent)
+
     @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores modes")
     def test_unreadable_subset_file_refuses(self, manager):
         db = _plant_db(manager)
@@ -203,6 +217,13 @@ class TestServeComparesDigest:
     def test_internal_symlink_reads_as_miss(self, manager, tmp_path):
         repo, db = _served_entry(manager, tmp_path)
         (db / "results" / "link").symlink_to(tmp_path / "anywhere")
+        assert _serve(manager, repo) is None
+
+    def test_hardlinked_file_reads_as_miss(self, manager, tmp_path):
+        repo, db = _served_entry(manager, tmp_path)
+        outside = tmp_path / "outside.bin"
+        outside.write_bytes(b"\x06" * 32)
+        os.link(outside, db / "results" / "linked")
         assert _serve(manager, repo) is None
 
     def test_legacy_entry_without_digest_reads_as_miss(

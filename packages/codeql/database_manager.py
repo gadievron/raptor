@@ -453,6 +453,25 @@ def database_content_digest(db_path: Path) -> str | None:
                         (root_path / name).relative_to(db_path).as_posix(),
                     )
                     return None
+                if stat.S_ISREG(info.st_mode) and info.st_nlink > 1:
+                    # A hard link is the symlink's quieter sibling: a
+                    # second directory entry to the same inode lets
+                    # the bytes be rewritten from OUTSIDE the tree
+                    # after this verdict, unbinding the digest from
+                    # what analyze will actually read — and analyze's
+                    # writable bind on the tree writes the shared
+                    # inode wherever else it is linked. ``codeql
+                    # database create`` never hard-links inside its
+                    # output, so any multiply-linked file is hostile
+                    # shape, digest subset or not.
+                    logger.warning(
+                        "CodeQL database %s contains a multiply-linked "
+                        "file (%s, nlink=%d) — refusing the tree",
+                        db_path,
+                        (root_path / name).relative_to(db_path).as_posix(),
+                        info.st_nlink,
+                    )
+                    return None
             for name in files:
                 rel = (root_path / name).relative_to(db_path)
                 if _digest_included(rel.parts):
@@ -1347,8 +1366,17 @@ class DatabaseManager:
         if tail_bytes <= 0:
             return ""
         try:
+            log_dir = staging_path / "log"
+            if log_dir.is_symlink():
+                # The staging tree is build output — the untrusted
+                # build can plant log/ as a symlink, re-rooting the
+                # glob into a directory it chooses. The matched file
+                # itself is fd-gated below (O_NOFOLLOW + regularity),
+                # but the directory hop is not; a linked log dir is
+                # never legitimate ``codeql database create`` output.
+                return ""
             newest = max(
-                (staging_path / "log").glob("database-create-*.log"),
+                log_dir.glob("database-create-*.log"),
                 default=None,
             )
             if newest is None:

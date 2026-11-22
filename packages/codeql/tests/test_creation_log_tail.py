@@ -71,6 +71,19 @@ def test_unavailable_or_nonregular_log_is_empty(tmp_path, monkeypatch, kind):
     assert DatabaseManager._salvage_creation_log(tmp_path) == ""
 
 
+def test_symlinked_log_dir_is_not_traversed(tmp_path):
+    # The staging tree is build output: a planted log/ symlink would
+    # re-root the glob into an attacker-chosen directory. The matched
+    # file is fd-gated; the directory hop must refuse too.
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "database-create-001.log").write_text("outside tail")
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (staging / "log").symlink_to(elsewhere)
+    assert DatabaseManager._salvage_creation_log(staging) == ""
+
+
 @pytest.mark.parametrize("limit", [0, -1])
 def test_nonpositive_tail_does_not_read(tmp_path, monkeypatch, limit):
     import packages.codeql.database_manager as manager
