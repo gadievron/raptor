@@ -295,9 +295,9 @@ def verify_patch(
     }
     if verdict == "still_fires":
         from core.audit.evidence_grade import registered_spelling_role
-        report["receipt_stamp"] = "frida:sink-observed"
-        report["evidence_role"] = registered_spelling_role(
-            report["receipt_stamp"])
+        receipt_stamp = "frida:sink-observed"
+        report["receipt_stamp"] = receipt_stamp
+        report["evidence_role"] = registered_spelling_role(receipt_stamp)
     else:
         report["receipt_stamp"] = None
         report["evidence_role"] = ("detection" if verdict == "closed"

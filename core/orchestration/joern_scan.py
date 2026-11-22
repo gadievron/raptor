@@ -621,7 +621,7 @@ def run_joern_scan_phase(
     language = detect_language(str(target_path))
     profile = profile_for(language)
     outcome.language = language
-    timeout = int(query_timeout_s or getattr(tunables, "query_timeout_s", 300))
+    timeout = int(query_timeout_s or getattr(tunables, "query_timeout_s", 300) or 300)
 
     queries_dir = (Path(__file__).resolve().parents[2]
                    / "packages" / "joern" / "queries")

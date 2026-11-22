@@ -2252,8 +2252,9 @@ def _z3_alloc_overflow_check(
 
     if size_exprs is not None:
         nodes = [_parse_size_expr(text) for text in size_exprs]
-        if size_exprs and all(node is not None for node in nodes):
-            return _alloc_wrap_source_bound(constraints, nodes, size_exprs)
+        parsed_nodes = [node for node in nodes if node is not None]
+        if size_exprs and len(parsed_nodes) == len(nodes):
+            return _alloc_wrap_source_bound(constraints, parsed_nodes, size_exprs)
 
     import z3
 
