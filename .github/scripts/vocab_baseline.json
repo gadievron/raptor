@@ -261,6 +261,11 @@
     "count": 12,
     "kind": "literal"
   },
+  "core/audit/alloc_bounds.py::_FRAME_NODES": {
+    "count": 22,
+    "kind": "literal",
+    "note": "closed tree-sitter-c grammar node-type frame: the statement/expression forms the allocated-extent oracle admits between the allocation, null-check and access \u2014 grammar constants mirroring the parser's node vocabulary, not a learned name vocabulary; any node type outside the frame refuses the proof"
+  },
   "core/audit/api_boundary.py::_CALLER_CONDITIONAL_RE": {
     "count": 34,
     "kind": "alternation",
@@ -927,6 +932,11 @@
     "kind": "literal",
     "note": "framework-internal lead-dict keys (not target API names)"
   },
+  "core/audit/loop_bounds.py::_FRAME_NODES": {
+    "count": 22,
+    "kind": "literal",
+    "note": "closed tree-sitter-c grammar node-type frame: the statement/expression forms the counted-loop progression oracle admits around the array and loop \u2014 grammar constants mirroring the parser's node vocabulary, not a learned name vocabulary; any node type outside the frame refuses the proof"
+  },
   "core/audit/measurement.py::d": {
     "count": 10,
     "kind": "literal"
@@ -1246,6 +1256,11 @@
   "core/audit/sibling_analysis.py::to_dict": {
     "count": 10,
     "kind": "literal"
+  },
+  "core/audit/sink_extents.py::_SCOPE_INERT_STATEMENTS": {
+    "count": 10,
+    "kind": "literal",
+    "note": "closed tree-sitter-c grammar node-type set: statement forms that cannot splice a hidden declaration into a live scope on the call-to-declaration path \u2014 grammar constants for the exact-capacity admission walk, not a learned name vocabulary; any other statement form derives nothing"
   },
   "core/audit/sink_heuristics.py::_SIDE_EFFECT_TARGETS": {
     "count": 34,

@@ -250,6 +250,9 @@
     "core/audit/return_domain.py::_text::sanitiser_shadow::_text": {
       "note": "tree-sitter node-text accessor / analysis helper — a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
     },
+    "core/audit/sink_extents.py::_text::sanitiser_shadow::_text": {
+      "note": "tree-sitter node-text accessor / analysis helper — a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
+    },
     "core/audit/struct_accessor_index.py::format_co_accessor_context::unsanitised_llm_value::description": {
       "note": "prompt/context construction — the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
     },
@@ -261,6 +264,9 @@
     },
     "core/audit/synthesis_review_context.py::_text::sanitiser_shadow::_text": {
       "note": "Boolean TypeGuard for UTF-8-valid context fields. Advisory prompt emission is separate: _section uses bounded ensure_ascii JSON and wrap_untrusted. This predicate emits no text and is not a report/TTY sanitizer; preserve exact source/context identities."
+    },
+    "core/audit/toctou_order.py::_text::sanitiser_shadow::_text": {
+      "note": "tree-sitter node-text accessor / analysis helper — a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
     },
     "core/concepts/audit_bridge.py::domain_bug_patterns::unsanitised_llm_value::desc": {
       "note": "prompt/context construction — the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
