@@ -46,6 +46,7 @@ if __name__ == "__main__":
         sys.path.insert(0, str(REPO))
 
 from core.sandbox import check_seccomp_available  # noqa: E402
+from core.sandbox.tests.capability import requires_landlock  # noqa: E402
 
 pytestmark = [
     pytest.mark.skipif(sys.platform != "linux", reason="Linux seccomp"),
@@ -140,6 +141,7 @@ def _spy_preexec_kwargs(monkeypatch):
 class TestContextThreading:
     """The fs-wall engagement predicate, pinned at the context layer."""
 
+    @requires_landlock
     def test_trusted_write_wall_threads_the_deny(
             self, tmp_path, monkeypatch):
         """target/output with restrict_reads=False: a trusted
@@ -158,6 +160,7 @@ class TestContextThreading:
         assert captured.get("seccomp_deny_sysv_ipc") is True
         assert not captured.get("seccomp_deny_fd_exec")
 
+    @requires_landlock
     def test_restricted_reads_threads_the_deny(
             self, tmp_path, monkeypatch):
         from core.sandbox import context as _ctx
@@ -168,6 +171,7 @@ class TestContextThreading:
         assert captured, "preexec builder never consulted"
         assert captured.get("seccomp_deny_sysv_ipc") is True
 
+    @requires_landlock
     def test_ports_only_wall_threads_the_deny(self, monkeypatch):
         """A TCP port allowlist with ZERO write grants still engages
         the Landlock write wall (the ruleset leaves its net-only shape
@@ -192,7 +196,9 @@ class TestContextThreading:
         from core.sandbox import context as _ctx
 
         captured = _spy_preexec_kwargs(monkeypatch)
-        with _ctx.sandbox():
+        # A network block would add an unrelated capability requirement:
+        # without namespaces or Landlock it must refuse before preexec.
+        with _ctx.sandbox(block_network=False):
             pass
         assert captured, "preexec builder never consulted"
         assert not captured.get("seccomp_deny_sysv_ipc")

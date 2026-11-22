@@ -222,6 +222,23 @@ class TestPromoteFailureFallback:
 
     def test_readonly_workspace_fallback_refused(
             self, db_manager, tmp_path):
+        # Root and processes with DAC override can rename out of a
+        # read-only directory. Check the actual prerequisite rather
+        # than treating that privileged success as a containment bug.
+        probe = tmp_path / "readonly-probe"
+        probe.mkdir()
+        entry = probe / "entry"
+        entry.mkdir()
+        probe.chmod(0o500)
+        try:
+            try:
+                entry.rename(tmp_path / "renamed-probe-entry")
+            except PermissionError:
+                pass
+            else:
+                pytest.skip("host permits rename from a read-only directory")
+        finally:
+            probe.chmod(0o700)
         # The deterministic steering attack: Landlock does not mediate
         # chmod, so an orphan chmods the workspace 0o500 — every
         # read-side check passes, every rename out of it fails — and
