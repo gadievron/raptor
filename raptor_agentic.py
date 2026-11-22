@@ -2130,18 +2130,19 @@ Examples:
     )
     parser.add_argument("--no-visualizations", action="store_true", help="Disable dataflow visualizations for CodeQL findings")
     # Joern CPG scan — mutually exclusive opt-in/opt-out pair. The
-    # enablement decision (including the C/C++ auto-enable when CodeQL
-    # produced no C/C++ coverage this run) is owned by
+    # enablement decision (including the auto-enable when the CodeQL
+    # analysis covering the target's dominant language did not succeed
+    # this run) is owned by
     # core.orchestration.joern_scan.joern_scan_decision.
     _joern_group = parser.add_mutually_exclusive_group()
     _joern_group.add_argument(
         "--joern-scan", action="store_true",
         help="Run the Joern CPG scan phase (interprocedural taint sweep "
              "+ structural C/C++ queries, no build required) regardless "
-             "of the C/C++ auto-enable rule")
+             "of the language auto-enable rule")
     _joern_group.add_argument(
         "--no-joern-scan", action="store_true",
-        help="Disable the Joern CPG scan phase (including the C/C++ "
+        help="Disable the Joern CPG scan phase (including the language "
              "auto-enable)")
     parser.add_argument(
         "--taint-crossfile-mad", action="store_true",
@@ -3918,7 +3919,7 @@ def main() -> int:
     # PHASE 1a: JOERN CPG SCAN (taint sweep + structural C/C++ queries)
     # ========================================================================
     # Runs after CodeQL collection so the auto-enable rule can read the
-    # actual C/C++ coverage this run achieved, and before the
+    # actual per-language coverage this run achieved, and before the
     # source_scan_empty computation so Joern findings count as scan
     # results. Never fatal: a degraded phase warns and the run
     # continues on the other scanners' findings.
@@ -3929,20 +3930,21 @@ def main() -> int:
             joern_scan_decision,
             run_joern_scan_phase,
         )
-        # Coverage means a cpp ANALYSIS completed, not that CodeQL
-        # merely detected C/C++: on a mixed repo whose cpp database
+        # Coverage means an ANALYSIS completed, not that CodeQL merely
+        # detected the language: on a mixed repo whose cpp database
         # build fails (the unbuildable-target case this phase exists
         # for) the run still exits 0 with "cpp" in languages_detected.
-        _codeql_cpp_analysis = (
-            codeql_metrics.get("analyses_completed") or {}).get("cpp") or {}
-        _codeql_cpp_covered = bool(_codeql_cpp_analysis.get("success"))
+        _codeql_analyses = codeql_metrics.get("analyses_completed") or {}
+        _codeql_covered = frozenset(
+            lang for lang, analysis in _codeql_analyses.items()
+            if isinstance(analysis, dict) and analysis.get("success"))
         _joern_decision = joern_scan_decision(
             requested=getattr(args, "joern_scan", False),
             disabled=getattr(args, "no_joern_scan", False),
             skip_scan=skip_scan,
             openant_only=_openant_only,
             target_path=original_repo_path,
-            codeql_cpp_covered=_codeql_cpp_covered,
+            codeql_covered_languages=_codeql_covered,
         )
         # Decision reasons are module-authored constants, but every
         # value this writer prints goes through the terminal chokepoint.

@@ -21,10 +21,12 @@ to the run's SARIF list, so normalisation, cross-scanner dedup and the
 validation pipeline apply downstream with no new plumbing.
 
 The phase is opt-in via ``--joern-scan``, opt-out via
-``--no-joern-scan``, and auto-enables for C/C++ targets that got no
-CodeQL C/C++ coverage this run (:func:`joern_scan_decision` is the
-single authority). It is never fatal: any failure degrades to a loud
-warning and the run continues on the other scanners' findings.
+``--no-joern-scan``, and auto-enables when the target's dominant
+language has an evidence-earned Joern profile and the CodeQL analysis
+covering that language did not succeed this run
+(:func:`joern_scan_decision` is the single authority). It is never
+fatal: any failure degrades to a loud warning and the run continues
+on the other scanners' findings.
 """
 
 from __future__ import annotations
@@ -109,7 +111,7 @@ _TAINT_CATEGORIES: tuple[tuple[str, str, str | None, frozenset[str]], ...] = (
          "execlp", "execle", "fexecve", "posix_spawn", "posix_spawnp",
          "subprocess_call", "subprocess_run", "subprocess_Popen",
          "Command", "CommandContext", "execSync", "spawn", "spawnSync",
-         "execFile", "start",
+         "execFile", "start", "Start", "launch",
      })),
     ("joern-taint-buffer-write",
      "Tainted data reaches an unbounded buffer-write sink", "CWE-120",
@@ -292,6 +294,33 @@ class JoernScanDecision:
     requested: bool = False
 
 
+#: detect_language() name → the CodeQL analysis key whose success
+#: covers that language this run. CodeQL's ``java`` analysis compiles
+#: Kotlin and its ``javascript`` extractor reads TypeScript, so those
+#: map onto the covering analysis rather than themselves.
+_CODEQL_LANGUAGE_FOR: dict[str, str] = {
+    "c": "cpp", "cpp": "cpp",
+    "java": "java", "kotlin": "java",
+    "javascript": "javascript", "typescript": "javascript",
+    "python": "python",
+    "go": "go",
+    "csharp": "csharp",
+    "swift": "swift",
+}
+
+#: Languages the auto rule may enable unforced. Evidence-earned, not
+#: aspirational: a name is admitted only after a live end-to-end run
+#: on this toolchain — sandboxed CPG build, tiered sweep, SARIF with
+#: a code-flowed finding on a vulnerable fixture AND silence on its
+#: clean control. A profiled language that has not earned this stays
+#: behind --joern-scan (forced runs are allowed for ANY language and
+#: fail loudly). detect_language() names, lowercase.
+_AUTO_ENABLE_LANGUAGES: frozenset[str] = frozenset({
+    "c", "cpp", "python", "java", "javascript", "typescript",
+    "go", "kotlin", "csharp", "swift",
+})
+
+
 def joern_scan_decision(
     *,
     requested: bool,
@@ -299,21 +328,32 @@ def joern_scan_decision(
     skip_scan: bool,
     openant_only: bool,
     target_path: Path,
-    codeql_cpp_covered: bool,
+    codeql_covered_languages: frozenset[str] | set[str] = frozenset(),
     joern_available: bool | None = None,
-    has_c_sources: bool | None = None,
+    has_joern_sources: bool | None = None,
+    language: str | None = None,
 ) -> JoernScanDecision:
     """Single authority for whether the Joern scan phase runs.
 
     Precedence: explicit disable, then the scan-replacing modes
     (imported SARIF, ``--openant-only``), then explicit enable, then
-    the auto rule — a C/C++ target with no CodeQL C/C++ coverage this
-    run (CodeQL disabled, failed, or detected no C/C++) gets the phase
-    by default because Joern's fuzzy parser is the only interprocedural
-    dataflow channel that needs no build.
+    the auto rule — a target whose dominant language has an
+    evidence-earned Joern profile (:data:`_AUTO_ENABLE_LANGUAGES`) and
+    whose covering CodeQL analysis (:data:`_CODEQL_LANGUAGE_FOR`) did
+    not succeed this run gets the phase by default, because Joern's
+    fuzzy frontends are the interprocedural dataflow channel that
+    needs no build.
 
-    ``joern_available`` / ``has_c_sources`` default to live probes;
-    tests inject booleans.
+    ``codeql_covered_languages``: CodeQL analysis keys (``cpp``,
+    ``java``, …) that COMPLETED successfully this run — mere language
+    detection does not count (on a mixed repo whose cpp database
+    build fails, the run still exits 0 with cpp detected).
+
+    ``joern_available`` / ``has_joern_sources`` / ``language`` default
+    to live probes; tests inject values. The sources gate runs before
+    the language census is trusted: ``detect_language`` falls back to
+    "python" on trees with NO profiled sources, and that fallback must
+    never auto-enable a sweep against an unprofiled tree.
     """
     if disabled:
         return JoernScanDecision(False, "disabled by --no-joern-scan")
@@ -346,24 +386,43 @@ def joern_scan_decision(
     if not joern_available:
         return JoernScanDecision(False, "Joern is not installed")
 
-    if has_c_sources is None:
+    if has_joern_sources is None:
         try:
-            from core.audit.joern_backend import target_has_c_sources
-            has_c_sources = target_has_c_sources(target_path)
+            from core.audit.joern_backend import (
+                target_has_c_sources,
+                target_has_joern_sources,
+            )
+            has_joern_sources = (target_has_c_sources(target_path)
+                                 or target_has_joern_sources(target_path))
         except ImportError:
-            has_c_sources = False
+            has_joern_sources = False
 
-    if not has_c_sources:
+    if not has_joern_sources:
         return JoernScanDecision(
-            False, "auto-enable is limited to C/C++ targets"
+            False, "no sources with a curated Joern profile"
                    " (pass --joern-scan to force)")
-    if codeql_cpp_covered:
+
+    if language is None:
+        try:
+            from packages.joern.lang_config import detect_language
+            language = detect_language(str(target_path))
+        except ImportError:
+            language = ""
+    language = (language or "").lower()
+
+    if language not in _AUTO_ENABLE_LANGUAGES:
         return JoernScanDecision(
-            False, "CodeQL produced C/C++ coverage this run"
+            False, f"auto-enable not earned for {language or 'unknown'}"
+                   " targets (pass --joern-scan to force)")
+
+    codeql_key = _CODEQL_LANGUAGE_FOR.get(language, language)
+    if codeql_key in codeql_covered_languages:
+        return JoernScanDecision(
+            False, f"CodeQL produced {codeql_key} coverage this run"
                    " (pass --joern-scan to run both)")
     return JoernScanDecision(
-        True, "auto-enabled: C/C++ target without CodeQL C/C++"
-              " coverage this run")
+        True, f"auto-enabled: {language} target without CodeQL"
+              f" {codeql_key} coverage this run")
 
 
 @dataclass

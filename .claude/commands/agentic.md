@@ -33,7 +33,7 @@ and do NOT hand-summarise the flags from this doc when `--help` is requested.
 
 ## Optional enrichment flags
 
-By default, `/agentic` scans and analyses findings in isolation. Optional flags adjust the run: `--understand`, `--validate`, `--gap-audit`, and `--openant` add richer context and coverage (opt-in because they add time and cost, but well worth it for a proper security review rather than a quick scan), `--sequential` bypasses the parallel orchestration, `--openant-only` replaces the pattern scanners outright rather than enriching them, and `--joern-scan`/`--no-joern-scan` override the Joern CPG scan phase's C/C++ auto-enable rule in either direction.
+By default, `/agentic` scans and analyses findings in isolation. Optional flags adjust the run: `--understand`, `--validate`, `--gap-audit`, and `--openant` add richer context and coverage (opt-in because they add time and cost, but well worth it for a proper security review rather than a quick scan), `--sequential` bypasses the parallel orchestration, `--openant-only` replaces the pattern scanners outright rather than enriching them, and `--joern-scan`/`--no-joern-scan` override the Joern CPG scan phase's language auto-enable rule in either direction.
 
 | Flag | What it does |
 |------|-------------|
@@ -43,7 +43,7 @@ By default, `/agentic` scans and analyses findings in isolation. Optional flags 
 | `--openant` | Adds an OpenAnt semantic scan phase (AST + LLM per-function analysis) alongside Semgrep/CodeQL — findings are deduplicated and enter the same validation pipeline. |
 | `--openant-only` | Replaces the pattern scanners entirely with OpenAnt (cannot be combined with `--codeql`/`--codeql-only` — refused at parse time). |
 | `--sequential` | Bypasses parallel orchestration (scan → dedup → prep → analysis run sequentially in one process). |
-| `--joern-scan` / `--no-joern-scan` | Force / suppress the Joern CPG scan phase (interprocedural taint sweep + six structural C/C++ queries on the cached CPG; no build required). Without either flag it auto-enables only for C/C++ targets that got no CodeQL C/C++ coverage this run. Findings land in `<run>/joern/joern.sarif` and join the normal dedup/validation chain. Mutually exclusive with each other; `--openant-only` refuses `--joern-scan` at parse time; never fatal — failures degrade to a warning and the run continues. |
+| `--joern-scan` / `--no-joern-scan` | Force / suppress the Joern CPG scan phase (interprocedural taint sweep + six structural C/C++ queries on the cached CPG; no build required). Without either flag it auto-enables when the target's dominant language has an evidence-earned Joern profile (C/C++, Python, Java, JavaScript/TypeScript, Go, Kotlin, C#, Swift) and the CodeQL analysis covering that language (Kotlin→java, TypeScript→javascript) did not succeed this run. Findings land in `<run>/joern/joern.sarif` and join the normal dedup/validation chain. Mutually exclusive with each other; `--openant-only` refuses `--joern-scan` at parse time; never fatal — failures degrade to a warning and the run continues. |
 
 `--project <name>` pins the run to a named project regardless of the session's binding or the last-activated default (`--project -` = explicitly projectless; invalid names are a hard error, never a fallback).
 

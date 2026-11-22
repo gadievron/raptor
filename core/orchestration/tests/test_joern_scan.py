@@ -47,8 +47,9 @@ class TestDecision(unittest.TestCase):
     def _decide(self, **kw):
         base = dict(requested=False, disabled=False, skip_scan=False,
                     openant_only=False, target_path=Path("/nonexistent"),
-                    codeql_cpp_covered=False, joern_available=True,
-                    has_c_sources=True)
+                    codeql_covered_languages=frozenset(),
+                    joern_available=True,
+                    has_joern_sources=True, language="c")
         base.update(kw)
         return joern_scan_decision(**base)
 
@@ -69,8 +70,9 @@ class TestDecision(unittest.TestCase):
         self.assertIn("--openant-only", d.reason)
 
     def test_requested_runs_regardless_of_language_and_codeql(self):
-        d = self._decide(requested=True, has_c_sources=False,
-                         codeql_cpp_covered=True)
+        d = self._decide(requested=True, has_joern_sources=False,
+                         language="ruby",
+                         codeql_covered_languages=frozenset({"cpp"}))
         self.assertTrue(d.run)
         self.assertTrue(d.requested)
 
@@ -85,13 +87,15 @@ class TestDecision(unittest.TestCase):
         self.assertFalse(d.run)
         self.assertFalse(d.requested)
 
-    def test_non_c_target_skips_auto(self):
-        d = self._decide(has_c_sources=False)
+    def test_unprofiled_target_skips_auto(self):
+        d = self._decide(has_joern_sources=False)
         self.assertFalse(d.run)
-        self.assertIn("C/C++", d.reason)
+        self.assertIn("no sources with a curated Joern profile",
+                      d.reason)
 
     def test_codeql_coverage_skips_auto(self):
-        d = self._decide(codeql_cpp_covered=True)
+        d = self._decide(
+            codeql_covered_languages=frozenset({"cpp"}))
         self.assertFalse(d.run)
         self.assertIn("CodeQL", d.reason)
 
@@ -99,6 +103,57 @@ class TestDecision(unittest.TestCase):
         d = self._decide()
         self.assertTrue(d.run)
         self.assertIn("auto-enabled", d.reason)
+
+    def test_every_earned_language_auto_enables_uncovered(self):
+        from core.orchestration.joern_scan import (
+            _AUTO_ENABLE_LANGUAGES,
+            _CODEQL_LANGUAGE_FOR,
+        )
+        for lang in sorted(_AUTO_ENABLE_LANGUAGES):
+            with self.subTest(language=lang):
+                self.assertIn(lang, _CODEQL_LANGUAGE_FOR)
+                d = self._decide(language=lang)
+                self.assertTrue(d.run)
+                self.assertIn(lang, d.reason)
+
+    def test_covering_codeql_analysis_suppresses_each_language(self):
+        """Kotlin is covered by CodeQL's java analysis, TypeScript by
+        javascript — the mapping, not the raw name, decides."""
+        from core.orchestration.joern_scan import (
+            _AUTO_ENABLE_LANGUAGES,
+            _CODEQL_LANGUAGE_FOR,
+        )
+        for lang in sorted(_AUTO_ENABLE_LANGUAGES):
+            with self.subTest(language=lang):
+                covered = frozenset({_CODEQL_LANGUAGE_FOR[lang]})
+                d = self._decide(language=lang,
+                                 codeql_covered_languages=covered)
+                self.assertFalse(d.run)
+                self.assertIn("CodeQL", d.reason)
+
+    def test_kotlin_suppressed_by_java_coverage_not_kotlin_key(self):
+        d = self._decide(language="kotlin",
+                         codeql_covered_languages=frozenset({"java"}))
+        self.assertFalse(d.run)
+        d = self._decide(language="kotlin",
+                         codeql_covered_languages=frozenset({"kotlin"}))
+        self.assertTrue(d.run)
+
+    def test_unrelated_codeql_coverage_does_not_suppress(self):
+        d = self._decide(language="c",
+                         codeql_covered_languages=frozenset(
+                             {"python", "javascript"}))
+        self.assertTrue(d.run)
+
+    def test_unearned_language_skips_auto(self):
+        d = self._decide(language="ruby")
+        self.assertFalse(d.run)
+        self.assertIn("auto-enable not earned for ruby", d.reason)
+
+    def test_empty_language_skips_auto(self):
+        d = self._decide(language="")
+        self.assertFalse(d.run)
+        self.assertIn("unknown", d.reason)
 
     def test_openant_only_beats_explicit_request(self):
         d = self._decide(openant_only=True, requested=True)
@@ -114,14 +169,31 @@ class TestDecision(unittest.TestCase):
         self.assertFalse(d.run)
         self.assertIn("not installed", d.reason)
 
-    def test_live_c_sources_probe_is_consulted(self):
+    def test_live_sources_probe_is_consulted(self):
         from unittest.mock import patch
         import core.audit.joern_backend as backend
         with patch.object(backend, "target_has_c_sources",
-                          return_value=False) as probe:
-            d = self._decide(has_c_sources=None)
+                          return_value=False) as c_probe, \
+             patch.object(backend, "target_has_joern_sources",
+                          return_value=False) as joern_probe:
+            d = self._decide(has_joern_sources=None)
         self.assertFalse(d.run)
-        self.assertIn("C/C++", d.reason)
+        self.assertIn("no sources with a curated Joern profile",
+                      d.reason)
+        c_probe.assert_called_once()
+        joern_probe.assert_called_once()
+
+    def test_live_language_probe_is_consulted(self):
+        """The dominant-language census routes auto-enable; the
+        detect_language python fallback on an unprofiled tree is
+        unreachable because the sources gate runs first."""
+        from unittest.mock import patch
+        import packages.joern.lang_config as lang_config
+        with patch.object(lang_config, "detect_language",
+                          return_value="go") as probe:
+            d = self._decide(language=None)
+        self.assertTrue(d.run)
+        self.assertIn("go target", d.reason)
         probe.assert_called_once()
 
 
