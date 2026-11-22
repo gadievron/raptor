@@ -132,7 +132,21 @@ def _emit_child_output(stream: TextIO, data: "str | bytes") -> None:
         is_tty = True
     if is_tty:
         data = escape_nonprintable(data, preserve_newlines=True)
-    stream.write(data)
+    try:
+        stream.write(data)
+    except UnicodeEncodeError:
+        # The stream's own encoder refused the already-decoded child
+        # text — an ASCII or other non-UTF-8 locale cannot represent
+        # U+FFFD replacement marks or raw child unicode. The display
+        # lane must never abort the wrapper: UnicodeEncodeError is a
+        # ValueError, so it would reach the generic invocation-failure
+        # handler and eat the child's exit code and every [sandbox]
+        # diagnostic. Backslash-escape instead — the escaped form is
+        # pure ASCII, which every stream codec can carry.
+        encoding = getattr(stream, "encoding", None) or "utf-8"
+        stream.write(
+            data.encode(encoding, errors="backslashreplace")
+            .decode(encoding, errors="replace"))
     stream.flush()
 
 

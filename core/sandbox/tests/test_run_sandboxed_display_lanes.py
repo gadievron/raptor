@@ -67,6 +67,24 @@ class _BrokenIsattyStream(io.StringIO):
         raise ValueError("stream state unknowable")
 
 
+class _AsciiPipeStream(io.TextIOWrapper):
+    """A pipe-lane stream whose own codec rejects non-ASCII text — the
+    shape of sys.stdout under an ASCII / non-UTF-8 locale (e.g.
+    PYTHONIOENCODING=ascii), where writing a U+FFFD replacement mark
+    raises UnicodeEncodeError."""
+
+    def __init__(self) -> None:
+        super().__init__(io.BytesIO(), encoding="ascii",
+                         errors="strict", newline="")
+
+    def isatty(self) -> bool:
+        return False
+
+    def text(self) -> str:
+        self.flush()
+        return self.buffer.getvalue().decode("ascii")
+
+
 def _run_script(monkeypatch, tmp_path, *, child_stdout: str = "",
                 child_stderr: str = "", timeout_exc: BaseException | None = None,
                 raw_child_output: "tuple[bytes, bytes] | None" = None,
@@ -241,6 +259,55 @@ class TestInvalidUtf8NeverAbortsTheRun:
         assert "\x1b" not in shown
         assert "\\x1b[2K" in shown
         assert "�" in shown
+
+
+class TestAsciiEncoderStreamNeverAbortsTheRun:
+    """The ENCODE side of the same lane: after the decode fix, the
+    replaced text still has to pass through the receiving stream's own
+    codec. Under an ASCII (or other non-UTF-8) locale,
+    ``stream.write`` of a U+FFFD replacement mark raised
+    UnicodeEncodeError — a ValueError — which fell to the generic
+    invocation-failure handler: exit 2, the child's exit code lost,
+    all child output and every ``[sandbox]`` diagnostic suppressed.
+    One hostile byte again silenced the sandbox's own evidence. The
+    lane now backslash-escapes the text into pure ASCII when the
+    stream's codec refuses it."""
+
+    RAW = (b"compiling\xff ok\n", b"warn\xfe\n")
+
+    def test_exit_code_output_and_diagnostics_survive(
+            self, monkeypatch, tmp_path):
+        out, err = _AsciiPipeStream(), _AsciiPipeStream()
+        code = _run_script(
+            monkeypatch, tmp_path, raw_child_output=self.RAW,
+            sandbox_info={"blocked": ["network connect denied"]},
+            out_stream=out, err_stream=err)
+        # The child's exit code, not the wrapper's failure code 2.
+        assert code == 0
+        # The replacement mark arrives backslash-escaped (pure ASCII);
+        # the legitimate prose around it is untouched.
+        assert out.text() == "compiling\\ufffd ok\n"
+        assert err.text().startswith("warn\\ufffd\n")
+        # The sandbox's own evidence still reaches the caller.
+        assert "[sandbox] network connect denied" in err.text()
+
+    def test_tty_lane_rides_the_same_fallback(self, monkeypatch, tmp_path):
+        class _AsciiTtyStream(_AsciiPipeStream):
+            def isatty(self) -> bool:
+                return True
+
+        out, err = _AsciiTtyStream(), _AsciiTtyStream()
+        code = _run_script(monkeypatch, tmp_path,
+                           raw_child_output=(b"ok\xff\x1b[2K\n", b""),
+                           out_stream=out, err_stream=err)
+        assert code == 0
+        shown = out.text()
+        # TTY escaping already ran (the CSI arrives inert); the codec
+        # fallback only re-encodes what the escaped text still carries
+        # (the replacement mark, which is printable and so survives
+        # escape_nonprintable).
+        assert "\\x1b[2K" in shown
+        assert "\\ufffd" in shown
 
 
 class TestTimeoutPartialOutputRidesTheLane:
