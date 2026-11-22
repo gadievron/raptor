@@ -209,7 +209,21 @@ _RUNTIME_TIERS = ("OBSERVED_RUNTIME", "REPLAYED_CRASH")
 
 
 def _classify_history_verdict(finding: dict[str, Any]) -> str:
-    """Map a /validate finding to ``confirmed`` / ``ruled_out`` / ``""``."""
+    """Map a /validate finding to ``confirmed`` / ``ruled_out`` / ``""``.
+
+    The confirm direction trusts only the status strings: these run
+    AFTER ``sanitise_findings_evidence``, which demotes every
+    confirm-direction status lacking a trusted-act receipt or verified
+    feasibility record, so a surviving string IS the authenticated
+    claim. ``is_true_positive`` deliberately earns no confirmation —
+    it is the LLM's own "real bug" triage boolean (present on every
+    agentic finding, receipt-less by design), so mapping a bare True
+    to confirmed would hand any findings-file writer full verdict
+    authority and resurrect claims the sanitiser just demoted. The
+    False direction stays: deprioritisation off the LLM's FP triage
+    is its designed job, and the downstream consumers gate the
+    consequences (strong-receipt checks, decoy vetoes) separately.
+    """
     ruling = finding.get("ruling") or {}
     status = ruling.get("status", "") if isinstance(ruling, dict) else str(ruling)
     final = finding.get("final_status", "")
@@ -217,8 +231,6 @@ def _classify_history_verdict(finding: dict[str, Any]) -> str:
         return "confirmed"
     if status in _HISTORY_DISPROVEN or final in _HISTORY_DISPROVEN:
         return "ruled_out"
-    if finding.get("is_true_positive") is True:
-        return "confirmed"
     if finding.get("is_true_positive") is False:
         return "ruled_out"
     return ""

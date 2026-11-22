@@ -721,6 +721,19 @@ def _classify_verdict(finding: dict[str, Any]) -> str:
     """Map /validate's various status fields to a canonical verdict.
 
     Returns one of: ``disproven``, ``confirmed``, ``unknown``.
+
+    The confirm direction trusts only ``ruling.status``: this runs
+    AFTER ``sanitise_findings_evidence``, which demotes every
+    confirm-direction status lacking a trusted-act receipt or
+    verified feasibility record, so a surviving string IS the
+    authenticated claim. ``is_true_positive`` deliberately earns no
+    confirmation — it is the LLM's own "real bug" triage boolean
+    (present on every agentic finding, receipt-less by design), so a
+    bare True mapping to confirmed would hand any findings-file
+    writer upgrade authority over the journal and resurrect claims
+    the sanitiser just demoted. The False direction stays: the FP
+    triage is the LLM's designed job, and downgrades are
+    independently gated (decoy veto, entry matching).
     """
     ruling = finding.get("ruling", {})
     status = ruling.get("status", "") if isinstance(ruling, dict) else str(ruling)
@@ -732,8 +745,6 @@ def _classify_verdict(finding: dict[str, Any]) -> str:
 
     if finding.get("is_true_positive") is False:
         return "disproven"
-    if finding.get("is_true_positive") is True:
-        return "confirmed"
 
     return "unknown"
 

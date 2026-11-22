@@ -395,6 +395,21 @@ class TestPlainConfirmedClamp:
         assert f["status"] == "confirmed_unverified"
         assert f["ruling"]["status"] == "confirmed_unverified"
 
+    def test_receipt_on_non_confirm_ruling_does_not_support(self, tmp_path):
+        # A verified receipt proves its OWN stamped status was accepted
+        # at a trusted act. If that status is not confirm-direction, the
+        # receipt must not vouch for a "confirmed" planted in the
+        # top-level channels beside it.
+        f = _finding(status="confirmed")
+        ruling = {"status": "needs_witness", "reason": "r"}
+        f["ruling"] = ruling
+        prov.stamp_ruling_confirmation(f, ruling, tmp_path)
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert stats["confirmation_demoted"] == 1
+        assert f["status"] == "confirmed_unverified"
+        # The stamped non-confirm ruling itself is untouched.
+        assert f["ruling"]["status"] == "needs_witness"
+
     def test_verified_confirming_witness_supports(self, tmp_path):
         f = _finding(status="confirmed")
         record = {"verdict": "confirmed"}
@@ -599,6 +614,66 @@ class TestTierStatusClamp:
         assert f["final_status"] == "exploitable"
         assert f["status"] == "exploitable"
         assert stats["final_status_demoted"] == 0
+
+    def test_unreceipted_ruling_tier_claim_demoted(self, tmp_path):
+        # ruling.status is the channel the verdict importers read
+        # FIRST — a planted "exploitable" there alone carried full
+        # confirmed-grade authority without meeting either string
+        # clamp. It must demote like the other two channels.
+        f = _finding(ruling={"status": "exploitable", "reason": "planted"})
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert f["ruling"]["status"] == "confirmed_unverified"
+        assert stats["final_status_demoted"] == 1
+
+    def test_receipted_exploitable_ruling_survives(self, tmp_path):
+        # The witness upgrade legitimately stamps an exploitable-tier
+        # ruling (Stage D already reached the stronger tier); the
+        # receipt binds the status string, so it supports this channel.
+        f = _finding()
+        ruling = {"status": "exploitable", "reason": "Stage D affirmed"}
+        f["ruling"] = ruling
+        prov.stamp_ruling_confirmation(f, ruling, tmp_path)
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert f["ruling"]["status"] == "exploitable"
+        assert stats["final_status_demoted"] == 0
+
+    def test_ruling_receipt_from_other_run_does_not_support(self, tmp_path):
+        f = _finding()
+        ruling = {"status": "exploitable", "reason": "r"}
+        f["ruling"] = ruling
+        prov.stamp_ruling_confirmation(f, ruling, tmp_path / "other-run")
+        stats = prov.sanitise_findings_evidence(
+            {"findings": [f]}, tmp_path / "this-run")
+        assert f["ruling"]["status"] == "confirmed_unverified"
+        assert stats["final_status_demoted"] == 1
+
+    def test_matching_verified_tier_supports_ruling_channel(self, tmp_path):
+        # A verified analyzed feasibility record whose own verdict maps
+        # to the claimed tier supports the ruling channel too.
+        f = _finding(ruling={"status": "exploitable", "reason": "r"})
+        feas = {"status": "analyzed", "verdict": "exploitable",
+                "binary_path": "/bin/app"}
+        f["feasibility"] = feas
+        prov.stamp_feasibility(f, feas, tmp_path)
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert f["ruling"]["status"] == "exploitable"
+        assert stats["final_status_demoted"] == 0
+
+    def test_demotion_warning_counts_both_clamps(self, tmp_path, caplog):
+        # The operator-facing warning must surface confirmation
+        # demotions alongside the tier demotions — a run whose only
+        # forgeries were plain-"confirmed" plants previously logged
+        # nothing about them.
+        import logging
+
+        f1 = _finding(id="F-001", final_status="exploitable")
+        f2 = _finding(id="F-002", status="confirmed")
+        with caplog.at_level(logging.WARNING, logger=prov.logger.name):
+            prov.sanitise_findings_evidence(
+                {"findings": [f1, f2]}, tmp_path)
+        text = caplog.text
+        assert "final_status demoted: 1" in text
+        assert "confirmation demoted: 1" in text
 
 
 class TestVersionedRunBinding:

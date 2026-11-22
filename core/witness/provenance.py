@@ -757,6 +757,14 @@ FEASIBILITY_TIER_STATUSES = frozenset({
     "confirmed_constrained", "confirmed_blocked",
 })
 
+#: Ruling statuses a trusted chokepoint legitimately stamps a
+#: confirmation receipt onto: plain ``confirmed`` (Stage D merge /
+#: sanity pass / witness upgrade) and the feasibility-tier family
+#: (the witness upgrade keeps Stage D's stronger ``exploitable``
+#: tier when it stamps). A verified receipt on any OTHER status
+#: must never vouch for a confirm-direction claim beside it.
+_RECEIPT_CONFIRM_STATUSES = frozenset({"confirmed"}) | FEASIBILITY_TIER_STATUSES
+
 #: Feasibility verdicts whose Stage-F mapping (validation-helper
 #: VERDICT_MAP / orchestrator verdict_to_status) reaches the
 #: exploitable family — the only verdicts that legitimately derive
@@ -924,10 +932,21 @@ def sanitise_findings_evidence(
         # get_display_status on its own. Unsupported claims are
         # quarantined until a mechanical stage re-derives them;
         # supported ones are rewritten to the canonical spelling.
+        # ruling.status is the third claiming channel: the verdict
+        # importers (/audit feedback, the validate bridge) read it
+        # FIRST and grade the exploitable family as confirmed, so a
+        # tier claim planted there alone would carry full verdict
+        # authority without ever meeting this clamp.
         claimed_final = normalize_status(finding.get("final_status"))
         claimed_status = normalize_status(finding.get("status"))
+        tier_ruling = finding.get("ruling")
+        claimed_ruling = (
+            normalize_status(tier_ruling.get("status"))
+            if isinstance(tier_ruling, dict) else None
+        )
         if (claimed_final in FEASIBILITY_TIER_STATUSES
-                or claimed_status in FEASIBILITY_TIER_STATUSES):
+                or claimed_status in FEASIBILITY_TIER_STATUSES
+                or claimed_ruling in FEASIBILITY_TIER_STATUSES):
             feasibility = finding.get("feasibility")
             verified = (
                 isinstance(feasibility, dict)
@@ -954,6 +973,22 @@ def sanitise_findings_evidence(
                 else:
                     finding["status"] = "confirmed_unverified"
                     demoted = True
+            if (claimed_ruling in FEASIBILITY_TIER_STATUSES
+                    and isinstance(tier_ruling, dict)):
+                # The witness upgrade stamps the exploitable-tier
+                # ruling it accepts (Stage D already reached the
+                # stronger tier), and the receipt MAC binds
+                # ruling.status itself — so a verified receipt
+                # vouches for this channel even where the feasibility
+                # record was consumed separately. A receipt from a
+                # different status cannot: verification recomputes
+                # over the CURRENT status string.
+                if verdict_tier == claimed_ruling or (
+                        verify_ruling_confirmation(finding, run_dir)):
+                    tier_ruling["status"] = claimed_ruling
+                else:
+                    tier_ruling["status"] = "confirmed_unverified"
+                    demoted = True
             if demoted:
                 stats["final_status_demoted"] += 1
 
@@ -976,7 +1011,17 @@ def sanitise_findings_evidence(
         claimed_final = normalize_status(finding.get("final_status"))
         claimed_status = normalize_status(finding.get("status"))
         if "confirmed" in (claimed_final, claimed_status, ruling_status):
-            supported = verify_ruling_confirmation(finding, run_dir)
+            # Receipt support requires the stamped ruling to be
+            # confirm-direction itself: verification recomputes over
+            # the CURRENT ruling.status, so a verified receipt proves
+            # that exact status was accepted at the trusted act — but
+            # should a future chokepoint ever stamp a non-confirm
+            # ruling, its receipt must not vouch for a "confirmed"
+            # planted in the top-level channels beside it.
+            supported = (
+                ruling_status in _RECEIPT_CONFIRM_STATUSES
+                and verify_ruling_confirmation(finding, run_dir)
+            )
             if not supported:
                 record = finding.get("witness_execution")
                 supported = (
@@ -1044,11 +1089,12 @@ def sanitise_findings_evidence(
         logger.warning(
             "witness provenance: demoted unverified evidence claims "
             "(witness_execution stripped: %d, feasibility demoted: %d, "
-            "final_status demoted: %d, is_exploitable demoted: %d) — "
-            "records lacked a valid mechanical-provenance stamp for "
-            "run %r",
+            "final_status demoted: %d, confirmation demoted: %d, "
+            "is_exploitable demoted: %d) — records lacked a valid "
+            "mechanical-provenance stamp for run %r",
             stats["witness_stripped"], stats["feasibility_demoted"],
-            stats["final_status_demoted"], stats["exploitable_demoted"],
+            stats["final_status_demoted"], stats["confirmation_demoted"],
+            stats["exploitable_demoted"],
             run_binding(run_dir),
         )
     return stats
