@@ -2319,6 +2319,7 @@ _SMT_DIRECT_ONLY_VERBS = frozenset({
     "check-early-release",
     "check-lock-domain",
     "check-toctou",
+    "check-format-args",
 })
 
 # Arithmetic operand/premise extraction also reads source. Scope it through
@@ -2362,6 +2363,10 @@ _SMT_VERB_ROLES = {
     "check-early-release": "detection",
     "check-lock-domain": "detection",
     "check-toctou": "detection",
+    # Exact arity counting over a closed literal-format grammar: a
+    # counted deficit is UB by construction, but reachability of the
+    # call is not modeled, so the verb stays detection-tier.
+    "check-format-args": "detection",
     # Detection by construction: z3 models exactly the byte-survival
     # predicate it is asked, but the premises (the emitter's transfer
     # description) are an LLM/orchestrator extraction the verb never
@@ -3438,6 +3443,29 @@ def _run_smt_verb_on_source(
                 outcome=_negative_outcome(tt_result),
                 rule_id=f"smt:{verb}",
                 details=tt_result.to_dict(),
+            )
+        elif verb == "check-format-args":
+            from core.audit.format_args import check_format_args
+            if not source:
+                return SweepResult(
+                    tool="smt", file_path=file_path,
+                    function_name=function_name, outcome="inconclusive",
+                    rule_id=f"smt:{verb}",
+                )
+            fa_result = check_format_args(source)
+            if fa_result.deficit_found:
+                return SweepResult(
+                    tool="smt", file_path=file_path,
+                    function_name=function_name, outcome="confirmed",
+                    rule_id=f"smt:{verb}",
+                    details=fa_result.to_dict(),
+                )
+            return SweepResult(
+                tool="smt", file_path=file_path,
+                function_name=function_name,
+                outcome=_negative_outcome(fa_result),
+                rule_id=f"smt:{verb}",
+                details=fa_result.to_dict(),
             )
         elif verb == "validate-path":
             from packages.exploit_feasibility.smt_path import validate_path

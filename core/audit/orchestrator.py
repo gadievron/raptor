@@ -33234,6 +33234,13 @@ def _pre_loop_smt_screen(
                 if ttr.toctou_found:
                     tool_hit = "smt:check-toctou"
 
+        if not tool_hit and is_c:
+            with contextlib.suppress(*_SMT_SCREEN_ERRORS):  # type: ignore[arg-type]
+                from .format_args import check_format_args
+                far = check_format_args(source)
+                if far.deficit_found:
+                    tool_hit = "smt:check-format-args"
+
         if tool_hit:
             gap["_smt_pre_evidence"] = tool_hit
             screened += 1
@@ -35274,6 +35281,7 @@ _SCREEN_CONFIRMING_VERBS = frozenset({
     "check-early-release",
     "check-callback-lifetime",
     "check-toctou",
+    "check-format-args",
     # check-lock-domain runs in inject-mode only (_run_mechanical_
     # detectors context, "too noisy for hard-classify") — the screen
     # never mints its receipt today, so this entry is dormant until a

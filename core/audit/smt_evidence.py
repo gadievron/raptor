@@ -51,6 +51,9 @@ _DIAGNOSTIC_ORACLE_SCOPES = {
     "check-early-release": "source-pattern",
     "check-lock-domain": "source-pattern",
     "check-toctou": "source-pattern",
+    # Exact arity count over a literal format, but call reachability is
+    # not modeled and the count sees only the one call site.
+    "check-format-args": "source-pattern",
 }
 
 
