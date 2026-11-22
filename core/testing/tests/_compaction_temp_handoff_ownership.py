@@ -11,7 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 HERE = Path(__file__).resolve().parent
-CFG = {'producer_source_sha256': '35254ec115df30441b570d0a23ef84c0c1e8b92a694046daa0194b02f0057e56', 'prefix_declaration_sha256': '26190f2453f534001013245536db7e603069d7119dd24f72823a34baba3198af', 'prefix': '.~journal-compact-'}
+CFG = {'producer_source_sha256': 'b0b962f8e55a468086c6199d704bac97a3a4d13f277c4ee3934b9ebe4fb6db9d', 'prefix_declaration_sha256': '26190f2453f534001013245536db7e603069d7119dd24f72823a34baba3198af', 'prefix': '.~journal-compact-'}
 CFG['root'] = sys.argv[1]
 assert sys.flags.isolated and sys.dont_write_bytecode and sys.flags.optimize == 0
 root = Path(CFG['root'])
