@@ -156,14 +156,22 @@ binding: before constructing a client, the **server-identity gate**
 (`core/sage/server_identity.py`) asks `docker ps` which image
 publishes the target loopback port and requires it to be the
 compose-pinned image (the same digest pin that anchors boot-payload
-trust). While a docker container publishes the port, dockerd holds
-that binding — an unprivileged local process cannot squat it, and an
-adversary who can drive dockerd is already over the machine's
-privilege boundary.
+trust), publishing on a bind address that covers every address the
+URL's host resolves to. While a docker container publishes the port,
+dockerd holds that binding — an unprivileged local process cannot
+squat it, and an adversary who can drive dockerd is already over the
+machine's privilege boundary — but dockerd holds only the published
+*addresses*: the shipped compose file publishes `127.0.0.1` only, so
+on a host whose resolver returns `::1` for `localhost` the client
+would dial an unheld, squattable address. The gate refuses there;
+the remedy is a URL naming the published address
+(`SAGE_URL=http://127.0.0.1:8090`) or a compose override publishing
+both loopbacks.
 
-When the check fails (container down, port squatted, docker missing),
-SAGE degrades to unavailable exactly as if the server were
-unreachable, with a warning naming the remedies. Scope and escape
+When the check fails (container down, port squatted, dial address
+not covered by the container's bindings, docker missing), SAGE
+degrades to unavailable exactly as if the server were unreachable,
+with a warning naming the remedies. Scope and escape
 hatches:
 
 - Loopback URLs only — a non-loopback `SAGE_URL` is an

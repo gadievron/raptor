@@ -10,11 +10,19 @@ dockerd holds that binding, so an unprivileged local process cannot
 squat it, and an adversary with docker control is already over the
 privilege boundary.
 
+The vouch requires bind-address coverage, not just the port:
+``docker ps --filter publish=`` matches by port alone, but dockerd
+holds only the published addresses — with the shipped v4-loopback-only
+publish, a resolver that returns ``::1`` for ``localhost`` would dial
+an unheld, squattable address while the port-only check vouched.
+
 All tests are hermetic: ``run_cli`` is mocked at the gate's import
-binding, so no docker CLI, containers, or network are touched. The
-package conftest neutralises the gate at the ``core.sage.client``
-binding for the REST of the suite; the wiring tests here re-patch
-that binding in-test (the later patch wins).
+binding and name resolution is pinned (``localhost`` dials
+``127.0.0.1`` unless a test scripts otherwise), so no docker CLI,
+containers, network, or host resolver state are touched. The package
+conftest neutralises the gate at the ``core.sage.client`` binding for
+the REST of the suite; the wiring tests here re-patch that binding
+in-test (the later patch wins).
 """
 
 from __future__ import annotations
@@ -32,6 +40,9 @@ from core.sage.config import SageConfig
 
 SAGE_URL = "http://localhost:8090"
 
+# The shipped compose publish shape: v4 loopback only.
+V4_BIND = "127.0.0.1:8090->8080/tcp"
+
 
 def _outcome(stdout: str = "", *, returncode: int | None = 0,
              stderr: str = "", timed_out: bool = False,
@@ -40,10 +51,27 @@ def _outcome(stdout: str = "", *, returncode: int | None = 0,
                       timed_out=timed_out, truncated=truncated)
 
 
+def _ps_line(image: str, ports: str = V4_BIND) -> str:
+    """One ``docker ps --format '{{.Image}}\\t{{.Ports}}'`` line."""
+    return f"{image}\t{ports}\n"
+
+
 @pytest.fixture(autouse=True)
-def _fresh_gate():
+def _fresh_gate(monkeypatch):
     si._cache.clear()
     si._warned.clear()
+    # Pin name resolution so verdicts never depend on the test host's
+    # hosts file: ``localhost`` dials 127.0.0.1 (the Debian-style
+    # shape; dual-stack shapes are scripted per-test by re-patching).
+    # hasattr-guarded so an implementation-reverted tree (no socket
+    # import in the gate) fails only the coverage tests, not every
+    # test in this file at fixture setup.
+    if hasattr(si, "socket"):
+        monkeypatch.setattr(
+            si.socket, "getaddrinfo",
+            lambda host, port, **kw: [
+                (si.socket.AF_INET, si.socket.SOCK_STREAM, 6, "",
+                 ("127.0.0.1", port))])
     yield
     si._cache.clear()
     si._warned.clear()
@@ -137,7 +165,7 @@ class TestLoopbackClassification:
 
 class TestGateVerdicts:
     def test_pinned_image_publishing_the_port_serves(self, docker):
-        docker.outcome = _outcome(si.compose_pinned_image("sage") + "\n")
+        docker.outcome = _outcome(_ps_line(si.compose_pinned_image("sage")))
         assert si.server_identity_ok(SAGE_URL, "sage") is True
         # The probe filtered on the URL's port.
         assert any("publish=8090" in part for part in docker.cmds[0])
@@ -145,16 +173,16 @@ class TestGateVerdicts:
     def test_digest_normalised_reference_still_vouches(self, docker):
         pinned = si.compose_pinned_image("sage")
         digest = pinned.partition("@")[2]
-        docker.outcome = _outcome(f"ghcr.io/l33tdawg/sage@{digest}\n")
+        docker.outcome = _outcome(_ps_line(f"ghcr.io/l33tdawg/sage@{digest}"))
         assert si.server_identity_ok(SAGE_URL, "sage") is True
 
     def test_repo_tag_form_of_the_pin_still_vouches(self, docker):
         pinned = si.compose_pinned_image("sage")
-        docker.outcome = _outcome(pinned.partition("@")[0] + "\n")
+        docker.outcome = _outcome(_ps_line(pinned.partition("@")[0]))
         assert si.server_identity_ok(SAGE_URL, "sage") is True
 
     def test_other_image_on_the_port_refuses(self, docker):
-        docker.outcome = _outcome("evil/lookalike:latest\n")
+        docker.outcome = _outcome(_ps_line("evil/lookalike:latest"))
         assert si.server_identity_ok(SAGE_URL, "sage") is False
 
     def test_no_container_on_the_port_refuses_and_names_remedies(
@@ -179,7 +207,7 @@ class TestGateVerdicts:
         # A head-dropped listing could have lost the squatter's line —
         # parsing consumers refuse truncated outcomes.
         docker.outcome = _outcome(
-            si.compose_pinned_image("sage") + "\n", truncated=True)
+            _ps_line(si.compose_pinned_image("sage")), truncated=True)
         assert si.server_identity_ok(SAGE_URL, "sage") is False
 
     def test_unparseable_url_refuses(self, docker):
@@ -193,6 +221,85 @@ class TestGateVerdicts:
             assert si.server_identity_ok(SAGE_URL, "sage") is False
         assert "\x1b" not in caplog.text
         assert "\\x1b" in caplog.text
+
+
+class TestBindAddressCoverage:
+    """The vouch must cover the ADDRESS the client dials, not just the
+    port: dockerd holds only the published bindings, so any other
+    loopback address remains bindable by an unprivileged squatter."""
+
+    def _dual_stack_localhost(self, monkeypatch):
+        # Fedora/Arch-style hosts file: localhost resolves to ::1
+        # first, then 127.0.0.1 — the client dials ::1 first.
+        monkeypatch.setattr(
+            si.socket, "getaddrinfo",
+            lambda host, port, **kw: [
+                (si.socket.AF_INET6, si.socket.SOCK_STREAM, 6, "",
+                 ("::1", port, 0, 0)),
+                (si.socket.AF_INET, si.socket.SOCK_STREAM, 6, "",
+                 ("127.0.0.1", port)),
+            ])
+
+    def test_v4_only_publish_refuses_dual_stack_localhost(
+            self, docker, monkeypatch, caplog):
+        self._dual_stack_localhost(monkeypatch)
+        docker.outcome = _outcome(_ps_line(si.compose_pinned_image("sage")))
+        with caplog.at_level("WARNING"):
+            assert si.server_identity_ok(SAGE_URL, "sage") is False
+        # The warning names the unheld dial address.
+        assert "::1" in caplog.text
+
+    def test_wildcard_publish_serves_dual_stack_localhost(
+            self, docker, monkeypatch):
+        self._dual_stack_localhost(monkeypatch)
+        docker.outcome = _outcome(_ps_line(
+            si.compose_pinned_image("sage"),
+            ports="0.0.0.0:8090->8080/tcp, [::]:8090->8080/tcp"))
+        assert si.server_identity_ok(SAGE_URL, "sage") is True
+
+    def test_v6_literal_against_v4_only_publish_refuses(self, docker):
+        docker.outcome = _outcome(_ps_line(si.compose_pinned_image("sage")))
+        assert si.server_identity_ok("http://[::1]:8090", "sage") is False
+        assert docker.calls == 1
+
+    def test_v4_literal_matches_the_exact_binding(self, docker):
+        docker.outcome = _outcome(_ps_line(si.compose_pinned_image("sage")))
+        assert si.server_identity_ok("http://127.0.0.1:8090", "sage") \
+            is True
+
+    def test_v4_mapped_literal_reaches_the_v4_binding(self, docker):
+        # A v6 socket dialling ::ffff:127.0.0.1 lands on the v4 stack.
+        docker.outcome = _outcome(_ps_line(si.compose_pinned_image("sage")))
+        assert si.server_identity_ok(
+            "http://[::ffff:127.0.0.1]:8090", "sage") is True
+
+    def test_unspecified_dial_reaches_the_family_loopback(self, docker):
+        # Connecting to 0.0.0.0 reaches 127.0.0.1 — a v4 loopback
+        # publish covers it.
+        docker.outcome = _outcome(_ps_line(si.compose_pinned_image("sage")))
+        assert si.server_identity_ok("http://0.0.0.0:8090", "sage") is True
+
+    def test_pinned_image_on_another_port_does_not_cover(self, docker):
+        # The ps line can carry OTHER published ports of the same
+        # container — only a binding for the dialled port vouches.
+        docker.outcome = _outcome(_ps_line(
+            si.compose_pinned_image("sage"),
+            ports="127.0.0.1:9999->8080/tcp"))
+        assert si.server_identity_ok(SAGE_URL, "sage") is False
+
+    def test_exposed_only_ports_field_does_not_cover(self, docker):
+        docker.outcome = _outcome(_ps_line(
+            si.compose_pinned_image("sage"), ports="8080/tcp"))
+        assert si.server_identity_ok(SAGE_URL, "sage") is False
+
+    def test_unresolvable_host_refuses_before_docker(
+            self, docker, monkeypatch):
+        def _fail(host, port, **kw):
+            raise OSError("resolution unavailable")
+
+        monkeypatch.setattr(si.socket, "getaddrinfo", _fail)
+        assert si.server_identity_ok(SAGE_URL, "sage") is False
+        assert docker.calls == 0
 
 
 class TestBypasses:
@@ -214,7 +321,7 @@ class TestBypasses:
 
 class TestVerdictCache:
     def test_verdict_is_cached_within_ttl(self, docker):
-        docker.outcome = _outcome(si.compose_pinned_image("sage") + "\n")
+        docker.outcome = _outcome(_ps_line(si.compose_pinned_image("sage")))
         assert si.server_identity_ok(SAGE_URL, "sage") is True
         assert si.server_identity_ok(SAGE_URL, "sage") is True
         assert docker.calls == 1
@@ -223,17 +330,17 @@ class TestVerdictCache:
         clock = [1000.0]
         monkeypatch.setattr(
             si, "time", types.SimpleNamespace(monotonic=lambda: clock[0]))
-        docker.outcome = _outcome(si.compose_pinned_image("sage") + "\n")
+        docker.outcome = _outcome(_ps_line(si.compose_pinned_image("sage")))
         assert si.server_identity_ok(SAGE_URL, "sage") is True
         clock[0] += si._GATE_TTL_SECONDS + 1.0
         # The sidecar died and a squatter took the port — the re-probe
         # must notice rather than serve the stale verdict.
-        docker.outcome = _outcome("evil/lookalike:latest\n")
+        docker.outcome = _outcome(_ps_line("evil/lookalike:latest"))
         assert si.server_identity_ok(SAGE_URL, "sage") is False
         assert docker.calls == 2
 
     def test_services_cache_independently(self, docker):
-        docker.outcome = _outcome(si.compose_pinned_image("sage") + "\n")
+        docker.outcome = _outcome(_ps_line(si.compose_pinned_image("sage")))
         assert si.server_identity_ok(SAGE_URL, "sage") is True
         docker.outcome = _outcome("")
         assert si.server_identity_ok("http://localhost:11435", "ollama") \

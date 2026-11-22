@@ -24,9 +24,14 @@ cannot squat it; and an adversary who can run containers or instruct
 dockerd is already over this machine's privilege boundary. So before
 constructing a client, this gate asks docker which image publishes the
 target port and requires it to be the compose-pinned image reference
-(the same digest pin that anchors boot-payload trust). No match — port
-squatted, container down, docker absent — and SAGE degrades to
-unavailable exactly as if the server were unreachable.
+(the same digest pin that anchors boot-payload trust), publishing on
+a binding that covers every address the URL's host dials — dockerd
+holds only the published ADDRESSES, so an image vouched by port alone
+leaves any other loopback address (``::1`` when the compose file
+publishes only ``127.0.0.1``, say) free for an unprivileged squatter
+that the client's resolver may dial first. No match — port squatted,
+dial address unheld, container down, docker absent — and SAGE
+degrades to unavailable exactly as if the server were unreachable.
 
 Scope and escape hatches:
 
@@ -54,9 +59,10 @@ needs no gate.
 
 from __future__ import annotations
 
+import socket
 import threading
 import time
-from ipaddress import ip_address
+from ipaddress import IPv6Address, ip_address
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -174,19 +180,98 @@ def _image_vouches(line: str, pinned: str) -> bool:
     return False
 
 
-def _docker_binding(port: int, service: str) -> tuple[bool, str]:
+def _connect_candidates(host: str, port: int) -> list[str]:
+    """The addresses the client could dial for *host* — an IP literal
+    dials itself; a name (``localhost``) dials whatever THIS host's
+    resolver returns for it, in any family. Empty on resolution
+    failure (callers refuse). Resolution of the loopback names in gate
+    scope is local (hosts file / NSS), never a network lookup."""
+    h = host.strip().lower().strip("[]")
+    try:
+        ip_address(h)
+        return [h]
+    except ValueError:
+        pass
+    try:
+        infos = socket.getaddrinfo(h, port, type=socket.SOCK_STREAM)
+    except OSError:
+        return []
+    out: list[str] = []
+    for info in infos:
+        addr = str(info[4][0])
+        if addr not in out:
+            out.append(addr)
+    return out
+
+
+def _published_binds(ports_field: str, port: int) -> list[str]:
+    """Bind addresses under which one ``docker ps`` Ports field
+    publishes host *port*. Entries look like
+    ``127.0.0.1:8090->8080/tcp`` (published) or ``8080/tcp``
+    (exposed-only, skipped). Range publishes (``8090-8091->…``) do not
+    exact-match and are skipped — fail-closed; the compose file pins
+    single ports."""
+    binds: list[str] = []
+    for entry in ports_field.split(","):
+        left, arrow, _ = entry.strip().partition("->")
+        if not arrow:
+            continue
+        addr, colon, pub = left.rpartition(":")
+        if not colon or pub != str(port):
+            continue
+        binds.append(addr.strip().strip("[]").lower())
+    return binds
+
+
+def _covers(bound: str, target: str) -> bool:
+    """Whether a docker publish on *bound* holds the port for a dial
+    to *target*. A dial to the unspecified address reaches the
+    loopback of its family; a v4-mapped v6 dial reaches the v4 stack.
+    An unspecified BINDING covers its own family only — dockerd
+    publishing on all interfaces lists ``0.0.0.0`` and ``::`` entries
+    separately, so this never under-covers a real all-interfaces
+    publish and never assumes dual-stack v6 sockets accept v4."""
+    try:
+        b = ip_address(bound)
+        t = ip_address(target)
+    except ValueError:
+        return False
+    if isinstance(t, IPv6Address) and t.ipv4_mapped is not None:
+        t = t.ipv4_mapped
+    if t.is_unspecified:
+        t = ip_address("127.0.0.1") if t.version == 4 else ip_address("::1")
+    if b.is_unspecified:
+        return b.version == t.version
+    if isinstance(b, IPv6Address) and b.ipv4_mapped is not None:
+        b = b.ipv4_mapped
+    return b == t
+
+
+def _docker_binding(host: str, port: int, service: str) -> tuple[bool, str]:
     """(verdict, reason) for "the compose-pinned *service* image
-    publishes loopback *port* right now". Refuses on any uncertainty:
-    no compose pin, docker missing or failing, truncated output."""
+    publishes *port* on every loopback address *host* dials right
+    now". Refuses on any uncertainty: no compose pin, unresolvable
+    host, docker missing or failing, truncated output.
+
+    The bind-address check is the point: ``--filter publish=`` matches
+    by PORT alone, but dockerd only holds the specific addresses the
+    container publishes on. The shipped compose file publishes v4
+    loopback only, so with a port-only check a host whose resolver
+    returns ``::1`` for ``localhost`` would dial an address nobody
+    holds — squattable by any unprivileged local process — while
+    docker vouched for the port."""
     pinned = compose_pinned_image(service)
     if not pinned:
         return False, (
             f"no image pin for service {service!r} in "
             f"core/sage/docker-compose.yml"
         )
+    candidates = _connect_candidates(host, port)
+    if not candidates:
+        return False, "cannot resolve a dial address for the server host"
     outcome = run_cli(
         ["docker", "ps", "--filter", f"publish={port}",
-         "--format", "{{.Image}}"],
+         "--format", "{{.Image}}\t{{.Ports}}"],
         timeout=_DOCKER_PS_TIMEOUT,
     )
     if outcome.timed_out:
@@ -199,16 +284,37 @@ def _docker_binding(port: int, service: str) -> tuple[bool, str]:
         )
     if outcome.truncated:
         return False, "docker ps output truncated"
-    images = [ln.strip() for ln in outcome.stdout.splitlines() if ln.strip()]
-    if any(_image_vouches(ln, pinned) for ln in images):
-        return True, "pinned image publishes the port"
-    if images:
-        shown = sanitise_for_terminal(", ".join(images), max_len=200)
+    images: list[str] = []
+    binds: list[str] = []
+    for ln in outcome.stdout.splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        image, _, ports_field = ln.partition("\t")
+        image = image.strip()
+        images.append(image)
+        if _image_vouches(image, pinned):
+            binds.extend(_published_binds(ports_field, port))
+    if not any(_image_vouches(img, pinned) for img in images):
+        if images:
+            shown = sanitise_for_terminal(", ".join(images), max_len=200)
+            return False, (
+                f"port {port} is published by {shown!r}, not the pinned "
+                f"{service!r} image"
+            )
+        return False, f"no docker container publishes port {port}"
+    uncovered = [
+        c for c in candidates
+        if not any(_covers(b, c) for b in binds)
+    ]
+    if uncovered:
+        shown = sanitise_for_terminal(", ".join(uncovered), max_len=200)
         return False, (
-            f"port {port} is published by {shown!r}, not the pinned "
-            f"{service!r} image"
+            f"the pinned {service!r} image publishes port {port}, but not "
+            f"on {shown} — an address the server host dials; dockerd does "
+            f"not hold that binding, so it is squattable"
         )
-    return False, f"no docker container publishes port {port}"
+    return True, "pinned image publishes the port on the dialled address"
 
 
 def _warn_once(key: tuple[str, int, str], reason: str) -> None:
@@ -257,7 +363,7 @@ def server_identity_ok(url: str, service: str) -> bool:
         hit = _cache.get(key)
         if hit is not None and now < hit[1]:
             return hit[0]
-    ok, reason = _docker_binding(port, service)
+    ok, reason = _docker_binding(host, port, service)
     with _cache_lock:
         _cache[key] = (ok, time.monotonic() + _GATE_TTL_SECONDS)
     if not ok:
