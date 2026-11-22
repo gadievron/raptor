@@ -526,7 +526,8 @@ def _scan_codeql_config(path: Path) -> FileScan:
 
 def _scan_repo(
     resolved_path: str,
-    target_fd: int | None = None,
+    *,
+    target_fd: int | None,
 ) -> tuple[tuple[FileScan, ...], bool]:
     """Pure scan: returns (scans, any_blocking). Deliberately NOT
     cached. The pack-file set comes from a recursive walk, so no cheap
@@ -545,7 +546,12 @@ def _scan_repo(
     (see :func:`check_repo_codeql_trust`): the self-recognition gate
     borrows it, so the trusted-self verdict binds to the same inode
     the caller's divergence bracket checks — no second target open for
-    a swap to re-aim between the gate and the bracket."""
+    a swap to re-aim between the gate and the bracket. Required (no
+    default): a call site that forgot the fd would silently fall back
+    to the gate's own-open shape — the spelling re-walk the held-fd
+    protocol exists to remove. Pass ``target_fd=None`` only to run the
+    pure walk with no held fd (tests exercising cap/parse behaviour).
+    """
     target = Path(resolved_path)
     # Skip RAPTOR's own repo — RAPTOR ships codeql packs under
     # packages/llm_analysis/codeql_packs/ that would always flag
@@ -736,13 +742,18 @@ def check_repo_codeql_trust(
     # without rewriting os.walk; a walk-aimed double swap is a
     # documented residual, dominated by the strictly easier post-return
     # single swap this bracket narrows — and `codeql database create`
-    # re-checks dispatch-adjacent).
+    # re-checks dispatch-adjacent). On a platform whose os lacks dir_fd
+    # support the gate's back-link reads raise NotImplementedError
+    # inside its catch-all → not-self → the scan RUNS (a RAPTOR
+    # worktree target then blocks on RAPTOR's own shipped packs —
+    # fail-closed, never fail-open; the exact ``target == _RAPTOR_DIR``
+    # skip needs no dir_fd and survives).
     target_fd, refuse = open_supplied_target(
         resolved, trust_override, subject=_SCAN_SUBJECT)
     if target_fd is None:
         return refuse
     try:
-        scans, any_blocking = _scan_repo(resolved, target_fd)
+        scans, any_blocking = _scan_repo(resolved, target_fd=target_fd)
         if scans:
             target = Path(resolved)
             # Rendering (core.security._trust_common.render_scan_report)

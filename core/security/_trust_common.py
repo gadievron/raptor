@@ -138,7 +138,9 @@ _FD_OBSERVE_FLAGS = (
 # gate's ``.claude`` component open. With O_NOFOLLOW and O_DIRECTORY
 # together, a symlink final component and anything else that is not a
 # directory are both refused at the open (Linux surfaces both as
-# ENOTDIR once O_DIRECTORY is in the set).
+# ENOTDIR once O_DIRECTORY is in the set; kernels that report the
+# symlink case as ELOOP instead are handled by the callers' errno
+# branches).
 _DIR_OBSERVE_FLAGS = _FD_OBSERVE_FLAGS | getattr(os, "O_DIRECTORY", 0)
 
 
@@ -196,7 +198,12 @@ def is_registered_worktree_of_self(
     needs the non-default ``user_allow_other``, without which every
     non-mounter access fails EACCES → fail-closed), so foreign
     ownership on either object is proof the object is not the
-    registered worktree, whatever its contents claim. The anchor is
+    registered worktree, whatever its contents claim. The trust domain
+    this proves membership of assumes no hostile writer shares the
+    operator's uid: a same-uid actor satisfies every anchor by
+    construction — and equally needs none of this, already holding
+    write access to the registered worktree the skip trusts by
+    definition. The anchor is
     deliberately the entry DIRECTORY, not the ``worktrees/<name>/
     gitdir`` file: ``git worktree move``/``repair`` rewrite that file
     (in place on some git versions, via lockfile-rename — re-owning it
@@ -572,8 +579,17 @@ def open_supplied_target(
     observation to that fd — self-recognition (borrowed via the gate's
     ``target_fd``), config evidence reads (``dir_fd``), and the final
     :func:`supplied_target_diverged` identity bracket. One inode backs
-    the whole verdict; a spelling swapped mid-check can substitute
-    nothing.
+    the whole verdict: a spelling swapped mid-check cannot substitute
+    a different ROOT. (Mutations inside the unchanged root — a child
+    entry re-aimed after its own fd opened, content rewritten in place
+    — are a separate lane, invisible to any root-identity check and
+    dominated by the documented post-return window; see
+    :func:`supplied_target_diverged`.)
+
+    The O_RDONLY open requires the read bit on a directory target: a
+    search-only (``--x``) directory that the historical lstat-and-open
+    walk scanned clean is refused here fail-closed, same lane as an
+    unreadable root — recoverable via the trust override.
 
     Returns ``(fd, refuse)`` with the same contract shape as
     :func:`resolve_supplied_target`: an open fd (caller owns closing
@@ -612,9 +628,13 @@ def supplied_target_diverged(
     ``os.lstat(resolved)`` identity against the held fd's fstat —
     lstat deliberately, so a symlink raced into the spelling diverges
     categorically (its own inode never matches the held directory's)
-    instead of being followed to wherever it aims. Any mismatch, or
-    any error on either observation, means the directory the evidence
-    came from is no longer what the spelling denotes: refuse.
+    instead of being followed to wherever it aims. Identity is
+    ``(st_dev, st_ino)``, both conjuncts deliberately: an ino-only
+    match would wave through a same-numbered object on a different
+    filesystem (a bind/overlay view swapped in at the spelling). Any
+    mismatch, or any error on either observation, means the directory
+    the evidence came from is no longer what the spelling denotes:
+    refuse.
 
     Conjunctive and refuse-only by construction — it runs only after
     the evidence scan and can never wave anything through; the trust
@@ -623,7 +643,10 @@ def supplied_target_diverged(
     window: after the bracket there is still no fd handoff into the
     spawned tool, but a swap must now land in the far smaller gap
     between this lstat and the consumer's use instead of anywhere
-    during the scan.
+    during the scan. The bracket pins the ROOT identity only —
+    same-inode child mutations (a ``.claude`` entry re-aimed after its
+    fd opened, config bytes rewritten in place) are invisible to it,
+    the same class as, and dominated by, that post-return window.
     """
     try:
         st_now = os.lstat(resolved)

@@ -38,6 +38,8 @@ _SHARED_NAMES = [
     ("FileScan", "FileScan"),
     ("_RAPTOR_DIR", "RAPTOR_DIR"),
     ("_is_registered_worktree_of_self", "is_registered_worktree_of_self"),
+    ("open_supplied_target", "open_supplied_target"),
+    ("supplied_target_diverged", "supplied_target_diverged"),
 ]
 
 
@@ -78,6 +80,10 @@ class TestNoPrivateReDerivation:
         "_RAPTOR_DIR = Path(",
         "def _read_git_link(",
         "def _is_registered_worktree_of_self(",
+        "def open_supplied_target(",
+        "def supplied_target_diverged(",
+        "_FD_OBSERVE_FLAGS = ",
+        "_DIR_OBSERVE_FLAGS = ",
     )
 
     @pytest.mark.parametrize("mod", [cc, ql], ids=["cc_trust", "codeql_trust"])

@@ -87,18 +87,18 @@ def _mk_linked_worktree(base: Path, name: str = "wt1") -> tuple[Path, Path, Path
     return root, wt, entry
 
 
-def _arm_swap_after_target_open(
-    monkeypatch, resolved: Path, replacement: Path, base: Path,
+def _arm_action_after_target_open(
+    monkeypatch, resolved: Path, action,
 ) -> dict[str, bool]:
     """Interpose at ``_trust_common.os.open``: immediately after the
-    check's held-fd open of the resolved target, rename the observed
-    directory aside and rename ``replacement`` in at the spelling."""
+    check's held-fd open of the resolved target, run ``action`` once —
+    the deterministic equivalent of winning the race against the rest
+    of the check."""
     state = {"swapped": False}
 
     def _swap() -> None:
         state["swapped"] = True
-        os.rename(resolved, base / "aside")
-        os.rename(replacement, resolved)
+        action()
 
     real_open = os.open
 
@@ -114,6 +114,18 @@ def _arm_swap_after_target_open(
 
     patch_module_attribute(monkeypatch, _trust_common, "os", "open", fake_open)
     return state
+
+
+def _arm_swap_after_target_open(
+    monkeypatch, resolved: Path, replacement: Path, base: Path,
+) -> dict[str, bool]:
+    """Classic swap shape: rename the observed directory aside and
+    rename ``replacement`` in at the spelling."""
+    def _swap() -> None:
+        os.rename(resolved, base / "aside")
+        os.rename(replacement, resolved)
+
+    return _arm_action_after_target_open(monkeypatch, resolved, _swap)
 
 
 class TestCcDivergenceBracket:
@@ -139,6 +151,39 @@ class TestCcDivergenceBracket:
             "divergence window: a clean verdict was released for a "
             "spelling that stopped denoting the observed inode "
             "mid-check"
+        )
+        assert "changed during" in capsys.readouterr().out
+
+    def test_symlink_back_to_held_dir_at_spelling_refuses(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """THE LSTAT DISCIPLINE: move the observed directory aside and
+        plant a SYMLINK back to it at the spelling. A stat-based
+        bracket follows the link, lands on the very inode the held fd
+        observes, compares EQUAL, and releases the clean verdict
+        against a spelling that is now a trivially re-aimable symlink
+        — the consumer dispatches through it after the check. The
+        lstat bracket compares the link's own inode: refuse."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        resolved = repo.resolve()
+        aside = tmp_path / "aside"
+
+        def _plant_symlink_back() -> None:
+            os.rename(resolved, aside)
+            os.symlink(aside, resolved)
+
+        state = _arm_action_after_target_open(
+            monkeypatch, resolved, _plant_symlink_back)
+        verdict = cc.check_repo_claude_trust(str(repo), trust_override=False)
+        assert state["swapped"], (
+            "probe wiring: the check never opened the target"
+        )
+        assert verdict is True, (
+            "stat-shaped bracket: a symlink planted at the spelling "
+            "was followed back to the held inode and the clean verdict "
+            "released — the spelling the consumer dispatches through "
+            "is re-aimable"
         )
         assert "changed during" in capsys.readouterr().out
 
@@ -224,6 +269,28 @@ class TestCcConfigDirDiscipline:
         assert cc.check_repo_claude_trust(
             str(repo), trust_override=False) is False
         assert capsys.readouterr().out == ""
+
+    def test_search_only_target_root_refused(self, tmp_path, capsys):
+        """Pin for the held-fd open's read-bit requirement: a
+        search-only (``--x``) directory target — which the historical
+        lstat-plus-child-open walk scanned CLEAN (those syscalls need
+        only the search bit) — is refused at ``open_supplied_target``'s
+        O_RDONLY open. Fail-closed verdict flip, recoverable with the
+        trust override like every unreadable-root refusal."""
+        repo = tmp_path / "repo"
+        (repo / ".claude").mkdir(parents=True)
+        (repo / ".claude" / "settings.json").write_text(_BENIGN_SETTINGS)
+        os.chmod(repo, 0o311)
+        try:
+            verdict = cc.check_repo_claude_trust(
+                str(repo), trust_override=False)
+        finally:
+            os.chmod(repo, 0o755)
+        assert verdict is True, (
+            "search-only target root: the O_RDONLY held-fd open must "
+            "refuse fail-closed, not scan through child opens"
+        )
+        assert "cannot examine" in capsys.readouterr().out
 
     def test_dir_fd_unsupported_platform_fails_closed(
         self, tmp_path, monkeypatch, capsys,

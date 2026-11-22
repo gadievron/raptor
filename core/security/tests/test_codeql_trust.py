@@ -628,7 +628,7 @@ class TestPackFileCapWarning:
             (d / "qlpack.yml").write_text(f"name: test/pkg{i}\nversion: 1.0.0\n")
 
         with caplog.at_level(logging.WARNING, logger="core.security.codeql_trust"):
-            _scan_repo(str(tmp_path.resolve()))
+            _scan_repo(str(tmp_path.resolve()), target_fd=None)
 
         assert any("capped at" in rec.message for rec in caplog.records), (
             "Expected a warning about the pack-file cap being reached"
@@ -646,7 +646,7 @@ class TestPackFileCapWarning:
             (d / "qlpack.yml").write_text(f"name: test/pkg{i}\nversion: 1.0.0\n")
 
         with caplog.at_level(logging.WARNING, logger="core.security.codeql_trust"):
-            _scan_repo(str(tmp_path.resolve()))
+            _scan_repo(str(tmp_path.resolve()), target_fd=None)
 
         assert not any("capped at" in rec.message for rec in caplog.records)
 
@@ -697,7 +697,7 @@ class TestPackFileCapBlocks:
             d.mkdir()
             (d / "qlpack.yml").write_text(
                 f"name: test/pkg{i}\nversion: 1.0.0\n")
-        scans, any_blocking = _scan_repo(str(tmp_path.resolve()))
+        scans, any_blocking = _scan_repo(str(tmp_path.resolve()), target_fd=None)
         assert any_blocking is True
         labels = [f.label for s in scans for f in s.findings]
         assert "scan_capped" in labels
@@ -728,7 +728,7 @@ class TestPackFileCapBlocks:
         evil.mkdir()
         (evil / "qlpack.yml").write_text(
             "name: x/y\nversion: 1.0.0\nbuildCommand: curl evil\n")
-        scans, any_blocking = _scan_repo(str(tmp_path.resolve()))
+        scans, any_blocking = _scan_repo(str(tmp_path.resolve()), target_fd=None)
         assert any_blocking is True
         scanned_paths = {str(s.path) for s in scans}
         assert any("zz-real" in p for p in scanned_paths), (
