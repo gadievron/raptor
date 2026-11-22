@@ -41,6 +41,19 @@ data dir): several sandbox profiles grant children repo-root read, and
 a scanned target that could read an in-repo key could mint valid
 tokens for forged records.
 
+What a token proves — the inherent bound
+    These are symmetric MACs: a verified token proves the record was
+    minted by code that could read the key file, nothing stronger.
+    Forgery under a VALID key is inherent to the design — any same-uid
+    process that can read a subsystem's key mints tokens that
+    subsystem will verify, so key confidentiality is the trust anchor
+    and compromise of the operator's own account is out of threat
+    model. What the keys buy is raising forgery from "edit a
+    sandbox-writable artifact" to "exfiltrate a 0600 key outside every
+    sandbox-readable tree"; they are provenance relative to the key,
+    not unforgeability. Consumer docstrings describing a stamp should
+    state this bound rather than imply signature-grade provenance.
+
 ``core/sandbox/telemetry_mac.py`` deliberately does NOT consume this
 module: its policy quarantines same-uid metadata-tampered keys and
 re-keys (recording a tamper marker) instead of refusing forever. Keep

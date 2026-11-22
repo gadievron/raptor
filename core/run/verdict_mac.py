@@ -51,7 +51,12 @@ Key
     (``core.security.mac_key`` doctrine: never unify key files). No
     rotation: deleting the key demotes every stamped claim to absent
     and new mints re-key lazily; no other subsystem's trust surface
-    is touched.
+    is touched. Forgery under a VALID key is inherent to the
+    symmetric design (the "What a token proves" bound in
+    ``core.security.mac_key``): a same-uid process that can read the
+    key file mints claims this module will verify. The stamp raises
+    override forgery from editing a sandbox-writable findings
+    artifact to stealing that key — provenance, not unforgeability.
 """
 
 from __future__ import annotations
