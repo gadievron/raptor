@@ -343,6 +343,12 @@ class TestOrphanRecovery:
         )
         return bool(q.stdout.strip())
 
+    # Honest schedule ~6s and irreducible: the 5s in-container
+    # `timeout -s KILL` bound IS the subject, plus daemon start/stop
+    # latency. 20s = the wrapper bound with 3x daemon-latency headroom;
+    # a run hitting 20s means daemon distress worth flagging, still far
+    # under the 90s witness timeout the test exists to stay off.
+    @pytest.mark.wall_budget(20)
     def test_sigkilled_client_orphan_self_terminates(
         self, runtime, tmp_path, monkeypatch,
     ):

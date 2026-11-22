@@ -24,6 +24,7 @@ from unittest.mock import patch
 import pytest
 
 from core.config import RaptorConfig
+from core.sandbox import calibrated_hosts
 from core.testing.logging_state import owned_log_handler
 from core.testing.module_state import isolated_module_state
 
@@ -858,6 +859,40 @@ def _private_discovery_patch_target(monkeypatch):
     """Resolve unittest decorators late against this test's private scanner view."""
     monkeypatch.setitem(sys.modules, "_raptor_scanner_semgrep_parallel_mock_target", _scanner_mod)
     patch_module_attribute(monkeypatch, _scanner_mod, "shutil", "which", _scanner_mod.shutil.which)
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_runtime_probe(monkeypatch):
+    """Keep the semgrep runtime probe out of these mocked tests.
+
+    ``run_single_semgrep`` resolves the real runtime before it reaches
+    the mocked ``run`` seam: ``resolve_snap_runtime`` plus
+    ``scope_isolation_available``, the latter spawning a real
+    ``semgrep --version`` subprocess (~5s of semgrep CLI startup) once
+    per process — paid by the first test in every xdist worker that
+    enters this module. Nothing here tests the probe itself (the
+    scope-warning test pins its own ``scope_isolation_available``
+    in-test, which overrides this fixture), so pin both answers.
+
+    The proxy-hosts ladder is the other live escape: the registry-pack
+    path calls ``proxy_hosts_for_semgrep`` → ``calibrated_profile``,
+    which runs a real sandboxed calibration probe (~5s, memoised
+    per-process — again paid once per xdist worker). ``_proxy_hosts``
+    holds the shared ``core.sandbox.calibrated_hosts`` module object
+    and resolves ``calibrated_profile`` at call time, so pinning the
+    attribute here reaches the freshly exec'd per-call ``_ph``
+    instance too; a None profile falls through to the static-default
+    layer with no probe (the ladder's own suite pins the real thing).
+    """
+    monkeypatch.setattr(
+        _scanner_mod.semgrep_pkg, "resolve_snap_runtime",
+        lambda binary: None)
+    monkeypatch.setattr(
+        _scanner_mod.semgrep_pkg, "scope_isolation_available",
+        lambda binary=None: True)
+    monkeypatch.setattr(
+        calibrated_hosts, "calibrated_profile",
+        lambda *args, **kwargs: None)
 
 
 def test_sequential_worker_setup_refusal_retains_sibling_results(tmp_path, monkeypatch):

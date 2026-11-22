@@ -529,6 +529,12 @@ class TestMountsLatchLive:
     def test_forged_mounts_table_is_occluded(self, tmp_path):
         _run_probe(tmp_path, _MAGIC_CHECK_PROBE, "MAGIC-OCCLUDED")
 
+    # Honest schedule ~6s: the probe scans a live churning group and
+    # then re-forges the task tree, both real namespace work — stable
+    # at that cost loaded or unloaded. 15s = 2.5x headroom for loaded
+    # runners while still flagging a wedged probe long before the
+    # namespace's own kill backstop.
+    @pytest.mark.wall_budget(15)
     def test_post_scan_task_forge_cannot_verify(self, tmp_path):
         _run_probe(tmp_path, _POST_SCAN_TASK_FORGE_PROBE,
                    "POST-SCAN-TASK-FORGE-CAUGHT")
