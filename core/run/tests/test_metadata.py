@@ -701,10 +701,41 @@ class TestRunCoverageSnapshot(_ProjectRunCase):
         # Regression: the merge used to live only in the libexec shim and
         # resolved the project via the .active symlink (a registry JSON
         # file, never a directory), so completed audit runs reported 0%
-        # LLM coverage.
+        # LLM coverage. The entry is written via append_entry — the live
+        # /audit write path, which stamps the row's provenance MAC; the
+        # store import demotes unstamped rows to machine tier (see
+        # test_planted_journal_row_imports_at_machine_tier).
+        from core.coverage.journal import (
+            INDEX_FILENAME,
+            ReviewJournalEntry,
+            append_entry,
+        )
+        from core.coverage.store import CoverageStore
+        with TemporaryDirectory() as d:
+            proj = Path(d)
+            (proj / "checklist.json").write_text(self._checklist())
+            run = proj / "audit-20260821_120000"
+            with self._as_project(proj):
+                start_run(run, "audit")
+            append_entry(run, ReviewJournalEntry(
+                ts="2026-08-21T00:00:00Z", run_id=run.name,
+                file="a.c", function="f1", verdict="clean",
+                source_hash="abc123def456"))
+            complete_run(run)
+
+            self.assertTrue((proj / INDEX_FILENAME).exists())
+            store = CoverageStore(proj / "coverage.json")
+            self.assertEqual(store.who_checked_function("a.c", 1, 20),
+                             {"audit": "full"})
+
+    def test_planted_journal_row_imports_at_machine_tier(self):
+        # The forged twin: a raw unstamped journal row (verdict: clean)
+        # hand-written into the sandbox-writable run dir — exactly what
+        # a scanned target can plant — must not earn review-grade store
+        # coverage at completion. Examination evidence is kept at
+        # machine tier; the function re-earns on its next live review.
         import json
 
-        from core.coverage.journal import INDEX_FILENAME
         from core.coverage.store import CoverageStore
         with TemporaryDirectory() as d:
             proj = Path(d)
@@ -718,10 +749,9 @@ class TestRunCoverageSnapshot(_ProjectRunCase):
             (run / "review-journal.jsonl").write_text(json.dumps(entry) + "\n")
             complete_run(run)
 
-            self.assertTrue((proj / INDEX_FILENAME).exists())
             store = CoverageStore(proj / "coverage.json")
             self.assertEqual(store.who_checked_function("a.c", 1, 20),
-                             {"audit": "full"})
+                             {"audit:machine": "full"})
 
     def test_interrupt_merges_review_journal_into_index(self):
         # An interrupted run's verdicts are real reviews — they must

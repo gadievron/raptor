@@ -305,11 +305,13 @@ def import_journal(
 
     Returns the number of function-level marks applied.
     """
+    from . import journal_mac
     from .journal import (
         entry_earns_function_coverage,
         entry_producer,
         load_index,
     )
+    from .registry import CATEGORY_LLM, DEPTH_ANALYSED, classify
 
     try:
         entries = load_index(project_dir)
@@ -334,6 +336,7 @@ def import_journal(
     ranges = _function_ranges(checklist, normalise_hi=True)
 
     marks = 0
+    demoted = 0
     for entry in entries.values():
         if not entry_earns_function_coverage(entry):
             # The shared screening rule (journal.py): error rows are
@@ -361,8 +364,34 @@ def import_journal(
         # heuristic — both live in ``journal.entry_producer`` so the
         # coverage importer and the audit gap fold agree on which
         # producer an entry belongs to.
-        store.mark(entry.file, lo, hi, entry_producer(entry))
+        producer = entry_producer(entry)
+        # Row-authority tiering, same two tiers as the sibling
+        # functions_analysed import above and the audit gap fold:
+        # the journal index lives in a target-writable project
+        # directory, and this mark is a durable review-suppression
+        # surface — without the gate a planted unstamped row
+        # (verdict: clean, producer: audit) cleared the function
+        # from every store-derived gap view at review grade.
+        # MAC-verified entries mark under the producer label; every
+        # other entry demotes to ``<producer>:machine`` — kept as
+        # examination evidence, review credit withheld. Honest
+        # unstamped rows (pre-MAC legacy) re-earn on their next live
+        # review, which stamps. Only review-grade labels are tiered.
+        effective = producer
+        if (classify(producer) == (CATEGORY_LLM, DEPTH_ANALYSED)
+                and journal_mac.entry_provenance(entry)
+                != journal_mac.ROW_VERIFIED):
+            effective = f"{producer}:machine"
+            demoted += 1
+        store.mark(entry.file, lo, hi, effective)
         marks += 1
+    if demoted:
+        logger.info(
+            "coverage import: %d of %d journal entr(ies) imported at "
+            "machine tier (unverified provenance) — examination "
+            "evidence kept, review credit withheld; affected "
+            "functions re-earn on their next live review, which "
+            "stamps", demoted, marks)
     return marks
 
 

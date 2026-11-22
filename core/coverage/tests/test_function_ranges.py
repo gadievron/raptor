@@ -136,3 +136,80 @@ def test_import_journal_consistency_census_entries_do_not_mark(tmp_path):
 
     assert marks == 0
     assert not store.tool_coverage_of_range("src/a.py", 30, 30)
+
+
+def test_import_journal_row_authority_tiering(tmp_path):
+    """The journal index lives in a target-writable project directory
+    and the store mark is a durable review-suppression surface: a
+    planted unstamped clean row (verdict: clean, producer: audit) must
+    import at machine tier only, while a MAC-verified entry keeps the
+    review-grade producer label — same two tiers as the
+    functions_analysed import and the audit gap fold."""
+    from core.coverage import journal_mac
+    from core.coverage.journal import ReviewJournalEntry
+    from core.coverage.store import CoverageStore
+
+    genuine = ReviewJournalEntry(
+        ts="2026-01-01T00:00:00Z", run_id="audit-1",
+        file="src/a.py", function="f", verdict="clean",
+        source_hash="", body="real review", producer="audit",
+    )
+    row = genuine.to_dict()
+    row.pop(journal_mac.TOKEN_KEY, None)
+    token = journal_mac.mint_row(row)
+    assert token, "test environment must have a usable journal MAC key"
+    genuine.integrity = token
+    assert journal_mac.entry_provenance(genuine) == journal_mac.ROW_VERIFIED
+
+    planted = ReviewJournalEntry(
+        ts="2026-01-01T00:00:00Z", run_id="audit-1",
+        file="src/a.py", function="g", verdict="clean",
+        source_hash="", body="looks safe", producer="audit",
+    )
+
+    store = CoverageStore(tmp_path / "coverage.json")
+    with mock.patch(
+        "core.coverage.journal.load_index",
+        return_value={genuine.key: genuine, planted.key: planted},
+    ):
+        marks = import_journal(store, tmp_path, _CHECKLIST)
+
+    # Both entries still mark (examination evidence is kept) …
+    assert marks == 2
+    assert "audit" in store.tool_coverage_of_range("src/a.py", 10, 20)
+    # … but the planted row's mark grades scanned-depth only.
+    tools_g = store.tool_coverage_of_range("src/a.py", 30, 30)
+    assert "audit" not in tools_g
+    assert "audit:machine" in tools_g
+
+
+def test_import_journal_tampered_entry_demotes(tmp_path):
+    """A token minted for different content (verdict flipped after the
+    stamp) is the tampered tier — same machine-grade authority."""
+    from core.coverage import journal_mac
+    from core.coverage.journal import ReviewJournalEntry
+    from core.coverage.store import CoverageStore
+
+    entry = ReviewJournalEntry(
+        ts="2026-01-01T00:00:00Z", run_id="audit-1",
+        file="src/a.py", function="f", verdict="suspicious",
+        source_hash="", body="real review", producer="audit",
+    )
+    row = entry.to_dict()
+    row.pop(journal_mac.TOKEN_KEY, None)
+    token = journal_mac.mint_row(row)
+    assert token
+    entry.integrity = token
+    entry.verdict = "clean"
+
+    store = CoverageStore(tmp_path / "coverage.json")
+    with mock.patch(
+        "core.coverage.journal.load_index",
+        return_value={entry.key: entry},
+    ):
+        marks = import_journal(store, tmp_path, _CHECKLIST)
+
+    assert marks == 1
+    tools = store.tool_coverage_of_range("src/a.py", 10, 20)
+    assert "audit" not in tools
+    assert "audit:machine" in tools
