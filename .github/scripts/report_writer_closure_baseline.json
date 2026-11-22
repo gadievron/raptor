@@ -445,15 +445,6 @@
     "libexec/raptor-run-feasibility::main::unsanitised_llm_value::id": {
       "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
-    "libexec/raptor-run-sandboxed::<module>::unsanitised_llm_value::data": {
-      "note": "this tool's documented contract IS verbatim relay of the sandboxed child's stdout/stderr to the caller — scrubbing here would corrupt captured tool output; consumers own their render"
-    },
-    "libexec/raptor-run-sandboxed::<module>::unsanitised_llm_value::stderr": {
-      "note": "this tool's documented contract IS verbatim relay of the sandboxed child's stdout/stderr to the caller — scrubbing here would corrupt captured tool output; consumers own their render"
-    },
-    "libexec/raptor-run-sandboxed::<module>::unsanitised_llm_value::stdout": {
-      "note": "this tool's documented contract IS verbatim relay of the sandboxed child's stdout/stderr to the caller — scrubbing here would corrupt captured tool output; consumers own their render"
-    },
     "libexec/raptor-sage-mcp-guard::main::unsanitised_llm_value::out": {
       "note": "guard relays the wrapped MCP server's framed protocol stream — byte-exact by contract (JSON-RPC framing), not a render surface"
     },
