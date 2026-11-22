@@ -78,3 +78,25 @@ class TestRunSurfaceKwarg:
             )
         assert r.returncode == 0
         assert len(r.stdout) == 100000
+
+
+def test_untrusted_forwards_capture_ceiling_without_relaxing_policy(monkeypatch, tmp_path):
+    from core.sandbox import context
+
+    captured = {}
+
+    def run(cmd, **kwargs):
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(context, "_require_userns_or_optin", lambda *a, **kw: False)
+    monkeypatch.setattr(context, "run", run)
+    context.run_untrusted(
+        ["owned-tool"], target=str(tmp_path), capture_output=True,
+        max_capture_bytes=4096,
+    )
+    assert captured["max_capture_bytes"] == 4096
+    assert captured["block_network"] is True
+    assert captured["restrict_reads"] is True
+    assert captured["strip_trust_markers"] is True
+    assert captured["start_new_session"] is True

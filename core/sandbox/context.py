@@ -10722,6 +10722,8 @@ def run_untrusted(cmd: list[str], *, target: str | None = None, output: str | No
     # rationale comment below.
     _UNTRUSTED_ALLOWED_KWARGS = frozenset({
         "env", "cwd", "timeout", "capture_output", "text",
+        # Bounds parent capture memory without changing isolation policy.
+        "max_capture_bytes",
         "encoding", "errors",
         "stdin", "input", "pass_fds",
         "caller_label",
