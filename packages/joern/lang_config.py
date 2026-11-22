@@ -109,7 +109,12 @@ GO = LangProfile(
         "Get", "Post", "Do", "NewRequest",
         "Unmarshal", "Decode", "NewDecoder",
     ),
-    joern_parse_language="gosrc",
+    # joern-parse's language enum calls the Go frontend "golang"
+    # (--list-languages), NOT "gosrc" — the frontend BINARY is named
+    # gosrc2cpg, which is how the wrong value slipped in. Pinning
+    # "gosrc" made every Go build die in joern-parse's frontend
+    # lookup (None.get) before the frontend ever ran.
+    joern_parse_language="golang",
 )
 
 # Seed sink lists for the three frontends below are capped at 9 names
@@ -176,6 +181,7 @@ _PROFILES: dict[str, LangProfile] = {
     "ts": JAVASCRIPT,
     "go": GO,
     "gosrc": GO,
+    "golang": GO,
     "kotlin": KOTLIN,
     "csharp": CSHARP,
     "csharpsrc": CSHARP,
