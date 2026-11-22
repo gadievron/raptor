@@ -169,6 +169,49 @@ class TestFallbackWriterStamps:
 
 
 class TestPlantedCacheShapes:
+    def test_wrong_typed_cache_reimports_without_native_tool(
+            self, script_mod, tmp_path: Path, monkeypatch):
+        from core.hash import sha256_file
+        from packages.ghidra.model import REDatabase
+        import core.inventory.binary_builder as binary_builder
+        import packages.ghidra.objdump_import as objdump_import
+        import packages.ghidra.r2_import as r2_import
+
+        monkeypatch.delenv("RAPTOR_DIR", raising=False)
+        out = tmp_path / "out"
+        out.mkdir()
+        target = tmp_path / "prog"
+        target.write_bytes(b"\x7fELF" + b"\0" * 12)
+        cached = out / "re-database.json"
+        cached.write_text(json.dumps({
+            "source_tool": "r2", "binary_path": 12345,
+            "functions": [], "metadata": {},
+        }))
+        fresh = REDatabase(source_tool="objdump", binary_path=str(target))
+        imported = []
+
+        def import_owned_binary(path):
+            imported.append(path)
+            return fresh
+
+        def build_owned_checklist(db, *, binary_path, include_auto_named, context_map):
+            assert db is fresh
+            assert binary_path == target
+            return {"total_items": 0, "binary_stats": {}}
+
+        # The cache identity check and script I/O are real; native analysis
+        # belongs to the end-to-end slow case below.
+        monkeypatch.setattr(r2_import, "r2_available", lambda: False)
+        monkeypatch.setattr(objdump_import, "import_binary_objdump", import_owned_binary)
+        monkeypatch.setattr(binary_builder, "build_binary_checklist", build_owned_checklist)
+        script_mod._build_binary_checklist(target, out)
+        assert imported == [target]
+        written = json.loads(cached.read_text())
+        assert written["binary_path"] == str(target)
+        assert written["metadata"]["binary_sha256"] == sha256_file(target)
+        assert json.loads((out / "checklist.json").read_text())["total_items"] == 0
+
+    @pytest.mark.slow
     @pytest.mark.parametrize("stale_launch", [False, True])
     def test_wrong_typed_binary_path_doc_completes(self, tmp_path: Path, monkeypatch, stale_launch):
         """End to end: a planted cache with a wrong-TYPED binary_path

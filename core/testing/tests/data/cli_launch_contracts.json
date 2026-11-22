@@ -360,7 +360,7 @@
     "core/http/tests/test_fetch_attachment_cli.py": "d3ee499b43599f33d3486d64de82c0be5353537daf0c25fab2bb12536b48b259",
     "core/inventory/tests/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "core/inventory/tests/conftest.py": "6a1412ddd21108efb4e3658192313ad3b2a703f5f861ee82b4c10cf954898888",
-    "core/inventory/tests/test_build_checklist_script_io.py": "a3f9d6eba27835973569f903d08a4dbabb8b21424e5ac79e3fc7f63c8a826d9f",
+    "core/inventory/tests/test_build_checklist_script_io.py": "2f44841841856498de151aff91819b0d187d7ecda05c3c4c137417df6f53bbc0",
     "core/inventory/tests/test_builder_stall_retry.py": "d62704d90f0dd37b200acaa1a851ec5c4c144b6dc5dd583b02e72e2bbf9d2efd",
     "core/inventory/tests/test_pool_teardown.py": "67414cd1174eb4e7ecdaf0dcfd8450e65dc9a9dc1ad2c4fc64313cd2bc351cc7",
     "core/iris/tests/conftest.py": "edef0ff7cba3c20393d2f6de69e65fc89d27b7c14593b87b5bcb6c146203a2dd",
