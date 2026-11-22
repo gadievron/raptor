@@ -23,6 +23,7 @@ from core.audit.evidence_grade import (
     grade_review_result,
     is_tool_evidence,
     is_verification_evidence,
+    iter_verification_receipts,
     sanitize_llm_evidence_tool,
 )
 
@@ -789,6 +790,72 @@ class TestSanitizedCompositeOrdering:
         assert is_verification_evidence(
             "smt:check-overflow+llm-claimed:smt",
         )
+
+
+class TestCompositePoisonParity:
+    """A composite ``is_tool_evidence`` rejects as model-authored must
+    never carry the strictly greater merge-tie authority of
+    ``is_verification_evidence``.
+
+    Before the ``_poisons_verification`` pre-scan, receipt iteration
+    judged each ``+``-part on its own, so a poisoned composite
+    ("semgrep+manual", "frida:token-at-sink+triage:batch") failed
+    receipt admission yet still broke merge ties. No pipeline producer
+    mints these shapes — the promotion alarm stays quiet on legitimate
+    runs — so only laundered stamps lose anything here.
+    """
+
+    _POISONED = (
+        # _POISON_NAMESPACES next to a genuine receipt.
+        "semgrep+triage:batch",
+        "frida:token-at-sink+triage:batch",
+        "semgrep+git_history",
+        # _LLM_ONLY_EVIDENCE vocabulary next to a genuine receipt.
+        "semgrep+manual",
+        "frida:token-at-sink+llm",
+        # Empty part: pipeline joins never emit one — malformed,
+        # model-shaped text.
+        "semgrep+",
+        "frida:token-at-sink+",
+        "+semgrep",
+        # Miscased spelling of a known receipt.
+        "frida:token-at-sink+Semgrep",
+        "joern+CodeQL:rule",
+    )
+
+    def test_poisoned_composites_fail_both_predicates(self):
+        for stamp in self._POISONED:
+            assert not is_tool_evidence(stamp), stamp
+            assert not is_verification_evidence(stamp), stamp
+            assert list(iter_verification_receipts(stamp)) == [], stamp
+
+    def test_merge_tiebreak_chokepoint_rejects_poisoned_composites(self):
+        from core.audit.pipeline import _is_verification_evidence
+        for stamp in self._POISONED:
+            assert not _is_verification_evidence(stamp), stamp
+
+    def test_evidence_combine_shape_keeps_verification(self):
+        # The one documented shape where verif > tool is deliberate:
+        # a genuine receipt joined AHEAD of a sanitized model claim.
+        # The pre-scan must stop at the claim marker — everything
+        # after it is the claim's own text, not independent parts.
+        for stamp in (
+            "smt:check-overflow:witness+llm-claimed:smt",
+            "smt:check-overflow+llm-claimed:smt+manual",
+            "smt:check-overflow+llm-claimed:smt+triage:batch",
+        ):
+            assert is_verification_evidence(stamp), stamp
+
+    def test_clean_and_unknown_composites_keep_verification(self):
+        # Unknown producer namespaces stay ignored, never poisonous —
+        # the CRITICAL-alarm-on-legitimate-runs shape must not return.
+        for stamp in (
+            "semgrep+joern",
+            "frida:token-at-sink+semgrep",
+            "semgrep+future_producer:rule-1",
+            "clean-refuted:smt:check-overflow:witness",
+        ):
+            assert is_verification_evidence(stamp), stamp
 
 
 class TestProducerStampClosure:

@@ -951,10 +951,63 @@ def is_verification_evidence(ev: str) -> bool:
     (``smt:check-integer-narrowing+llm-claimed:smt``, the
     evidence-combine shape) keeps its verification status.
 
+    Poison parity with :func:`is_tool_evidence`: a model-authored part
+    ahead of the claim marker — the ``_LLM_ONLY_EVIDENCE`` vocabulary,
+    an empty part, a ``_POISON_NAMESPACES`` namespace, a miscased
+    known receipt — disqualifies the whole stamp
+    (:func:`_poisons_verification`). A stamp that is not tool evidence
+    must never carry the strictly greater merge-tie authority.
+
     Detection-role receipts remain observations regardless of how many
     namespaces they span. At least one verification receipt is required.
     """
     return next(iter_verification_receipts(ev), None) is not None
+
+
+def _poisons_verification(ev: str) -> bool:
+    """True when a model-authored part precedes the first claim marker.
+
+    :func:`is_tool_evidence` rejects the WHOLE stamp when any
+    ``+``-part is model-authored (an empty part, the
+    ``_LLM_ONLY_EVIDENCE`` vocabulary, a ``_POISON_NAMESPACES``
+    namespace, a miscased spelling of a known receipt). Verification
+    admission used to skip that scan, judging parts individually — so
+    a poisoned composite (``"semgrep+manual"``,
+    ``"frida:token-at-sink+triage:batch"``, ``"semgrep+"``,
+    ``"frida:token-at-sink+Semgrep"``) failed ``is_tool_evidence``
+    yet still broke merge ties through ``is_verification_evidence``:
+    strictly more authority on strictly worse provenance. No pipeline
+    producer mints these shapes (the promotion alarm stays quiet on
+    legitimate runs), so rejecting them costs nothing and closes the
+    laundering seam.
+
+    The scan stops at the first ``llm-claimed:`` part for the same
+    reason receipt iteration does: ``sanitize_llm_evidence_tool``
+    namespaces the model's whole raw string, so everything after the
+    marker is the claim's own text, never independent parts — the
+    documented evidence-combine shape
+    (``"smt:check-overflow:witness+llm-claimed:smt"``) keeps its
+    verification status.
+    """
+    for part in ev.split("+"):
+        part = part.strip()
+        low = part.lower()
+        if low.startswith(LLM_CLAIM_PREFIX):
+            return False
+        if low in _LLM_ONLY_EVIDENCE:
+            # Includes the empty string: pipeline joins never emit
+            # empty parts, so "semgrep+" is model-shaped text, not a
+            # receipt join.
+            return True
+        if (low.split(":", 1)[0] if ":" in low else low) in _POISON_NAMESPACES:
+            return True
+        if part != low and not _is_single_tool_evidence(part) \
+                and _is_single_tool_evidence(low):
+            # Miscased spelling of a known receipt ("Semgrep",
+            # "CodeQL:rule") — pipeline stamps are lowercase by
+            # construction, so this is model-authored text.
+            return True
+    return False
 
 
 def iter_verification_receipts(ev: str):
@@ -964,6 +1017,8 @@ def iter_verification_receipts(ev: str):
     a composite directly must not turn model-owned suffix text into proof.
     """
     if not ev or ev.startswith(_NON_MECHANICAL_LEAD):
+        return
+    if _poisons_verification(ev):
         return
     for part in ev.split("+"):
         part = part.strip()
