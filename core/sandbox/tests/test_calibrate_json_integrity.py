@@ -10,6 +10,19 @@ from core.sandbox import calibrate as cal, calibrate_cli as cli
 from core.testing.state_isolation import pin_user_state_dirs
 
 
+@pytest.fixture
+def _trust_anchors_in_tmp(tmp_path):
+    """Own the trust anchors even in archives without conftest fixtures."""
+    from core.sandbox import host_consent, telemetry_mac
+
+    base = tmp_path / 'trust-anchors'
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(telemetry_mac, '_data_home', lambda: base / 'data')
+        patch.setattr(host_consent, '_data_home', lambda: base / 'data')
+        patch.setattr(cal, '_CACHE_DIR', base / 'cache' / 'sandbox-profiles')
+        yield
+
+
 @pytest.fixture(autouse=True)
 def owned_state(tmp_path, _trust_anchors_in_tmp):
     # _trust_anchors_in_tmp is requested EXPLICITLY: the local
@@ -76,13 +89,16 @@ def test_cache_treats_ambiguous_profile_as_miss(profile, scenario):
     path = cal._cache_path_for(fingerprint(profile))
     raw = ambiguous(profile, scenario)
     path.write_text(raw)
+    path.chmod(0o600)
     assert cal._load_matching_cache(profile.binary_sha256, profile.env_signature, profile.probe_args) is None
     assert path.read_text() == raw
 
 
 def test_show_rejects_ambiguous_cache_without_probing(profile, capsys):
     cal._CACHE_DIR.mkdir(mode=0o700)
-    cal._cache_path_for(fingerprint(profile)).write_text(ambiguous(profile, 'identity'))
+    path = cal._cache_path_for(fingerprint(profile))
+    path.write_text(ambiguous(profile, 'identity'))
+    path.chmod(0o600)
     assert cli._cli_main(['--bin', profile.binary_path, '--show']) == 70
     assert 'no cached profile' in capsys.readouterr().err
 
@@ -125,7 +141,9 @@ def test_existing_utf8_cache_and_unique_nested_objects_remain_supported(profile)
     raw = json.dumps(asdict(profile), ensure_ascii=False)
     assert cal.SandboxProfile.from_json(raw) == profile
     cal._CACHE_DIR.mkdir(mode=0o700)
-    cal._cache_path_for(fingerprint(profile)).write_bytes(raw.encode('utf-8'))
+    path = cal._cache_path_for(fingerprint(profile))
+    path.write_bytes(raw.encode('utf-8'))
+    path.chmod(0o600)
     assert cal._load_from_cache(fingerprint(profile)) == profile
 
 
