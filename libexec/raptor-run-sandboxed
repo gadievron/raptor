@@ -41,8 +41,14 @@ Environment:
   (default 1800). ASAN builds of large projects routinely exceed 30
   minutes; raise per-run instead of editing this file.
 
-stdout/stderr pass through directly so the caller (including LLM agents)
-sees the child's output. Sandbox diagnostics and structured errors are
+stdout/stderr pass through so the caller (including LLM agents) sees
+the child's output. The pass-through is a TTY-conditional display
+lane: when the receiving stream is a live terminal, non-printable
+bytes in the child's output are escaped (the
+core.security.log_sanitisation contract, newlines/tabs preserved) so
+an untrusted build cannot drive terminal control sequences at the
+operator; piped/captured output passes through byte-for-byte for
+programmatic consumers. Sandbox diagnostics and structured errors are
 printed to stderr prefixed `[sandbox] ` after the child exits.
 
 Exit codes:
@@ -56,6 +62,7 @@ Exit codes:
 import logging
 import subprocess
 import sys
+from typing import TextIO
 
 # RAPTOR imports
 raptor_dir = str(__import__("pathlib").Path(__file__).resolve().parents[1])  # libexec -> raptor
@@ -77,7 +84,10 @@ if not (os.environ.get("CLAUDECODE")
 sys.path.insert(0, raptor_dir)
 import core.startup.process_init  # noqa: E402,F401
 from core.logging import configure_cli_logging  # noqa: E402
-from core.security.log_sanitisation import sanitise_for_terminal as _sft  # noqa: E402
+from core.security.log_sanitisation import (  # noqa: E402
+    escape_nonprintable,
+    sanitise_for_terminal as _sft,
+)
 
 
 def _die(msg: str, code: int = 1) -> None:
@@ -94,6 +104,36 @@ def _usage(code: int) -> None:
     )
     print(usage, file=sys.stderr)
     sys.exit(code)
+
+
+def _emit_child_output(stream: TextIO, data: "str | bytes") -> None:
+    """Pass child output through to *stream* — the display lane.
+
+    The child is an arbitrary untrusted build system, so its output can
+    carry terminal escape sequences: colour flips, window-title spoofs,
+    cursor moves and carriage-return tricks that overwrite earlier
+    lines with forged "all-clear" text. When *stream* is a live
+    terminal the operator is the consumer — escape every non-printable
+    byte (`core.security.log_sanitisation` contract), keeping newlines
+    and tabs since build output is structurally multi-line (this also
+    renders `\\r` progress lines as inert escapes: line-overwrite is
+    exactly the forgery primitive). When the stream is a pipe or file
+    the consumer is a program that may need byte fidelity, and the
+    sinks that later quote this output into operator-facing text
+    sanitise at their own chokepoints — pass through unchanged.
+    Unknown TTY-ness fails toward escaping: a mangled progress bar is
+    recoverable, an injected terminal sequence is not.
+    """
+    if not isinstance(data, str):
+        data = data.decode("utf-8", errors="replace")
+    try:
+        is_tty = stream.isatty()
+    except (OSError, ValueError):
+        is_tty = True
+    if is_tty:
+        data = escape_nonprintable(data, preserve_newlines=True)
+    stream.write(data)
+    stream.flush()
 
 
 # Only LEADING options belong to this wrapper — everything from the
@@ -298,13 +338,12 @@ try:
         result = run(cmd, capture_output=True, text=True,
                      timeout=child_timeout)
 
-        # Pass through child output
+        # Pass through child output (TTY-conditional display lane —
+        # see _emit_child_output).
         if result.stdout:
-            sys.stdout.write(result.stdout)
-            sys.stdout.flush()
+            _emit_child_output(sys.stdout, result.stdout)
         if result.stderr:
-            sys.stderr.write(result.stderr)
-            sys.stderr.flush()
+            _emit_child_output(sys.stderr, result.stderr)
 
         # Surface sandbox diagnostics for the caller
         info = result.sandbox_info
@@ -325,12 +364,11 @@ except subprocess.TimeoutExpired as e:
     # OSError — without this clause a hung child produced a raw traceback
     # and exit 1 instead of the documented `[sandbox] ERROR` + exit 2.
     # The exception carries whatever the child wrote before the kill;
-    # pass it through so partial output isn't discarded.
+    # pass it through (same display lane) so partial output isn't
+    # discarded.
     for stream, data in ((sys.stdout, e.output), (sys.stderr, e.stderr)):
         if data:
-            stream.write(data if isinstance(data, str)
-                         else data.decode("utf-8", errors="replace"))
-            stream.flush()
+            _emit_child_output(stream, data)
     _die(f"sandbox invocation failed: {e.__class__.__name__}: {e}", code=2)
 except (OSError, RuntimeError, ValueError) as e:
     _die(f"sandbox invocation failed: {e.__class__.__name__}: {e}", code=2)
