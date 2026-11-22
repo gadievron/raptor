@@ -37,6 +37,7 @@ import weakref
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from core.security.capped_read import read_capped, read_capped_with_stat
 
@@ -797,7 +798,7 @@ class HeldTrustVerdict:
     def __enter__(self) -> HeldTrustVerdict:
         return self
 
-    def __exit__(self, *exc_info: object) -> bool:
+    def __exit__(self, *exc_info: object) -> Literal[False]:
         self.close()
         return False
 

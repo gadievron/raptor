@@ -834,7 +834,7 @@ def check_repo_claude_trust(repo_path: str, trust_override: bool | None = None) 
 # and the fd-anchored read walk; a file added here is automatically
 # fingerprinted. Components are relative to the target so the read
 # path can anchor each step to a held directory fd.
-_CONFIG_SPECS = (
+_CONFIG_SPECS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("settings", (".claude", "settings.json")),
     ("settings", (".claude", "settings.local.json")),
     ("mcp",      (".mcp.json",)),
@@ -976,6 +976,9 @@ def _read_config_state(target: Path, *, dir_fd: int | None = None) -> tuple:
             for _kind, parts in _CONFIG_SPECS:
                 if parts[0] == ".claude":
                     if claude_fd is None:
+                        # The open above either produced the fd or
+                        # recorded the failure shape — never neither.
+                        assert claude_failure is not None
                         entries.append(claude_failure)
                     else:
                         entries.append(

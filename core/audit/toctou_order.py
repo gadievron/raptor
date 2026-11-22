@@ -81,6 +81,8 @@ class ToctouRefiner:
 
     def _call_on_line(self, line: int, name: str):
         """The unique call to *name* starting on 1-based *line*, else None."""
+        if self._root is None:
+            return None
         row = line - 1
         matches = []
         stack = [self._root]
