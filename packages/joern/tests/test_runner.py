@@ -57,6 +57,19 @@ class TestValidateQuery:
         err = _validate_query("new ProcessBuilder(cmd)")
         assert err is not None
 
+    def test_blocks_process_builder_call_without_new(self):
+        err = _validate_query("ProcessBuilder (cmd).start()")
+        assert err is not None
+
+    def test_quoted_process_builder_sink_name_is_data_not_code(self):
+        # The curated Kotlin profile names the java.lang.ProcessBuilder
+        # SINK — rendered into sweep queries as a quoted string. The
+        # bare-name match blocked every Kotlin sweep; only the
+        # call/constructor form is the (advisory) blocked shape.
+        err = _validate_query(
+            'val sinks = Set("exec", "start", "ProcessBuilder")')
+        assert err is None
+
     def test_blocks_reflection(self):
         err = _validate_query('Class.forName("Evil")')
         assert err is not None

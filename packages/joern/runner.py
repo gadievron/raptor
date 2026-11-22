@@ -62,7 +62,14 @@ _QUERY_MAX_LEN = 4096
 _DANGEROUS_QUERY_PATTERNS = re.compile(
     r"java\.io\b|java\.nio\b|scala\.io\b"
     r"|java\.net\b|scala\.sys\b"
-    r"|Runtime\.exec|ProcessBuilder|sys\.process"
+    # ProcessBuilder is matched in call/constructor form only: the
+    # bare name also appears as quoted sink-name DATA in rendered
+    # sweep queries (the curated Kotlin profile names the
+    # java.lang.ProcessBuilder sink), and the bare-name match
+    # blocked every Kotlin sweep. `"ProcessBuilder")` — a string
+    # literal in a name list — has `"` after the name and passes;
+    # `new ProcessBuilder(...)` / `ProcessBuilder(...)` still match.
+    r"|Runtime\.exec|ProcessBuilder\s*\(|sys\.process"
     r"|Class\.forName|getDeclaredMethod|getDeclaredField"
     r"|getRuntime|loadClass|getMethod\b|getConstructor"
     r"|newInstance|MethodHandles|defineClass|setAccessible",
