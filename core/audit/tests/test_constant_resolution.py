@@ -48,6 +48,9 @@ def _write_file(tmp_path: Path, name: str, content: str) -> Path:
 @contextmanager
 def _scan_gc_diagnostics():
     """Report collector cost on failure without changing the CPU budget."""
+    # Earlier tests' unreachable cycles are outside this scan workload.
+    # Keep GC enabled so collections caused by the scan remain in its budget.
+    gc.collect()
     gc_cpu = 0.0
     gc_started = 0.0
 
@@ -394,6 +397,7 @@ class TestMultiDefinition:
         assert "FOO" not in table.unique
 
 
+@pytest.mark.wall_budget(30)
 class TestScanComplexity:
     """Definition mapping must avoid repeated file/body prefix scans.
 
@@ -651,6 +655,7 @@ def test_enum_cursor_preserves_lines_across_blocks_and_skipped_names(
     assert table.rejected == {"CONDITIONAL": "conditional compilation"}
 
 
+@pytest.mark.wall_budget(30)
 class TestScanGCDiagnostics:
     def test_success_restores_callbacks_and_stays_quiet(self, capsys):
         callbacks = tuple(gc.callbacks)
