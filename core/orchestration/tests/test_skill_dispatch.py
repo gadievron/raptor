@@ -169,8 +169,14 @@ class GateOrderTests(unittest.TestCase):
         # the resolved target carries blocking Claude Code config —
         # the runner re-derives the verdict itself, held, at its own
         # resolution seam. Refusal is pre-lifecycle (no run dir) and
-        # the sandbox never spawns.
-        with TemporaryDirectory() as tmp:
+        # the sandbox never spawns. The internal check reads the
+        # process-wide trust flag (no per-call override seam), so pin
+        # it False — this dir has no conftest resetting cc_trust state
+        # and a leaked set_trust_override(True) from another test
+        # would downgrade this refusal to warn-and-proceed.
+        import core.security.cc_trust as cc_trust
+        with TemporaryDirectory() as tmp, \
+                patch.object(cc_trust, "_trust_override_set", False):
             target = Path(tmp) / "target"
             target.mkdir()
             (target / ".mcp.json").write_text(
@@ -185,6 +191,10 @@ class GateOrderTests(unittest.TestCase):
                           sandbox=_spy)
         self.assertFalse(result.ran)
         self.assertIn("cc_trust", result.skipped_reason)
+        # The runner-side refusal is distinguishable from gate 1's
+        # caller-verdict refusal, so operators can tell WHICH check
+        # fired from the skip reason alone.
+        self.assertIn("runner-side check", result.skipped_reason)
         self.assertIsNone(result.run_dir)
         self.assertEqual(spawned, [])
 
@@ -308,8 +318,13 @@ class DispatchFlowTests(unittest.TestCase):
         # fresh inode inside that window must be refused by the
         # held-handle recheck immediately before the spawn — the
         # sandbox must never be invoked against the swapped tree.
+        # (`supplied_target_diverged` downgrades to warn-and-proceed
+        # under the process-wide trust override, so pin it False.)
         import os
-        with TemporaryDirectory() as tmp:
+
+        import core.security.cc_trust as cc_trust
+        with TemporaryDirectory() as tmp, \
+                patch.object(cc_trust, "_trust_override_set", False):
             target = Path(tmp) / "target"
             target.mkdir()
             run_dir = Path(tmp) / "run"

@@ -959,7 +959,10 @@ def run_skill_dispatch(
        check against the resolved target (``open_cc_trust_check``) and
        re-brackets it immediately before the spawn, so a caller that
        forgets the flag — or a target swapped after the caller's check
-       — still refuses fail-closed;
+       — still refuses fail-closed. The internal check carries no
+       per-call override parameter: operator trust reaches it only via
+       the process-wide flag (``cc_trust.set_trust_override``), which
+       every ``--trust-repo`` entry point sets before dispatch;
     2. rule-of-two: human terminal or effective sandbox (per
        ``require_human_or_sandbox_for_agentic_pass(command)``);
     3. ``claude`` binary on PATH (or explicit ``claude_bin``);
@@ -1070,7 +1073,8 @@ def run_skill_dispatch(
         held.close()
         return SkillDispatchResult(
             ran=False,
-            skipped_reason="cc_trust blocked dispatch (untrusted target)")
+            skipped_reason=("cc_trust blocked dispatch "
+                            "(untrusted target; runner-side check)"))
 
     t0 = time.monotonic()
 

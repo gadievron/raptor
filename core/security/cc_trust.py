@@ -5,8 +5,10 @@ Trust check for target-repo Claude Code config files.
 
 Called by every entry point that runs Claude Code against an untrusted repo:
     - bin/raptor (via libexec/raptor-cc-trust-check)
-    - raptor_agentic.py
-    - packages/codeql/build_detector.py
+    - raptor_agentic.py / raptor_openant.py
+    - core/build/build_detector.py (held handle via open_cc_trust_check)
+    - core/orchestration/skill_dispatch.py (held handle via open_cc_trust_check)
+    - core/audit/validate.py
 
 Returns True if the caller should refuse to dispatch CC.
 Prints findings to stdout when anything noteworthy is found; silent when safe.
@@ -14,8 +16,9 @@ Prints findings to stdout when anything noteworthy is found; silent when safe.
 Trust override: a process-wide flag set by entry points when `--trust-repo`
 is parsed. `bin/raptor` passes the override via argv to the libexec wrapper;
 raptor_agentic.py calls `set_trust_override(True)` after argparse.
-`build_detector.py` (and any other in-process caller) reads the flag via
-`check_repo_claude_trust()` without needing its own argparse plumbing.
+In-process callers (build_detector, skill_dispatch) read the flag via
+`check_repo_claude_trust()` / `open_cc_trust_check()` without needing
+their own argparse plumbing.
 
 Deliberately NOT driven by an env var. Env would be vulnerable to injection
 via a target repo's `settings.json` `env` dict (CC propagates that into its
@@ -930,7 +933,7 @@ def _read_config_state(target: Path, *, dir_fd: int | None = None) -> tuple:
     content's verdict.
 
     ``dir_fd`` is the caller's held observation fd on the target (the
-    held-fd protocol — see :func:`check_repo_claude_trust`): every
+    held-fd protocol — see :func:`open_cc_trust_check`): every
     component step is then walked WITH openat semantics from that fd
     (``.claude`` opened once, O_NOFOLLOW | O_DIRECTORY; each file
     lstat'ed/read relative to its parent fd), so the evidence is bound
@@ -1000,7 +1003,7 @@ def _scan_cached(resolved_path: str,
     operator-visible warnings (handled in the caller).
 
     Deliberately carries NO self-recognition: the RAPTOR-repo /
-    registered-worktree skip lives in :func:`check_repo_claude_trust`,
+    registered-worktree skip lives in :func:`open_cc_trust_check`,
     evaluated per call against the held target fd. Inside the cache it
     keyed a trusted verdict to mutable state outside the cache key
     (RAPTOR's own worktree registry) — a registry entry pruned

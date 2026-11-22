@@ -569,7 +569,7 @@ def _scan_repo(
     warning fires on every call, which is at most once per DB create.
 
     ``target_fd`` is the caller's held observation fd on the target
-    (see :func:`check_repo_codeql_trust`): the self-recognition gate
+    (see :func:`open_codeql_trust_check`): the self-recognition gate
     borrows it, so the trusted-self verdict binds to the same inode
     the caller's divergence bracket checks — no second target open for
     a swap to re-aim between the gate and the bracket — and the pack

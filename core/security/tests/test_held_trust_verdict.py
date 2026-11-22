@@ -199,31 +199,56 @@ class TestLifetime:
         held.close()
         held.close()  # second close must be a no-op, not EBADF
 
+    @staticmethod
+    def _install_close_recorder(monkeypatch):
+        """Record every fd `_close_quietly` releases (still closing it).
+
+        Installed BEFORE the handle is constructed because the GC
+        finalizer binds the callable at construction time
+        (``weakref.finalize(self, _close_quietly, fd)``). Asserting on
+        the recorded fd — instead of ``os.fstat`` raising on the freed
+        fd NUMBER — keeps the pin honest under parallel test runs,
+        where a freed number can be reused by a concurrent open and
+        make the raw fstat probe spuriously succeed.
+        """
+        import core.security._trust_common as _trust_common
+        real_close = _trust_common._close_quietly
+        closed: list[int] = []
+
+        def recorder(fd):
+            closed.append(fd)
+            real_close(fd)
+
+        monkeypatch.setattr(_trust_common, "_close_quietly", recorder)
+        return closed
+
     @pytest.mark.parametrize(("open_check", "bool_check", "subject",
                               "plant"), _GATES)
     def test_context_manager_closes(self, open_check, bool_check,
-                                    subject, plant, tmp_path):
+                                    subject, plant, tmp_path,
+                                    monkeypatch):
+        closed = self._install_close_recorder(monkeypatch)
         target = _clean_target(tmp_path)
         with open_check(str(target), trust_override=False) as held:
             fd = held._fd
             assert fd is not None
             os.fstat(fd)  # live inside the CM
         assert held._fd is None
-        with pytest.raises(OSError):
-            os.fstat(fd)
+        assert closed == [fd]
 
     @pytest.mark.parametrize(("open_check", "bool_check", "subject",
                               "plant"), _GATES)
     def test_leaked_handle_fd_released_by_finalizer(
-            self, open_check, bool_check, subject, plant, tmp_path):
+            self, open_check, bool_check, subject, plant, tmp_path,
+            monkeypatch):
+        closed = self._install_close_recorder(monkeypatch)
         target = _clean_target(tmp_path)
         held = open_check(str(target), trust_override=False)
         fd = held._fd
         assert fd is not None
         del held
         gc.collect()
-        with pytest.raises(OSError):
-            os.fstat(fd)
+        assert closed == [fd]
 
 
 if __name__ == "__main__":
