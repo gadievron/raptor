@@ -13,7 +13,10 @@ from core.understand_graph import (
 )
 from core.understand_graph.store import graph_write_txn, open_graph
 from core.understand_graph.tests.test_expansion import _write_sarif
-from core.understand_graph.tests.test_validates_join import _write_two_flow_run
+from core.understand_graph.tests.test_validates_join import (
+    _write_two_flow_run,
+    save_outcomes,
+)
 
 
 from core.testing.state_isolation import pin_user_state_dirs
@@ -37,7 +40,7 @@ def monkeypatch(_user_state_in_tmp):
 
 
 def _validate(run, target, graph):
-    save_json(run / "validation-outcomes.json", [
+    save_outcomes(run, [
         {"finding_id": "FLOW-1", "status": "exploitable"},
     ])
     ingest_validation_outcomes(run, str(target), graph_path=graph)
@@ -100,7 +103,7 @@ def test_non_understand_producer_identity_still_joins(tmp_path, kind):
         node = conn.execute("SELECT id, stable_key FROM nodes WHERE kind=?", (kind,)).fetchone()
         assert node is not None
         node_id, ref = node["id"], node["stable_key"].split("://", 1)[1]
-    save_json(run / "validation-outcomes.json", [{"finding_id": ref, "status": "exploitable"}])
+    save_outcomes(run, [{"finding_id": ref, "status": "exploitable"}])
     ingest_validation_outcomes(run, str(target), graph_path=graph)
     with closing(open_graph(graph)) as conn, conn:
         assert [row["dst_id"] for row in conn.execute(

@@ -407,6 +407,7 @@ _JOURNAL_DOMAIN = b"review-journal-row\x00"
 _AUDIT_LOG_DOMAIN = b"audit-log-row\x00"
 _PREP_CACHE_DOMAIN = b"prep-cache-artifact\x00"
 _COVERAGE_ROW_DOMAIN = b"coverage-analysed-row\x00"
+_VALIDATION_OUTCOME_DOMAIN = b"validation-outcome-row\x00"
 
 
 def _mac_message(
@@ -643,6 +644,58 @@ def coverage_row_provenance(row: dict, tool: str) -> str:
     if not token:
         return ROW_UNSTAMPED
     return (ROW_VERIFIED if verify_coverage_row(row, str(token), tool)
+            else ROW_TAMPERED)
+
+
+def _validation_outcome_domain(run_binding: str) -> bytes:
+    return (_VALIDATION_OUTCOME_DOMAIN
+            + run_binding.encode("utf-8", "surrogatepass") + b"\x00")
+
+
+def mint_validation_outcome_row(row: dict, run_binding: str) -> str | None:
+    """Token for one ``validation-outcomes.json`` row.
+
+    The outcomes artifact is the graph's VALIDATES lane: each row with
+    a resolvable ``finding_id`` mints an edge that removes the named
+    entry→sink path from ``coverage_residual`` — "this path has been
+    examined by /validate". The file lives in the same target-writable
+    run dir as the journal (hostile target code executes during
+    validation stages), and ``/project graph rebuild`` replays it long
+    after the run, so an unauthenticated row is a standing
+    never-validated-path suppression channel. Same canonical form and
+    key as the journal, own domain, RUN-BOUND via
+    :func:`audit_log_run_binding` — display finding ids repeat across
+    targets, so a genuine stamped row replayed from another run's
+    outcomes file could join a DIFFERENT target's finding by id and
+    falsely retire its path. ``None`` = persist unstamped — the graph
+    ingest then records the row as examination telemetry only (node
+    minted, provenance recorded) and never mints the suppressing
+    VALIDATES edge: the path stays in the residual and re-earns on its
+    next live /validate run, which stamps."""
+    return _mint(row, _validation_outcome_domain(run_binding))
+
+
+def verify_validation_outcome_row(
+    row: dict, token: str | None, run_binding: str,
+) -> bool:
+    """Validation-outcome twin of :func:`verify_audit_log_row`,
+    against the VERIFIER'S own run binding. Consumers that grant a row
+    residual-suppression authority MUST fail toward NOT suppressing
+    when this returns False (unstamped legacy, tampered, and
+    cross-run-replayed rows all leave the path in the residual)."""
+    return _verify(row, token, _validation_outcome_domain(run_binding))
+
+
+def validation_outcome_provenance(row: dict, run_binding: str) -> str:
+    """Tri-state provenance of one validation-outcome row dict — same
+    tiers and consumer semantics as :func:`entry_provenance`
+    (``tampered`` is attribution, not a security boundary: consumers
+    give it unstamped-tier authority)."""
+    token = row.get(TOKEN_KEY)
+    if not token:
+        return ROW_UNSTAMPED
+    return (ROW_VERIFIED
+            if verify_validation_outcome_row(row, str(token), run_binding)
             else ROW_TAMPERED)
 
 

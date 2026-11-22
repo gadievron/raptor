@@ -8,7 +8,10 @@ import pytest
 from core.json import save_json
 from core.understand_graph import attack_paths, coverage_residual, ingest_run, ingest_validation_outcomes
 from core.understand_graph.store import graph_write_txn
-from core.understand_graph.tests.test_validates_join import _write_two_flow_run
+from core.understand_graph.tests.test_validates_join import (
+    _write_two_flow_run,
+    save_outcomes,
+)
 
 
 from core.testing.state_isolation import pin_user_state_dirs
@@ -59,11 +62,11 @@ def _shared_sink_graph(tmp_path, section="entry_points"):
 @pytest.mark.parametrize("section", ["entry_points", "sources"])
 def test_validating_one_entry_does_not_hide_another_entry_to_the_same_sink(tmp_path, section):
     graph, target, run = _shared_sink_graph(tmp_path, section)
-    save_json(run / "validation-outcomes.json", [{"finding_id": "FLOW-1", "status": "exploitable"}])
+    save_outcomes(run, [{"finding_id": "FLOW-1", "status": "exploitable"}])
     ingest_validation_outcomes(run, str(target), graph_path=graph)
     remaining = coverage_residual(graph, str(target))
     assert [(p["entry"]["id"], p["sink"]["id"]) for p in remaining] == [("EP-2", "SINK-1")]
-    save_json(run / "validation-outcomes.json", [
+    save_outcomes(run, [
         {"finding_id": "FLOW-1", "status": "exploitable"},
         {"finding_id": "FLOW-2", "status": "exploitable"},
     ])
@@ -73,7 +76,7 @@ def test_validating_one_entry_does_not_hide_another_entry_to_the_same_sink(tmp_p
 
 def test_sink_link_without_source_link_does_not_validate_a_path(tmp_path):
     graph, target, run = _shared_sink_graph(tmp_path)
-    save_json(run / "validation-outcomes.json", [{"finding_id": "FLOW-1", "status": "exploitable"}])
+    save_outcomes(run, [{"finding_id": "FLOW-1", "status": "exploitable"}])
     ingest_validation_outcomes(run, str(target), graph_path=graph)
     with graph_write_txn(graph) as conn:
         conn.execute("DELETE FROM edges WHERE kind='HAS_SOURCE' AND src_id IN "

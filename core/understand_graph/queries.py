@@ -628,6 +628,13 @@ def coverage_residual(
         # flow from one entry does not validate another entry's path to
         # the same sink. Historical validation of the same display id
         # does not establish validation of the selected understand snapshot.
+        # Provenance-gated: only outcome nodes the ingest graded
+        # 'verified' (run-bound MAC on the outcomes row) suppress.
+        # The ingest already withholds VALIDATES edges from unverified
+        # rows; this filter is the query-side belt for graphs built by
+        # older ingests or merged from elsewhere — their ungraded
+        # nodes (no provenance key) fail the extract and the path
+        # stays reported, the safe direction.
         snapshot = _snapshot_by_id(conn, snapshot_id)
         if snapshot is None or not snapshot["target_path"]:
             return set()
@@ -638,6 +645,8 @@ def coverage_residual(
             FROM edges v
             JOIN nodes vo ON vo.id = v.src_id AND vo.kind = 'verified_outcome'
                          AND vo.stale = 0 AND vo.snapshot_id = v.snapshot_id
+                         AND json_extract(vo.props_json, '$.provenance')
+                             = 'verified'
             JOIN snapshots vs ON vs.id = vo.snapshot_id
                          AND (vs.target_path = ? OR vs.target_path = ?)
             JOIN nodes fl ON fl.id = v.dst_id AND fl.kind = 'unchecked_flow'

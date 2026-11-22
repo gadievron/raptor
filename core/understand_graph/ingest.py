@@ -526,8 +526,22 @@ def ingest_validation_outcomes(run_dir: Path, target_path: Optional[str] = None,
                                *, graph_path: Optional[Path] = None) -> Optional[Path]:
     """Ingest /validate outcomes into the graph.
 
-    Creates verified_outcome nodes linked to findings via VALIDATES edges.
+    Creates verified_outcome nodes linked to findings via VALIDATES
+    edges. A VALIDATES edge is suppression authority — it retires the
+    joined path from ``coverage_residual`` — and the outcomes file
+    lives in the target-writable run dir, so every row is verified
+    against this run's MAC binding
+    (``journal_mac.validation_outcome_provenance``) before any edge
+    mints. Unverified rows (pre-stamp legacy, planted, edited, or
+    replayed from another run's file) still mint their
+    ``verified_outcome`` node as examination telemetry, with the
+    graded ``provenance`` tier recorded in props for query-side
+    filters, but never a VALIDATES edge: the path stays in the
+    residual and re-earns on its next live /validate run, which
+    stamps.
     """
+    from core.coverage import journal_mac
+
     run_dir = Path(run_dir)
     outcomes = load_json(run_dir / "validation-outcomes.json")
     if not outcomes or not isinstance(outcomes, list):
@@ -555,13 +569,25 @@ def ingest_validation_outcomes(run_dir: Path, target_path: Optional[str] = None,
                     ("unchecked_flow", "understand"),
                 )
             }
+            run_binding = journal_mac.audit_log_run_binding(run_dir)
+            unverified_refs = 0
             for outcome in _list(outcomes):
                 status = str(outcome.get("status") or outcome.get("verdict") or "inconclusive")
                 finding_ref = outcome.get("finding_id") or outcome.get("finding") or ""
+                provenance = journal_mac.validation_outcome_provenance(
+                    outcome, run_binding)
                 key = f"{status}::{finding_ref}::{content_hash(outcome)}"
                 props = dict(outcome)
                 props["status"] = status
+                # Set AFTER dict(outcome): the row is attacker-shaped,
+                # so a planted "provenance" key must never survive into
+                # the graded field query-side filters trust.
+                props["provenance"] = provenance
                 vo_id = _upsert_node(conn, snap_id, "verified_outcome", key, props)
+                if finding_ref and provenance != journal_mac.ROW_VERIFIED:
+                    # Telemetry node only — no suppression authority.
+                    unverified_refs += 1
+                    continue
                 if finding_ref:
                     # Exact-identity join, never substring LIKE: a short
                     # or numeric finding id used to substring-match an
@@ -591,6 +617,15 @@ def ingest_validation_outcomes(run_dir: Path, target_path: Optional[str] = None,
                         ).fetchone()
                         if row:
                             _upsert_edge(conn, snap_id, "VALIDATES", vo_id, row["id"])
+        if unverified_refs:
+            print(
+                f"graph: validation ingest: {unverified_refs} outcome "
+                f"row(s) without run-bound provenance — recorded as "
+                f"telemetry, VALIDATES suppression withheld (affected "
+                f"paths stay in the residual; a live /validate re-earns "
+                f"and stamps)",
+                file=sys.stderr,
+            )
     except INGEST_SKIP_EXCEPTIONS as exc:
         print(f"graph: validation ingest skipped ({exc})", file=sys.stderr)
         return None

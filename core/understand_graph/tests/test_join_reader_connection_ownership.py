@@ -89,7 +89,7 @@ def _exercise(tmp_path, consumer, error=None, after=True, deny=False):
     if consumer == "targets":
         target, run = tmp_path / "target", tmp_path / "run"
         graph = native._write_two_flow_run(run, target)
-        native.save_json(run / "validation-outcomes.json", [{"finding_id": "FLOW-1", "status": "exploitable"}])
+        native.save_outcomes(run, [{"finding_id": "FLOW-1", "status": "exploitable"}])
         native.ingest_validation_outcomes(run, str(target))
         argument = graph
         body = targets

@@ -127,8 +127,9 @@ def _write_sarif(run_dir: Path) -> None:
 
 
 def _write_validation_outcomes(run_dir: Path) -> None:
+    from core.understand_graph.tests.test_validates_join import save_outcomes
     run_dir.mkdir(parents=True, exist_ok=True)
-    save_json(run_dir / "validation-outcomes.json", [
+    save_outcomes(run_dir, [
         {
             # References the unchecked flow (FLOW-1 -> SINK-1) so the
             # VALIDATES edge identifies a sink via HAS_SINK.

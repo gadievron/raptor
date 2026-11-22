@@ -17,6 +17,7 @@ from core.understand_graph import (
     propagate_binary_verdicts,
 )
 from core.understand_graph.store import open_graph
+from core.understand_graph.tests.test_validates_join import save_outcomes
 
 
 def _write_run(run_dir, target, *, sink_name="system", source_flow=False):
@@ -73,9 +74,10 @@ def test_dashboard_coverage_counts_findings_once_across_snapshots(tmp_path):
         assert ingest_scan_findings(d, str(target),
                                     graph_path=graph_path) is not None
 
-    save_json(run_dir / "validation-outcomes.json",
-              [{"finding_id": "SCAN-1", "status": "exploitable"},
-               {"finding_id": "FLOW-1", "status": "exploitable"}])
+    save_outcomes(run_dir, [
+        {"finding_id": "SCAN-1", "status": "exploitable"},
+        {"finding_id": "FLOW-1", "status": "exploitable"},
+    ])
     ingest_validation_outcomes(run_dir, str(target))
 
     # Identity population: SCAN-1 + FLOW-1, both validated.

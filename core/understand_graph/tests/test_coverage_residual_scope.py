@@ -2,10 +2,9 @@
 
 import pytest
 
-from core.json import save_json
 from core.understand_graph import coverage_residual, ingest_run, ingest_validation_outcomes
 from core.understand_graph.store import graph_write_txn
-from core.understand_graph.tests.test_validates_join import _write_two_flow_run
+from core.understand_graph.tests.test_validates_join import _write_two_flow_run, save_outcomes
 
 
 from core.testing.state_isolation import pin_user_state_dirs
@@ -31,7 +30,7 @@ def monkeypatch(_user_state_in_tmp):
 def _validated_graph(tmp_path):
     target, run = tmp_path / "target", tmp_path / "old"
     graph = _write_two_flow_run(run, target)
-    save_json(run / "validation-outcomes.json", [
+    save_outcomes(run, [
         {"finding_id": "FLOW-1", "status": "exploitable"},
     ])
     ingest_validation_outcomes(run, str(target), graph_path=graph)

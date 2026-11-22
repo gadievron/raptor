@@ -7,7 +7,10 @@ import pytest
 
 from core.json import save_json
 from core.understand_graph import attack_paths, coverage_residual, ingest_run, ingest_validation_outcomes
-from core.understand_graph.tests.test_validates_join import _write_two_flow_run
+from core.understand_graph.tests.test_validates_join import (
+    _write_two_flow_run,
+    save_outcomes,
+)
 
 
 from core.testing.state_isolation import pin_user_state_dirs
@@ -54,7 +57,7 @@ def test_residual_limit_does_not_hide_unvalidated_paths(tmp_path, validated_coun
     assert len(attack_paths(graph, str(target))) == 50
     assert len(attack_paths(graph, str(target), limit=1)) == 1
     if validated_count:
-        save_json(run / "validation-outcomes.json", [
+        save_outcomes(run, [
             {"finding_id": f"FLOW-{i:03d}", "status": "exploitable"}
             for i in range(validated_count)
         ])

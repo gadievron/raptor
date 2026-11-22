@@ -24,6 +24,25 @@ from core.understand_graph import (
 from core.understand_graph.store import open_graph
 
 
+def save_outcomes(run_dir, rows):
+    """Save a validation-outcomes.json the ingest reads as this run's
+    own: rows carry the run-bound MAC the real writer
+    (``write_validation_outcomes``) mints. Unstamped rows ingest as
+    telemetry only — no VALIDATES edge, no residual suppression — so
+    join tests must stamp to exercise the join at all (the provenance
+    gate itself is pinned in test_validation_outcome_provenance)."""
+    from core.coverage import journal_mac
+    binding = journal_mac.audit_log_run_binding(run_dir)
+    stamped = []
+    for row in rows:
+        row = dict(row)
+        token = journal_mac.mint_validation_outcome_row(row, binding)
+        assert token, "isolated test key store must mint"
+        row[journal_mac.TOKEN_KEY] = token
+        stamped.append(row)
+    save_json(run_dir / "validation-outcomes.json", stamped)
+
+
 def _write_two_flow_run(run_dir, target, *, flow_ids=("FLOW-1", "FLOW-2")):
     src = target / "server.c"
     src.parent.mkdir(parents=True, exist_ok=True)
@@ -83,8 +102,7 @@ def test_numeric_ref_never_substring_matches_a_flow(tmp_path):
     before = {p["sink"]["id"] for p in coverage_residual(graph_path, str(target))}
     assert before == {"SINK-1", "SINK-2"}
 
-    save_json(run_dir / "validation-outcomes.json",
-              [{"finding_id": "1", "status": "exploitable"}])
+    save_outcomes(run_dir, [{"finding_id": "1", "status": "exploitable"}])
     ingest_validation_outcomes(run_dir, str(target))
 
     assert _validates_targets(graph_path) == []
@@ -103,8 +121,7 @@ def test_prefix_ref_matches_exactly_one_flow(tmp_path):
     graph_path = _write_two_flow_run(
         run_dir, target, flow_ids=("FLOW-10", "FLOW-1"))
 
-    save_json(run_dir / "validation-outcomes.json",
-              [{"finding_id": "FLOW-1", "status": "exploitable"}])
+    save_outcomes(run_dir, [{"finding_id": "FLOW-1", "status": "exploitable"}])
     ingest_validation_outcomes(run_dir, str(target))
 
     # FLOW-10 -> SINK-1, FLOW-1 -> SINK-2 in this fixture order.
@@ -134,7 +151,7 @@ def test_props_id_equality_joins_scan_findings(tmp_path):
         json.dumps({"target_path": str(target)}), encoding="utf-8")
     assert ingest_scan_findings(run_dir, str(target)) is not None
 
-    save_json(run_dir / "validation-outcomes.json", [
+    save_outcomes(run_dir, [
         {"finding_id": "SCAN-7", "status": "exploitable"},
         {"finding_id": "command-injection", "status": "exploitable"},
     ])
@@ -172,8 +189,7 @@ def test_numeric_props_id_joins_by_value(tmp_path):
         json.dumps({"target_path": str(target)}), encoding="utf-8")
     assert ingest_scan_findings(run_dir, str(target)) is not None
 
-    save_json(run_dir / "validation-outcomes.json",
-              [{"finding_id": 7, "status": "exploitable"}])
+    save_outcomes(run_dir, [{"finding_id": 7, "status": "exploitable"}])
     ingest_validation_outcomes(run_dir, str(target))
 
     targets = _validates_targets(graph_path)
