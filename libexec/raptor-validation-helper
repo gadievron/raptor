@@ -3946,7 +3946,8 @@ def prepare_F(workdir, target=None):
             f"{stats['feasibility_demoted']}, final_status "
             f"{stats['final_status_demoted']}, confirmation "
             f"{stats['confirmation_demoted']}, is_exploitable "
-            f"{stats['exploitable_demoted']})"
+            f"{stats['exploitable_demoted']}, is_true_positive "
+            f"{stats['true_positive_demoted']})"
         )
     from packages.exploitability_validation.models import Feasibility
     for finding in data.get("findings", []):

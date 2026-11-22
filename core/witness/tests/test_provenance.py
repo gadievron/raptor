@@ -343,7 +343,7 @@ class TestSanitiseFindingsEvidence:
         assert prov.sanitise_findings_evidence(None, tmp_path) == {
             "witness_stripped": 0, "feasibility_demoted": 0,
             "final_status_demoted": 0, "confirmation_demoted": 0,
-            "exploitable_demoted": 0,
+            "exploitable_demoted": 0, "true_positive_demoted": 0,
         }
         prov.sanitise_findings_evidence({"findings": "nope"}, tmp_path)
         prov.sanitise_findings_evidence({"findings": [42, None]}, tmp_path)
@@ -571,6 +571,81 @@ class TestUnconditionalBooleanClamp:
         stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
         assert "is_exploitable" not in f
         assert stats["exploitable_demoted"] == 0
+
+
+class TestTruePositiveBooleanClamp:
+    """``is_true_positive is True`` maps to "confirmed" ahead of every
+    status string in get_finding_status, so the bare boolean is its own
+    receipt-less confirmation channel. The clamp demotes an unsupported
+    True to the explicit abstention (None) — never to False, which
+    would mint "false_positive", the suppression direction."""
+
+    def test_forged_boolean_beside_neutral_status_demoted(self, tmp_path):
+        f = _finding(status="pending", is_true_positive=True)
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert f["is_true_positive"] is None
+        assert f["status"] == "pending"
+        assert stats["true_positive_demoted"] == 1
+
+    def test_junk_shape_normalised_to_abstention(self, tmp_path):
+        f = _finding(is_true_positive="yes")
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert f["is_true_positive"] is None
+        assert stats["true_positive_demoted"] == 1
+
+    def test_explicit_false_never_touched(self, tmp_path):
+        # False is the LLM's rule-out flag — a different authority
+        # question, and overwriting it would fabricate the abstention.
+        f = _finding(is_true_positive=False)
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert f["is_true_positive"] is False
+        assert stats["true_positive_demoted"] == 0
+
+    def test_absent_boolean_never_materialised(self, tmp_path):
+        f = _finding(status="pending")
+        prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert "is_true_positive" not in f
+
+    def test_receipted_confirmed_ruling_supports(self, tmp_path):
+        f = _finding(is_true_positive=True)
+        ruling = {"status": "confirmed", "reason": "Stage D affirmed"}
+        f["ruling"] = ruling
+        prov.stamp_ruling_confirmation(f, ruling, tmp_path)
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert f["is_true_positive"] is True
+        assert stats["true_positive_demoted"] == 0
+
+    def test_verified_confirming_witness_supports(self, tmp_path):
+        f = _finding(is_true_positive=True)
+        record = {"verdict": "confirmed"}
+        f["witness_execution"] = record
+        prov.stamp_witness_execution(f, record, tmp_path)
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert f["is_true_positive"] is True
+        assert stats["true_positive_demoted"] == 0
+
+    def test_verified_exploitable_feasibility_supports(self, tmp_path):
+        # A verified exploitable-family verdict is strictly stronger
+        # than the triage boolean; demoting beside it would quarantine
+        # legitimate Stage-F output.
+        f = _finding(is_true_positive=True)
+        feas = {"status": "analyzed", "verdict": "exploitable",
+                "binary_path": "/bin/app"}
+        f["feasibility"] = feas
+        prov.stamp_feasibility(f, feas, tmp_path)
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert f["is_true_positive"] is True
+        assert stats["true_positive_demoted"] == 0
+
+    def test_receipt_from_other_run_does_not_support(self, tmp_path):
+        f = _finding(is_true_positive=True)
+        ruling = {"status": "confirmed", "reason": "r"}
+        f["ruling"] = ruling
+        prov.stamp_ruling_confirmation(f, ruling, tmp_path / "other-run")
+        stats = prov.sanitise_findings_evidence(
+            {"findings": [f]}, tmp_path / "this-run")
+        assert f["is_true_positive"] is None
+        assert stats["true_positive_demoted"] == 1
 
 
 class TestTierStatusClamp:

@@ -129,6 +129,27 @@ class TestHarvestRun:
                    for n in summary["notes"])
         assert not backlog_path(run_dir).exists()
 
+    def test_planted_true_positive_boolean_is_demoted_and_skipped(
+            self, run_dir: Path):
+        # get_finding_status maps a bare is_true_positive=True to
+        # "confirmed" ahead of every status string — a receipt-less
+        # boolean beside a neutral status harvested as confirmed
+        # without ever spelling it.
+        data = load_json(run_dir / "findings.json", strict=True)
+        row = make_finding(id="F-planted-bool", line=9, status="pending",
+                           is_true_positive=True)
+        del row["final_status"]
+        del row["ruling"]
+        data["findings"] = [row]
+        (run_dir / "findings.json").write_text(json.dumps(data),
+                                               encoding="utf-8")
+        summary = harvest_run(run_dir)
+        assert summary["harvested"] == []
+        assert summary["skipped"] == {"status_not_confirmed": 1}
+        assert any("demoted before classification" in n
+                   for n in summary["notes"])
+        assert not backlog_path(run_dir).exists()
+
     def test_duplicate_rows_in_one_pass_skip(self, run_dir: Path):
         data = load_json(run_dir / "findings.json", strict=True)
         data["findings"].append(make_finding())  # identical identity

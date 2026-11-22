@@ -871,7 +871,8 @@ def sanitise_findings_evidence(
     Mutates the findings in place. Returns
     ``{"witness_stripped": n, "feasibility_demoted": n,
     "final_status_demoted": n, "confirmation_demoted": n,
-    "exploitable_demoted": n}`` so callers can log what was refused.
+    "exploitable_demoted": n, "true_positive_demoted": n}`` so
+    callers can log what was refused.
     Verified records are left untouched (including their ruling /
     final_status consequences); unverified ones lose the mechanical
     claim and keep only their LLM-tier content (source-analysis
@@ -883,6 +884,7 @@ def sanitise_findings_evidence(
         "final_status_demoted": 0,
         "confirmation_demoted": 0,
         "exploitable_demoted": 0,
+        "true_positive_demoted": 0,
     }
     if not isinstance(findings_data, Mapping):
         return stats
@@ -1126,16 +1128,71 @@ def sanitise_findings_evidence(
                 finding["is_exploitable"] = False if _claim is True else None
                 stats["exploitable_demoted"] += 1
 
+        # Confirm-direction twin of the boolean clamp above:
+        # get_finding_status maps a bare ``is_true_positive is True``
+        # to "confirmed" AHEAD of every status string, so a forged
+        # True beside a neutral status reached the projection
+        # consumers (the tp-harvest chokepoint among them) without
+        # ever spelling "confirmed" in a string channel the
+        # plain-confirmed clamp sees. The boolean is the LLM's
+        # receipt-less triage flag — the verdict importers were
+        # declassified for exactly this reason — so a True claim
+        # keeps mechanical confirm authority only beside the support
+        # the plain-confirmed clamp accepts (confirm-direction
+        # receipt / confirming witness) or a verified
+        # exploitable-family feasibility record (a strictly stronger
+        # verdict). Unsupported claims demote to the explicit
+        # abstention (None), never to False: a fabricated False would
+        # mint "false_positive" — the suppression direction — out of
+        # thin air. Junk shapes normalise to the same abstention
+        # (same rationale as the is_exploitable arm).
+        _tp_claim = read_verdict(finding, "is_true_positive")
+        _tp_stored = finding.get("is_true_positive")
+        _tp_junk = (
+            _tp_claim is None
+            and not isinstance(_tp_stored, (bool, type(None)))
+        )
+        if _tp_claim is True or _tp_junk:
+            tp_ruling = finding.get("ruling")
+            tp_ruling_status = (
+                normalize_status(tp_ruling.get("status"))
+                if isinstance(tp_ruling, dict) else None
+            )
+            supported = (
+                tp_ruling_status in _RECEIPT_CONFIRM_STATUSES
+                and verify_ruling_confirmation(finding, run_dir)
+            )
+            if not supported:
+                record = finding.get("witness_execution")
+                supported = (
+                    isinstance(record, Mapping)
+                    and str(record.get("verdict") or "") == "confirmed"
+                    and verify_witness_execution(finding, run_dir)
+                )
+            if not supported:
+                feasibility = finding.get("feasibility")
+                supported = (
+                    isinstance(feasibility, dict)
+                    and feasibility.get("status") == "analyzed"
+                    and str(feasibility.get("verdict") or "")
+                    in _EXPLOITABLE_VERDICTS
+                    and verify_feasibility(finding, run_dir)
+                )
+            if not supported:
+                finding["is_true_positive"] = None
+                stats["true_positive_demoted"] += 1
+
     if any(stats.values()):
         logger.warning(
             "witness provenance: demoted unverified evidence claims "
             "(witness_execution stripped: %d, feasibility demoted: %d, "
             "final_status demoted: %d, confirmation demoted: %d, "
-            "is_exploitable demoted: %d) — records lacked a valid "
-            "mechanical-provenance stamp for run %r",
+            "is_exploitable demoted: %d, is_true_positive demoted: %d) "
+            "— records lacked a valid mechanical-provenance stamp for "
+            "run %r",
             stats["witness_stripped"], stats["feasibility_demoted"],
             stats["final_status_demoted"], stats["confirmation_demoted"],
-            stats["exploitable_demoted"],
+            stats["exploitable_demoted"], stats["true_positive_demoted"],
             run_binding(run_dir),
         )
     return stats
