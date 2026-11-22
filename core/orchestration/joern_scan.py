@@ -375,6 +375,7 @@ class JoernScanOutcome:
     taint_flow_count: int = 0
     structural_hit_count: int = 0
     language: str = ""
+    semantics_rows: int = 0
     errors: list[str] = field(default_factory=list)
     queries_failed: list[str] = field(default_factory=list)
     degraded: bool = False
@@ -387,6 +388,7 @@ class JoernScanOutcome:
             "taint_flows": self.taint_flow_count,
             "structural_hits": self.structural_hit_count,
             "language": self.language,
+            "semantics_rows": self.semantics_rows,
             "queries_failed": list(self.queries_failed),
             "errors": list(self.errors),
             "degraded": self.degraded,
@@ -642,6 +644,21 @@ def run_joern_scan_phase(
                     " start failed)")
                 outcome.degraded = True
                 return outcome
+
+            # Learned sanitiser kill rows (IRIS, tool-corroborated /
+            # operator-promoted only) suppress flows the project has
+            # already proven sanitised — the same install the audit
+            # backend performs, so scan and audit sweeps agree. Its
+            # own failures degrade to 0 rows, never to a lost sweep.
+            try:
+                from core.audit.joern_backend import (
+                    install_flow_semantics,
+                )
+                outcome.semantics_rows = install_flow_semantics(
+                    srv, target_path, out_dir=out_dir)
+            except Exception:  # noqa: BLE001 — vocab must not cost a sweep
+                logger.debug("flow-semantics install failed",
+                             exc_info=True)
 
             taint = srv.run_tiered_sweep(
                 timeout=timeout, lang_profile=profile)

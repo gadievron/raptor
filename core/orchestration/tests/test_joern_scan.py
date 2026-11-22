@@ -501,6 +501,46 @@ class TestPhaseWithStubServer(unittest.TestCase):
             outcome = run_joern_scan_phase(target, out_dir)
         return outcome, srv
 
+    def test_learned_flow_semantics_installed_before_sweep(self):
+        # The scan phase must apply the same IRIS-learned sanitiser
+        # kill rows the audit backend installs, BEFORE the sweep runs
+        # (rows bind at query build time), and surface the row count.
+        from unittest.mock import MagicMock, patch
+
+        import core.audit.joern_backend as backend
+
+        sweep_calls_at_install_time: list[int] = []
+
+        def _install(srv_arg, *args, **kwargs):
+            sweep_calls_at_install_time.append(
+                srv_arg.run_tiered_sweep.call_count)
+            return 3
+
+        install = MagicMock(side_effect=_install)
+        with TemporaryDirectory() as tmp:
+            with patch.object(backend, "install_flow_semantics",
+                              install):
+                outcome, srv = self._run_phase(
+                    tmp, language="java", structural_raw="")
+        install.assert_called_once()
+        self.assertIs(install.call_args.args[0], srv)
+        self.assertEqual(sweep_calls_at_install_time, [0])
+        self.assertEqual(outcome.semantics_rows, 3)
+        self.assertEqual(outcome.metrics()["semantics_rows"], 3)
+
+    def test_semantics_install_failure_never_costs_the_sweep(self):
+        from unittest.mock import patch
+
+        import core.audit.joern_backend as backend
+
+        with TemporaryDirectory() as tmp:
+            with patch.object(backend, "install_flow_semantics",
+                              side_effect=RuntimeError("store broken")):
+                outcome, srv = self._run_phase(
+                    tmp, language="java", structural_raw="")
+        srv.run_tiered_sweep.assert_called_once()
+        self.assertEqual(outcome.semantics_rows, 0)
+
     def test_cpp_target_runs_structural_queries(self):
         done = (f'JOERN_SCAN_DONE:{{"queries":'
                 f'{_STRUCTURAL_QUERY_COUNT},"failed":0}}')
