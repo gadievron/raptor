@@ -135,21 +135,44 @@ class TestLoopbackClassification:
         "::ffff:127.0.0.1", "0.0.0.0", "::",
     ])
     def test_local_spellings_are_in_gate_scope(self, host):
-        assert si._is_loopback(host) is True
+        assert si.is_loopback_host(host) is True
+
+    @pytest.mark.parametrize("host", [
+        # inet_aton numbers-and-dots shorthand the OS resolver dials
+        # as 127.0.0.1 but ``ip_address`` rejects: classifying these
+        # as remote names fails OPEN (remote means trusted ungated).
+        "127.1", "127.0.1", "0177.0.0.1", "0x7f000001", "127.0.00.1",
+        # ...and the all-zeros shorthand of the unspecified address.
+        "0",
+    ])
+    def test_inet_aton_shorthand_is_in_gate_scope(self, host):
+        assert si.is_loopback_host(host) is True
 
     @pytest.mark.parametrize("host", [
         "127.attacker.example",
         "localhost.attacker.example",
         "sage.internal", "10.0.0.5", "192.168.1.9", "",
+        # Octal/hex shorthand of a REMOTE address parses but must
+        # still classify remote, not loopback.
+        "0x0a000005",
     ])
     def test_names_and_remote_literals_classify_remote(self, host):
-        assert si._is_loopback(host) is False
+        assert si.is_loopback_host(host) is False
 
     def test_local_literal_spelling_is_still_gated(self, docker):
         # 0.0.0.0 connects to THIS host — an exotic local spelling
         # must not buy an ungated lane past the identity check.
         docker.outcome = _outcome("")
         assert si.server_identity_ok("http://0.0.0.0:8090", "sage") \
+            is False
+        assert docker.calls == 1
+
+    def test_inet_aton_shorthand_is_still_gated(self, docker):
+        # "127.1" dials 127.0.0.1 — the shorthand must land inside
+        # the gate (docker consulted, bind coverage required), not on
+        # the trusted remote lane.
+        docker.outcome = _outcome("")
+        assert si.server_identity_ok("http://127.1:8090", "sage") \
             is False
         assert docker.calls == 1
 
@@ -278,6 +301,12 @@ class TestBindAddressCoverage:
         # publish covers it.
         docker.outcome = _outcome(_ps_line(si.compose_pinned_image("sage")))
         assert si.server_identity_ok("http://0.0.0.0:8090", "sage") is True
+
+    def test_inet_aton_shorthand_dial_is_served_when_covered(self, docker):
+        # "127.1" resolves (getaddrinfo) to 127.0.0.1 — a held v4
+        # loopback binding vouches for the shorthand spelling too.
+        docker.outcome = _outcome(_ps_line(si.compose_pinned_image("sage")))
+        assert si.server_identity_ok("http://127.1:8090", "sage") is True
 
     def test_pinned_image_on_another_port_does_not_cover(self, docker):
         # The ps line can carry OTHER published ports of the same

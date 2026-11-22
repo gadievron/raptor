@@ -89,7 +89,7 @@ _cache_lock = threading.Lock()
 _warned: set[tuple[str, int, str]] = set()
 
 
-def _is_loopback(host: str) -> bool:
+def is_loopback_host(host: str) -> bool:
     """Whether *host* addresses THIS machine — the gate's scope test.
 
     By parse, never by shape: a loopback IP literal (all of
@@ -103,6 +103,17 @@ def _is_loopback(host: str) -> bool:
     ``localhost.``) down the ungated remote lane. Same doctrine as
     ``core.llm.egress._is_loopback``: names that merely look
     loopback-ish classify as remote — an operator-owned network path.
+
+    ``ip_address`` alone under-covers what the dialler parses: the OS
+    resolver accepts the full inet_aton numbers-and-dots notation —
+    ``127.1``, octal ``0177.0.0.1``, hex ``0x7f000001``, zero-padded
+    octets — and dials them as 127.0.0.1. For THIS gate a missed
+    local spelling fails OPEN (classified remote means trusted
+    ungated), the opposite of the egress chokepoint where the same
+    miss fails closed, so shorthand that ``ip_address`` rejects is
+    re-parsed with ``socket.inet_aton`` — exactly the dialler's
+    parser — and classified by the packed address. A genuine DNS name
+    fails both parses and stays remote.
     """
     h = host.strip().lower().strip("[]")
     if h.rstrip(".") in _LOOPBACK_NAMES:
@@ -110,7 +121,11 @@ def _is_loopback(host: str) -> bool:
     try:
         addr = ip_address(h)
     except ValueError:
-        return False
+        try:
+            packed = socket.inet_aton(h)
+        except (OSError, ValueError):
+            return False
+        addr = ip_address(packed)
     return addr.is_loopback or addr.is_unspecified
 
 
@@ -349,7 +364,7 @@ def server_identity_ok(url: str, service: str) -> bool:
     if not host:
         _warn_once(("", 0, service), f"unparseable server URL for {service!r}")
         return False
-    if not _is_loopback(host):
+    if not is_loopback_host(host):
         # Operator-directed remote deployment — the binding of a
         # remote port is not observable from this host.
         return True
@@ -371,4 +386,4 @@ def server_identity_ok(url: str, service: str) -> bool:
     return ok
 
 
-__all__ = ["compose_pinned_image", "server_identity_ok"]
+__all__ = ["compose_pinned_image", "is_loopback_host", "server_identity_ok"]
