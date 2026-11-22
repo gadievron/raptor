@@ -380,7 +380,7 @@ def _build_stderr_tail(stderr: str | None, *, max_lines: int = 10,
     return detail
 
 
-def _digest_included(rel_parts: tuple) -> bool:
+def _digest_included(rel_parts: tuple[str, ...]) -> bool:
     """Whether a database-relative path is in the immutable digest
     subset: the two top-level identity files plus the ``db-*`` dataset
     relations, EXCLUDING any directory named ``cache`` (the evaluator
