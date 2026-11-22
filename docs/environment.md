@@ -744,6 +744,7 @@ Prose and the container-side variables: [SAGE](sage.md),
 | `SAGE_URL` | `http://localhost:8090` | SAGE node base URL. |
 | `SAGE_TIMEOUT` | `30.0` | API request timeout in seconds (float); non-float or non-positive warns and uses the default. |
 | `SAGE_OLLAMA_URL` | `http://localhost:11435` | Ollama URL for the direct-embed path (CPU hosts bypassing the Go-side embed timeout). Read once at module import. |
+| `SAGE_SERVER_TRUSTED` | unset (`false`) | Truthy skips the server-identity gate (`core/sage/server_identity.py`): by default, clients refuse a loopback SAGE/Ollama URL unless `docker ps` shows the compose-pinned image publishing that port (anti port-squat; see [SAGE](sage.md), "Server identity"). Set it for a local server the operator manages outside the shipped compose file. Canonical toggle spellings; unrecognised values warn and keep the gate on. |
 | `SAGE_EMBED_MODEL` | auto-detected by setup | Embedding model override — set **before running `raptor-sage-setup`** (GPU hosts auto-select `nomic-embed-text`, CPU `snowflake-arctic-embed:m`); changing it later without re-running setup desyncs client and container. |
 | `SAGE_FORCE_CPU` | unset | Pipeline hooks are disabled on CPU-only Ollama by default (fail-closed for latency); truthy forces them on. Shared toggle spellings — `0`/`false`/`no`/`off` no longer force; unrecognised values warn and leave them disabled. |
 | `SAGE_PROPOSE_DELAY_MS` | `0` | Safety-valve delay between SAGE proposes, capped at 300 000 ms; invalid values silently mean 0. Rarely needed. |

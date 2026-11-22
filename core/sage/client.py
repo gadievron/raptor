@@ -22,6 +22,7 @@ from typing import Any
 from core.logging import get_logger
 
 from .config import SageConfig, ensure_loopback_no_proxy
+from .server_identity import server_identity_ok
 
 logger = get_logger()
 
@@ -178,6 +179,10 @@ def _embed_via_ollama(text: str) -> list[float] | None:
     validation. Calling Ollama directly removes one network hop and
     avoids the 30s hardcoded timeout in SAGE's Go HTTP client.
     """
+    if not server_identity_ok(_OLLAMA_EMBED_URL, "ollama"):
+        # Port squatted / container down / docker unusable — the gate
+        # warned; embedding degrades like any other SAGE failure.
+        return None
     model = os.getenv("SAGE_EMBED_MODEL", "snowflake-arctic-embed:m")
     try:
         import httpx
@@ -306,6 +311,10 @@ class SageClient:
             return False
         if not _ensure_sdk():
             return False
+        if not server_identity_ok(self._config.url, "sage"):
+            # /health is spoofable (no server auth on the transport),
+            # so a reachable-but-unverified port must read as "down".
+            return False
         try:
             import httpx
 
@@ -323,6 +332,11 @@ class SageClient:
         if not self._config.enabled:
             return None
         if not _ensure_sdk():
+            return None
+        if not server_identity_ok(self._config.url, "sage"):
+            # Checked on every acquisition (TTL-cached), not just at
+            # construction: a sidecar dying mid-session must not leave
+            # a cached client talking to whatever rebinds the port.
             return None
         if self._client is None:
             identity_path = self._config.identity_path

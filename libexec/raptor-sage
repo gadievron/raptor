@@ -87,8 +87,19 @@ def _get_client(timeout: float = 0):
     # call to the proxy and every subcommand reports "not reachable".
     from core.sage.client import harden_identity_key_perms
     from core.sage.config import ensure_loopback_no_proxy
+    from core.sage.server_identity import server_identity_ok
     ensure_loopback_no_proxy()
     cfg = SageConfig.from_env()
+    if not server_identity_ok(cfg.url, "sage"):
+        # The gate's warning (stderr via logging) carries the detail;
+        # this line gives the operator the CLI-level outcome.
+        sys.stderr.write(
+            "SAGE server identity could not be verified — refusing to "
+            "connect. Start the sidecar with libexec/raptor-sage-setup, "
+            "or set SAGE_SERVER_TRUSTED=1 for a self-managed local "
+            "server.\n"
+        )
+        return None
     identity_path = cfg.identity_path
     if identity_path and Path(identity_path).exists():
         identity = AgentIdentity.from_file(identity_path)

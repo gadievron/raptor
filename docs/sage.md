@@ -139,6 +139,52 @@ sessions. Both paths land on the same SAGE node, a Docker sidecar with
 an Ollama container providing embeddings.
 
 
+## Server identity
+
+The SAGE REST transport is plain HTTP with client-side request signing
+only: the client proves who *it* is (Ed25519 attribution), but nothing
+proves who the *server* is — `/health` is spoofable, and while the
+container is down any same-host process could bind the published
+loopback port and serve forged rows or harvest proposed memories.
+
+Full caller/server authentication needs upstream server support the
+pinned image does not offer (a shared-token scheme requires the server
+to verify tokens; a unix-socket migration requires the server to
+listen on one — both remain upstream asks). What the client *can*
+establish without upstream changes is server identity at the port
+binding: before constructing a client, the **server-identity gate**
+(`core/sage/server_identity.py`) asks `docker ps` which image
+publishes the target loopback port and requires it to be the
+compose-pinned image (the same digest pin that anchors boot-payload
+trust). While a docker container publishes the port, dockerd holds
+that binding — an unprivileged local process cannot squat it, and an
+adversary who can drive dockerd is already over the machine's
+privilege boundary.
+
+When the check fails (container down, port squatted, docker missing),
+SAGE degrades to unavailable exactly as if the server were
+unreachable, with a warning naming the remedies. Scope and escape
+hatches:
+
+- Loopback URLs only — a non-loopback `SAGE_URL` is an
+  operator-directed remote deployment whose network path the operator
+  owns; the gate does not apply.
+- `SAGE_SERVER_TRUSTED=1` skips the check for a local server the
+  operator manages outside the shipped compose file (hand-run binary,
+  podman, etc.).
+- Verdicts are cached for ~60 s per endpoint, so hook-heavy pipelines
+  cost one `docker ps` per window; expiry re-covers a sidecar that
+  dies mid-session.
+
+The gate covers the Python SDK paths (`core/sage/client.py`, including
+the direct-Ollama embed path) and the `raptor-sage` CLI. The MCP boot
+lane keeps its own control (the boot-payload guard), and the remaining
+caller-side exposure — any non-sandboxed same-host process may still
+*talk to the genuine server* — stays bounded by row-MAC verification
+(unstamped rows are hint-only), the sandbox's TCP denial for analysed
+children, and the TTY-gated boot-payload stamp.
+
+
 ## HMAC key setup
 
 SAGE recall feeds *mechanical* decisions: skipping an LLM call for a
