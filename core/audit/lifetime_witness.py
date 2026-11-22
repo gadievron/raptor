@@ -1711,6 +1711,11 @@ def _alias_facts(body: Any) -> list[_AliasFact]:
     return facts
 
 
+#: Cap on guard-contradiction solver attempts per proof pass — the
+#: oracle narrows refusals, so hitting the cap only keeps refusals.
+_GUARD_ATTEMPT_CAP = 32
+
+
 class _Analysis:
     """Parsed function + CFG + tracked sets for one claimed pointer."""
 
@@ -1797,6 +1802,15 @@ class _Analysis:
             _certify_macros(
                 src_tokens, table, self.locals, precise, vocab,
             )
+        # Substrate for the lazily built guard-contradiction oracle.
+        # The macro-name screen matters: a condition identifier that is
+        # also a macro means the raw parse and the compiled code read
+        # different programs, so the oracle refuses it outright.
+        self._macro_names = (
+            frozenset(table.defs) | frozenset(table.poisoned)
+        )
+        self._guard_oracle: Any = None
+        self._guard_oracle_built = False
 
     # -- tracked sets ------------------------------------------------------
 
@@ -2035,13 +2049,78 @@ class _Analysis:
                     f"{_node_text(occ)} is taken"
                 )
 
+    # -- guard-contradiction oracle ------------------------------------------
+
+    def _contradiction_oracle(self) -> Any:
+        """The per-function guard-contradiction oracle, or None.
+
+        Built lazily on the first contradiction attempt.  Parameters
+        are admissible alongside locals because construction already
+        certified every macro invoked in this function against
+        ``self.locals`` — which includes the parameters — so no
+        certified macro can hide a write to either.  Any build failure
+        yields None and the caller keeps its refusal.
+        """
+        if self._guard_oracle_built:
+            return self._guard_oracle
+        self._guard_oracle_built = True
+        try:
+            from .guard_contradiction import GuardContradictionOracle
+            self._guard_oracle = GuardContradictionOracle(
+                self.fn_node,
+                locals_=self.locals,
+                params=self.params,
+                params_admissible=True,
+                macro_names=self._macro_names,
+            )
+        except Exception:  # noqa: BLE001 — oracle absence keeps refusals
+            self._guard_oracle = None
+        return self._guard_oracle
+
+    def _site_stmt(self, nid: int) -> Any | None:
+        """The single statement of CFG node *nid*, else None."""
+        exprs = self.cfg.exprs.get(nid, [])
+        return exprs[0] if len(exprs) == 1 else None
+
+    def _stmt_contradicts(
+        self, site: int, node: Any, budget: dict[str, int],
+    ) -> bool:
+        """True ONLY when the release statement at CFG node *site* and
+        the statement enclosing AST *node* carry governing conditions
+        proven jointly unsatisfiable."""
+        if budget["n"] >= _GUARD_ATTEMPT_CAP:
+            return False
+        budget["n"] += 1
+        stmt = self._site_stmt(site)
+        if stmt is None:
+            return False
+        oracle = self._contradiction_oracle()
+        if oracle is None:
+            return False
+        return oracle.contradicts(stmt, node)
+
+    def _sites_contradict(
+        self, s: int, t: int, budget: dict[str, int],
+    ) -> bool:
+        stmt = self._site_stmt(t)
+        if stmt is None:
+            return False
+        return self._stmt_contradicts(s, stmt, budget)
+
     def check_nothing_after(
         self, site: int, *, allow_sites: set[int] | None = None,
         strict_names: frozenset[str] | None = None,
         weak_names: frozenset[str] | None = None,
-    ) -> None:
+    ) -> int:
         """No use after *site*: strict names refuse on ANY occurrence,
-        weak names refuse on deref / index / call-argument use."""
+        weak names refuse on deref / index / call-argument use.
+
+        An offending occurrence whose governing conditions provably
+        contradict the release's (``if (err) kfree(p); …
+        if (!err) use(p);``) lies on an infeasible lexical path: it is
+        discharged instead of refusing, and the returned count reports
+        how many were.  Every unproven contradiction keeps the refusal.
+        """
         strict = (
             strict_names if strict_names is not None else self.aliases
         )
@@ -2052,20 +2131,29 @@ class _Analysis:
         region = self.after(site)
         if site in region:
             raise ProofRefusal("release site is inside a loop")
+        pruned = 0
+        budget = {"n": 0}
         for nid in region:
             if allow_sites and nid in allow_sites:
                 continue
             for occ in self.occurrences(nid, strict):
+                if self._stmt_contradicts(site, occ.node, budget):
+                    pruned += 1
+                    continue
                 raise ProofRefusal(
                     f"{occ.name} occurs after the release "
                     f"({occ.context})"
                 )
             for occ in self.occurrences(nid, weak):
                 if occ.context in ("deref", "callarg", "addr"):
+                    if self._stmt_contradicts(site, occ.node, budget):
+                        pruned += 1
+                        continue
                     raise ProofRefusal(
                         f"possibly-retaining {occ.name} used after "
                         f"the release ({occ.context})"
                     )
+        return pruned
 
 
 # ---------------------------------------------------------------------------
@@ -2084,27 +2172,47 @@ def _arm_freepath(an: _Analysis, pointer: str) -> LifetimeProof:
         raise ProofRefusal(
             f"fewer than two visible release sites of {pointer}"
         )
-    site_set = set(sites)
-    shared_path = False
+    regions: dict[int, set[int]] = {}
     for s in sites:
         region = an.after(s)
         if s in region:
             raise ProofRefusal("a release site is inside a loop")
-        if not region.isdisjoint(site_set):
-            shared_path = True
+        regions[s] = region
     # Loop refusals have priority over path-sharing refusals. Finish the
-    # original loop-check pass before reporting any reachable site pair.
-    if shared_path:
-        raise ProofRefusal("two release sites lie on one path")
+    # original loop-check pass before examining any reachable site pair.
+    overlapping = [
+        (s, t) for s in sites for t in sites
+        if t != s and t in regions[s]
+    ]
+    discharged = 0
+    if overlapping:
+        # A co-reachable pair whose governing conditions are proven
+        # jointly unsatisfiable cannot both execute in one call —
+        # EVERY pair must be so proven, else the refusal stands.
+        budget = {"n": 0}
+        if not all(
+            an._sites_contradict(s, t, budget) for s, t in overlapping
+        ):
+            raise ProofRefusal("two release sites lie on one path")
+        discharged = len(overlapping)
+    reason = (
+        f"the {len(sites)} release sites of {pointer} are pairwise "
+        f"path-exclusive on the goto-resolved CFG and none is "
+        f"loop-enclosed — no execution frees it twice at the "
+        f"claimed sites"
+    )
+    if discharged:
+        reason = (
+            f"the {len(sites)} release sites of {pointer} are pairwise "
+            f"execution-exclusive and none is loop-enclosed — "
+            f"{discharged} co-reachable site pair(s) carry governing "
+            f"conditions proven jointly unsatisfiable by SMT — no "
+            f"execution frees it twice at the claimed sites"
+        )
     return LifetimeProof(
         arm="freepath",
         pointer=pointer,
-        reason=(
-            f"the {len(sites)} release sites of {pointer} are pairwise "
-            f"path-exclusive on the goto-resolved CFG and none is "
-            f"loop-enclosed — no execution frees it twice at the "
-            f"claimed sites"
-        ),
+        reason=reason,
         cwes=_CWE_415,
     )
 
@@ -2116,16 +2224,24 @@ def _arm_nouse(an: _Analysis, pointer: str) -> LifetimeProof:
             f"no visible release site of {pointer}"
         )
     an.refuse_global_escapes()
+    pruned = 0
     for s in sites:
-        an.check_nothing_after(s)
+        pruned += an.check_nothing_after(s)
+    reason = (
+        f"no path uses {pointer} (or any alias / possibly-"
+        f"retaining object) after its releasing call — the "
+        f"claimed use-after-release path does not exist"
+    )
+    if pruned:
+        reason += (
+            f" ({pruned} after-release occurrence(s) discharged: "
+            f"their governing conditions contradict the release's, "
+            f"proven unsatisfiable by SMT)"
+        )
     return LifetimeProof(
         arm="nouse",
         pointer=pointer,
-        reason=(
-            f"no path uses {pointer} (or any alias / possibly-"
-            f"retaining object) after its releasing call — the "
-            f"claimed use-after-release path does not exist"
-        ),
+        reason=reason,
         cwes=_CWE_416,
     )
 
@@ -2275,23 +2391,31 @@ def _arm_bracket(an: _Analysis, pointer: str) -> LifetimeProof:
                         f"{_site_name(s2)} lie on one path"
                     )
     site_set = set(sites)
+    pruned = 0
     for s in sites:
-        an.check_nothing_after(
+        pruned += an.check_nothing_after(
             s, allow_sites=site_set,
             strict_names=an.aliases,
+        )
+    reason = (
+        f"{pointer} is defined only by the acquire-family call "
+        f"{callee}(), which dominates every put/unpin release; "
+        f"no two reference "
+        f"drops share a path (the seeded pin idiom's unpin+put "
+        f"pair excepted), none is loop-enclosed, and nothing "
+        f"uses {pointer} after the bracket closes — the claimed "
+        f"free is a paired reference drop"
+    )
+    if pruned:
+        reason += (
+            f" ({pruned} after-release occurrence(s) discharged: "
+            f"their governing conditions contradict the release's, "
+            f"proven unsatisfiable by SMT)"
         )
     return LifetimeProof(
         arm="bracket",
         pointer=pointer,
-        reason=(
-            f"{pointer} is defined only by the acquire-family call "
-            f"{callee}(), which dominates every put/unpin release; "
-            f"no two reference "
-            f"drops share a path (the seeded pin idiom's unpin+put "
-            f"pair excepted), none is loop-enclosed, and nothing "
-            f"uses {pointer} after the bracket closes — the claimed "
-            f"free is a paired reference drop"
-        ),
+        reason=reason,
         cwes=_CWE_415_416,
     )
 
