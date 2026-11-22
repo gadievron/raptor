@@ -433,7 +433,7 @@ def registered_spelling_role(part: str) -> str | None:
 # whole namespace is detection-grade by the channels' own
 # classifiers.
 _SMT_FALLBACK_VERIFICATION_VERBS = (
-    "check-overflow", "check-array-bounds",
+    "check-overflow", "check-array-bounds", "check-alloc-bounds",
 )
 # The array-access producer mints only its bare, source-bound receipt.
 _SMT_FALLBACK_WITNESS_VERBS = (

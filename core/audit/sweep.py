@@ -2309,6 +2309,7 @@ _SMT_DIRECT_ONLY_VERBS = frozenset({
     "check-shift-count",
     "check-integer-division",
     "check-array-bounds",
+    "check-alloc-bounds",
     "check-auth-bypass",
     "check-lock-discipline",
     "check-resource-leak",
@@ -2334,6 +2335,7 @@ _SMT_VERB_ROLES = {
     "invariant-preservation": "detection",
     "check-overflow": "verification",
     "check-array-bounds": "verification",
+    "check-alloc-bounds": "verification",
     "check-integer-division": "verification",
     "check-shift-count": "verification",
     "check-integer-comparison": "detection",
@@ -2780,6 +2782,15 @@ def run_smt_verb_direct(
             )
             if (bound.details or {}).get("array_bounds_status") != "unavailable":
                 return bound
+            # A plain subscript claim the fixed-array oracle cannot bind may
+            # still name one locally allocated, symbolic-extent object.
+            if access_kind == "read" and parse_array_access_claim(hypothesis) is not None:
+                allocated = _smt_verb_in_subprocess(
+                    file_path=file_path, function_name=function_name, verb="check-alloc-bounds",
+                    source=source, hypothesis=hypothesis, target_path=target_path, integer_abi=integer_abi,
+                )
+                if (allocated.details or {}).get("alloc_bounds_status") != "unavailable":
+                    return allocated
     result = _smt_verb_in_subprocess(
         file_path=file_path,
         function_name=function_name,
@@ -2788,6 +2799,19 @@ def run_smt_verb_direct(
         hypothesis=hypothesis,
         target_path=target_path, integer_abi=integer_abi,
     )
+    if verb == "check-array-bounds" and (result.details or {}).get("array_bounds_status") == "unavailable":
+        # Directly requested bounds checks keep the stronger-oracle routing:
+        # the symbolic-extent frame binds where no fixed local array exists.
+        from .array_bounds import has_array_write_goal, parse_array_access_claim
+        from .integer_abi import resolve_integer_abi
+        if (resolve_integer_abi(integer_abi) is not None and not has_array_write_goal(hypothesis)
+                and parse_array_access_claim(hypothesis) is not None):
+            allocated = _smt_verb_in_subprocess(
+                file_path=file_path, function_name=function_name, verb="check-alloc-bounds",
+                source=source, hypothesis=hypothesis, target_path=target_path, integer_abi=integer_abi,
+            )
+            if (allocated.details or {}).get("alloc_bounds_status") != "unavailable":
+                return allocated
     if include_callers:
         from .literal_call_observation import complete_literal_overflow_observation
         return complete_literal_overflow_observation(
@@ -2874,7 +2898,7 @@ def _smt_verb_in_subprocess(
     from uuid import uuid4
     from .integer_abi import integer_abi_record
     abi_record = integer_abi_record(integer_abi)
-    if verb in {"check-overflow", "check-array-bounds", "check-integer-division", "check-shift-count", "check-integer-comparison", "check-integer-conversion", "check-unary-negation", "check-integer-update"} and abi_record is None:
+    if verb in {"check-overflow", "check-array-bounds", "check-alloc-bounds", "check-integer-division", "check-shift-count", "check-integer-comparison", "check-integer-conversion", "check-unary-negation", "check-integer-update"} and abi_record is None:
         return SweepResult(
             tool="smt", file_path=file_path, function_name=function_name,
             outcome="inconclusive", rule_id=f"smt:{verb}",
@@ -2939,7 +2963,7 @@ def _smt_verb_in_subprocess(
                     result.matches = []
                     result.details = {**details, "source_scope_status": "unbound-worker-result"}
                 result.rule_id = f"smt:{verb}"
-            if (is_diagnostic_smt_rule(verb) or verb in {"check-array-bounds", "check-integer-division", "check-shift-count"}) and result.outcome != "error":
+            if (is_diagnostic_smt_rule(verb) or verb in {"check-array-bounds", "check-alloc-bounds", "check-integer-division", "check-shift-count"}) and result.outcome != "error":
                 result.outcome, result.details = _scope_smt_observation(
                     verb, result.outcome, result.details or {},
                 )
@@ -2971,7 +2995,7 @@ def _run_smt_verb_inner(
     """Confined-worker admission for source-derived function observations."""
     from .integer_abi import integer_abi_record
     abi_record = integer_abi_record(integer_abi)
-    if verb in {"check-overflow", "check-array-bounds", "check-integer-division", "check-shift-count", "check-integer-comparison", "check-integer-conversion", "check-unary-negation", "check-integer-update"} and abi_record is None:
+    if verb in {"check-overflow", "check-array-bounds", "check-alloc-bounds", "check-integer-division", "check-shift-count", "check-integer-comparison", "check-integer-conversion", "check-unary-negation", "check-integer-update"} and abi_record is None:
         return SweepResult(
             tool="smt", file_path=file_path, function_name=function_name,
             outcome="inconclusive", rule_id=f"smt:{verb}",
@@ -2993,7 +3017,7 @@ def _run_smt_verb_inner(
         file_path=file_path, function_name=function_name, verb=verb,
         source=source, hypothesis=hypothesis, target_path=target_path, vocab=vocab, integer_abi=abi_record,
     )
-    if binding is not None and (is_diagnostic_smt_rule(verb) or verb in {"check-array-bounds", "check-integer-division", "check-shift-count"}) and result.outcome != "error":
+    if binding is not None and (is_diagnostic_smt_rule(verb) or verb in {"check-array-bounds", "check-alloc-bounds", "check-integer-division", "check-shift-count"}) and result.outcome != "error":
         result.outcome, result.details = _scope_smt_observation(verb, result.outcome, result.details or {})
         if result.outcome != "confirmed":
             result.matches = []
@@ -3069,6 +3093,14 @@ def _run_smt_verb_on_source(
             from .array_bounds import check_array_bounds
             from .condition_extraction import language_for_file
             details = check_array_bounds(source, hypothesis, language=language_for_file(file_path), integer_abi=integer_abi)
+            outcome = "confirmed" if details.get("violation") is True else "inconclusive"
+            return SweepResult(tool="smt", file_path=file_path, function_name=function_name,
+                               rule_id=f"smt:{verb}", outcome=outcome, details=details,
+                               matches=[details] if outcome == "confirmed" else [])
+        elif verb == "check-alloc-bounds":
+            from .alloc_bounds import check_alloc_bounds
+            from .condition_extraction import language_for_file
+            details = check_alloc_bounds(source, hypothesis, language=language_for_file(file_path), integer_abi=integer_abi)
             outcome = "confirmed" if details.get("violation") is True else "inconclusive"
             return SweepResult(tool="smt", file_path=file_path, function_name=function_name,
                                rule_id=f"smt:{verb}", outcome=outcome, details=details,

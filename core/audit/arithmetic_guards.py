@@ -32,8 +32,16 @@ def _nodes(node):
         stack.extend(reversed(item.named_children))
 
 
-def guards_for_operation(body, target, data, operands, *, language=None, integer_abi=None, selected_value=None, selected_condition=False):
-    """Collect conjunctions with known branch polarity and unchanged names."""
+def guards_for_operation(body, target, data, operands, *, language=None, integer_abi=None, selected_value=None, selected_condition=False, admitted=()):
+    """Collect conjunctions with known branch polarity and unchanged names.
+
+    ``admitted`` statements are skipped by the walk without premise credit.
+    The caller must have independently bound each one in its own closed
+    frame: a direct child of a walked compound statement that writes no
+    watched integer name and at most exits the path (for example, one
+    allocation declaration and its null-check early return, whose success
+    path the caller names as an explicit assumption).
+    """
     def text(node):
         return data[node.start_byte:node.end_byte].decode("utf-8") if node is not None else ""
 
@@ -203,6 +211,8 @@ def guards_for_operation(body, target, data, operands, *, language=None, integer
             for child in node.named_children:
                 if contains(child):
                     return walk(child, facts, depth + 1)
+                if child in admitted:
+                    continue  # caller-bound statement; see the docstring contract
                 if child.end_byte > target.start_byte:
                     break
                 if child.type == "if_statement":

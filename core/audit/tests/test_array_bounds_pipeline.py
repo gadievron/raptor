@@ -131,7 +131,9 @@ def test_an_unsupported_object_keeps_the_existing_diagnostic_fallback(prerequisi
     result = sweep.run_smt_verb_direct(file_path="record.c", function_name="Read", verb="check-oob",
                                      source="int Read(int *Data, int Index) { return Data[Index]; }",
                                      hypothesis=HYPOTHESIS, integer_abi="ilp32")
-    assert calls == ["check-array-bounds", "check-oob"]
+    # The allocation oracle is probed next and declines the unsupported
+    # object, so the diagnostic fallback is reached unchanged.
+    assert calls == ["check-array-bounds", "check-alloc-bounds", "check-oob"]
     assert not grade.is_verification_evidence(result.rule_id)
 
 
