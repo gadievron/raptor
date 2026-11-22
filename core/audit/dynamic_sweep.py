@@ -117,6 +117,46 @@ def should_run_dynamic(
     return _is_compilable_language(file_path)
 
 
+def apply_dynamic_stamp(outcome: Any, strength: str) -> bool:
+    """Commit the sweep's graded receipt onto *outcome* — the single
+    stamping chokepoint for this channel's evidence vocabulary
+    (sanitizer / crash / exception; "refuted" has no stamp and is
+    handled by the orchestrator's demotion seam).
+
+    Signal-anchored grades stamp their verification-role receipt.
+    Exception-grade evidence (in-harness Python exception, bare
+    nonzero exit, sanitizer text without a signal-grade death) is a
+    review hint, never confirmation: idiomatic targets raise on
+    garbage input and hostile targets mint the shape at will — it
+    used to stamp dynamic:crash → CONFIRMED. The detection-role
+    ``dynamic:exception`` stamp (exact-spelling registry; NOT in
+    ``_CONFIRMED_EVIDENCE``) therefore routes the outcome
+    finding → suspicious in the same step, with the reason on the
+    record — the stamp never leaves this function riding a
+    ``finding`` status (the producer-stamp closure census exempts it
+    on exactly that guarantee). Returns True when a stamp was
+    committed.
+    """
+    if strength == "sanitizer":
+        outcome.evidence_tool = "dynamic:sanitizer"
+        return True
+    if strength == "crash":
+        outcome.evidence_tool = "dynamic:crash"
+        return True
+    if strength == "exception":
+        outcome.evidence_tool = "dynamic:exception"
+        if outcome.status == "finding":
+            outcome.status = "suspicious"
+            outcome.body = (
+                "[dynamic: exception-grade evidence only — "
+                "harness observed an exception/nonzero "
+                "exit, not a signal-grade crash; routed "
+                "finding → suspicious] " + (outcome.body or "")
+            )
+        return True
+    return False
+
+
 def run_dynamic_sweep(
     outcome: Any,
     ctx: dict[str, Any],

@@ -37,6 +37,7 @@ if __name__ == "__main__":
 
 from core.audit.dynamic_sweep import (  # noqa: E402
     _signal_grade_death,
+    apply_dynamic_stamp,
     run_dynamic_sweep,
 )
 from core.audit.orchestrator import ReviewOutcome  # noqa: E402
@@ -61,15 +62,11 @@ def _fake_result(returncode: int, stdout: str = "", stderr: str = "",
 
 
 def _apply_orchestrator_stamp(outcome: ReviewOutcome, strength: str) -> None:
-    """Mirror the orchestrator's dynamic-validation stamping block."""
-    if strength == "sanitizer":
-        outcome.evidence_tool = "dynamic:sanitizer"
-    elif strength == "crash":
-        outcome.evidence_tool = "dynamic:crash"
-    elif strength == "exception":
-        outcome.evidence_tool = "dynamic:exception"
-        if outcome.status == "finding":
-            outcome.status = "suspicious"
+    """The LIVE stamping chokepoint the orchestrator's
+    dynamic-validation seam calls — not a mirror: reverting the
+    production routing (e.g. exception-grade no longer demoting) must
+    fail these tests."""
+    apply_dynamic_stamp(outcome, strength)
 
 
 class TestPythonLaneClassification:

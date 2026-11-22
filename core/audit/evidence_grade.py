@@ -327,6 +327,27 @@ _EXACT_SPELLING_REGISTRY: dict[str, dict[str, str]] = {
         "differential:confirmed": _ROLE_VERIFICATION,
         "differential:relation-violation": _ROLE_VERIFICATION,
     },
+    # Dynamic-harness execution receipts (the orchestrator's dynamic
+    # validation seam). The namespace root used to sit only in
+    # ``_TOOL_NAMESPACES``, so ANY ``dynamic:*`` spelling — including
+    # shapes no producer mints ("dynamic:frida" is an EvidenceSource
+    # enum value, never an evidence_tool stamp; a hypothetical
+    # "dynamic:not-observed") — passed ``is_tool_evidence``, broke
+    # merge ties, and slipped the promotion alarm. Registry ownership
+    # closes the root: the signal-anchored receipts keep verification
+    # role; the exception-grade hint is detection role (idiomatic
+    # targets raise on garbage input and hostile targets mint the
+    # shape at will — the dynamic-validation seam routes it to
+    # suspicious for exactly that reason, and a review hint must not
+    # hold a claim against demotion or export tool_backed); every
+    # unlisted spelling fails closed, non-poisonous. Dynamic evidence
+    # proves presence, never absence: no refuting spelling exists in
+    # this namespace either.
+    "dynamic": {
+        "dynamic:sanitizer": _ROLE_VERIFICATION,
+        "dynamic:crash": _ROLE_VERIFICATION,
+        "dynamic:exception": _ROLE_DETECTION,
+    },
     # Frida receipt family — ONE taxonomy for every consumer
     # (/audit compute_tier, /validate Stage B corroboration,
     # dark_verify cross-run reuse) instead of the frida surfaces'
@@ -984,6 +1005,11 @@ _RECEIPT_MAP: dict[str, tuple] = {
         EvidenceSource.DYNAMIC_CRASH,
         "harness died by a real signal (waitstatus-provenance crash)",
     ),
+    # Detection role in the exact-spelling registry: like the
+    # unattributed frida rows below, this row renders only if the
+    # stamp ever reaches the chain seam past is_tool_evidence — kept
+    # for the description's sake should the role ever change, not as
+    # a live chain entry.
     "dynamic:exception": (
         EvidenceSource.DYNAMIC_CRASH,
         (

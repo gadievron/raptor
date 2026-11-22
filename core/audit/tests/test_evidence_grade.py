@@ -811,7 +811,16 @@ class TestProducerStampClosure:
     # Stamps a producer deliberately commits only on demotable /
     # non-finding outcomes. Additions require a behavioral test
     # proving the stamp never rides a "finding" status.
-    _DELIBERATELY_DEMOTABLE: frozenset = frozenset()
+    #
+    # dynamic:exception — detection role in the exact-spelling
+    # registry; its single producer
+    # (core.audit.dynamic_sweep.apply_dynamic_stamp, the chokepoint
+    # the orchestrator's dynamic-validation seam calls) routes
+    # finding → suspicious in the same step as the stamp. Behavioral
+    # proof against the LIVE chokepoint:
+    # test_dynamic_sweep_forgery.py (exception-grade cases assert
+    # status == "suspicious" after stamping).
+    _DELIBERATELY_DEMOTABLE: frozenset = frozenset({"dynamic:exception"})
 
     @classmethod
     def _modules(cls):

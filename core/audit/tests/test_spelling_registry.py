@@ -420,6 +420,124 @@ class TestFridaEntry:
         assert eg.is_tool_evidence("semgrep+frida:novel-variant")
 
 
+class TestDynamicEntry:
+    """The LIVE ``dynamic`` registry entry. The namespace root used to
+    sit only in ``_TOOL_NAMESPACES``, so ANY ``dynamic:*`` spelling —
+    including shapes no producer mints ("dynamic:frida" is an
+    EvidenceSource enum value, never an evidence_tool stamp) — passed
+    ``is_tool_evidence`` and broke merge ties. Registry ownership
+    closes the root:
+
+    * the signal-anchored dynamic-sweep receipts keep verification
+      role (sanitizer report, waitstatus-provenance crash);
+    * the exception-grade hint (``dynamic:exception`` — hostile
+      targets mint the shape at will; the orchestrator routes it to
+      suspicious) is detection role: it corroborates, never convicts
+      alone, never holds a claim against demotion;
+    * every unlisted spelling fails closed, non-poisonous — and no
+      refuting spelling exists (dynamic evidence proves presence,
+      never absence).
+    """
+
+    _VERIFICATION = ("dynamic:sanitizer", "dynamic:crash")
+    _DETECTION = ("dynamic:exception",)
+
+    def test_enumerated_spellings_survive_byte_exact(self) -> None:
+        ns = eg._EXACT_SPELLING_REGISTRY["dynamic"]
+        assert set(ns) == set(self._VERIFICATION + self._DETECTION)
+
+    def test_signal_anchored_receipts_are_verification_grade(
+        self,
+    ) -> None:
+        for spelling in self._VERIFICATION:
+            assert eg.registry_owns(spelling)
+            assert eg.registered_spelling_role(spelling) == (
+                eg._ROLE_VERIFICATION
+            )
+            assert eg.is_tool_evidence(spelling)
+            assert eg.is_verification_evidence(spelling)
+            assert _is_verification_evidence(spelling)
+            assert spelling in eg.VALID_EVIDENCE_TOOLS
+
+    def test_exception_grade_hint_never_convicts_alone(self) -> None:
+        for spelling in self._DETECTION:
+            assert eg.registry_owns(spelling)
+            assert eg.registered_spelling_role(spelling) == (
+                eg._ROLE_DETECTION
+            )
+            assert eg._is_detection_variant(spelling), spelling
+            assert not eg.is_tool_evidence(spelling), spelling
+            assert not eg.is_verification_evidence(spelling), spelling
+            assert not _is_verification_evidence(spelling), spelling
+            assert spelling not in eg.VALID_EVIDENCE_TOOLS
+
+    def test_unlisted_spellings_fail_closed(self) -> None:
+        # "dynamic:frida" is EvidenceSource.DYNAMIC_FRIDA's VALUE — a
+        # chain-source label, never a minted evidence_tool stamp — so
+        # it must not buy admission; refuter shapes are
+        # unrepresentable; the bare root grants nothing.
+        for stamp in ("dynamic:frida", "dynamic:not-observed",
+                      "dynamic:refuted", "dynamic:absent",
+                      "dynamic:exploit_confirmed", "dynamic"):
+            assert not eg.is_tool_evidence(stamp), stamp
+            assert not eg.is_verification_evidence(stamp), stamp
+            assert not _is_verification_evidence(stamp), stamp
+        roles = set(eg._EXACT_SPELLING_REGISTRY["dynamic"].values())
+        assert roles <= {eg._ROLE_VERIFICATION, eg._ROLE_DETECTION}
+
+    def test_fail_closed_survives_namespace_root_admission(self) -> None:
+        # "dynamic" stays in _TOOL_NAMESPACES (frida/dark_verify
+        # precedent): registry ownership must keep overriding so the
+        # bare root and unknown variants never ride prefix admission.
+        assert "dynamic" in eg._TOOL_NAMESPACES
+        assert not eg.is_tool_evidence("dynamic:novel-variant")
+        assert not eg.is_verification_evidence("dynamic:novel-variant")
+        for spelling in self._VERIFICATION:
+            assert eg.is_verification_evidence(spelling)
+
+    def test_unlisted_spelling_rides_composites_non_poisonously(
+        self,
+    ) -> None:
+        assert eg.is_tool_evidence("semgrep+dynamic:novel-variant")
+        assert eg.is_verification_evidence(
+            "dynamic:crash+dynamic:exception",
+        )
+        # Detection receipts cannot upgrade each other across
+        # namespaces either.
+        assert not eg.is_tool_evidence("dynamic:exception+frida:runtime")
+
+    def test_orchestrator_role_table_consults_the_entry(self) -> None:
+        from core.audit.orchestrator import _is_detection_only
+        assert _is_detection_only("dynamic:exception")
+        assert _is_detection_only("dynamic:frida")
+        assert _is_detection_only("dynamic:novel-variant")
+        assert not _is_detection_only("dynamic:crash")
+        assert not _is_detection_only("dynamic:sanitizer")
+
+    def test_unlisted_spelling_trips_the_promotion_alarm(
+        self, tmp_path,
+    ) -> None:
+        # The live chokepoint, not a predicate re-check: a finding
+        # whose only stamp is an unlisted dynamic:* spelling must
+        # alarm and demote under enforce=True, exactly like any other
+        # evidence-less promotion.
+        from types import SimpleNamespace
+
+        from core.audit.promotion_alarm import check_and_emit
+        outcome = SimpleNamespace(
+            file="src/a.c", function="f", status="finding",
+            body="b", model="m", cost_usd=0.0, duration_s=0.0,
+            line=1, hypothesis="h", hypotheses=[],
+            evidence_tool="dynamic:not-observed", review_result=None,
+            tools_dispatched=None,
+        )
+        rec = check_and_emit(
+            tmp_path, outcome, stage="journal-write", enforce=True,
+        )
+        assert rec is not None
+        assert outcome.status == "suspicious"
+
+
 class TestOrchestratorDetectionOnlyConsult:
     """The promotion surface's role table
     (``core.audit.orchestrator._is_detection_only``) consults the
