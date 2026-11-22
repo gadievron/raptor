@@ -13,6 +13,12 @@ false positive:
 - only direct calls to a seeded callee name with a known format
   position are counted; calls through pointers, macros, wrappers or
   with a non-literal / prefixed / concatenated format string decline;
+  a same-file ``#define``/``#undef`` of a seeded name declines every
+  call to that name (the call may expand to something else entirely),
+  and a call anywhere under a preprocessor conditional declines (the
+  region may be excluded from translation);
+- the format the runtime sees ends at the first NUL: directives after
+  an embedded ``\\0`` are never counted;
 - the literal is unescaped with the full C escape grammar (simple
   escapes, 1-3 digit octal, ``\\x`` hex — ``\\x25`` IS a percent
   sign); any other escape (``\\u``, ``\\e``, spliced lines) declines;
@@ -194,6 +200,43 @@ def _has_preproc(node) -> bool:
     return False
 
 
+def _under_preproc(node) -> bool:
+    """True when any ancestor is a preprocessor construct: the call may
+    sit in a region the preprocessor excludes from translation."""
+    cur = node.parent
+    while cur is not None:
+        if cur.type.startswith("preproc"):
+            return True
+        cur = cur.parent
+    return False
+
+
+def _redefined_names(root, text) -> set[str]:
+    """Seeded callee names a same-file ``#define``/``#undef`` touches.
+
+    A macro redefinition means the call expands to arbitrary other code,
+    so counting its literal arguments would assert a deficit about a
+    call the compiled program never makes."""
+    redefined: set[str] = set()
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        stack.extend(node.named_children)
+        if node.type in ("preproc_def", "preproc_function_def"):
+            name = node.child_by_field_name("name")
+            if name is not None and text(name) in _FORMAT_POSITIONS:
+                redefined.add(text(name))
+        elif node.type == "preproc_call":
+            directive = node.child_by_field_name("directive")
+            argument = node.child_by_field_name("argument")
+            if directive is not None and text(directive) == "#undef" \
+                    and argument is not None:
+                target = text(argument).split()
+                if target and target[0] in _FORMAT_POSITIONS:
+                    redefined.add(target[0])
+    return redefined
+
+
 def check_format_args(source: str) -> FormatArgsResult:
     """Count format directives against supplied arguments for every
     analysable printf-family call in *source* (C)."""
@@ -227,6 +270,7 @@ def check_format_args(source: str) -> FormatArgsResult:
     analysed = 0
     declined = 0
     deficits: list[dict] = []
+    redefined = _redefined_names(root, text)
     stack = [root]
     while stack:
         node = stack.pop()
@@ -240,7 +284,7 @@ def check_format_args(source: str) -> FormatArgsResult:
         position = _FORMAT_POSITIONS.get(name)
         if position is None:
             continue
-        if _has_preproc(node):
+        if name in redefined or _has_preproc(node) or _under_preproc(node):
             declined += 1
             continue
         arguments = node.child_by_field_name("arguments")
@@ -262,7 +306,9 @@ def check_format_args(source: str) -> FormatArgsResult:
         if unescaped is None:
             declined += 1
             continue
-        required = _count_required(unescaped)
+        # The runtime format ends at the first NUL; later directives
+        # are never read and must not be counted.
+        required = _count_required(unescaped.split("\0", 1)[0])
         if required is None:
             declined += 1
             continue

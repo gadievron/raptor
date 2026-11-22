@@ -6041,7 +6041,7 @@ def _check_toctou_double_fetch(lines: list, refiner=None) -> TocTouResult:
             if src_arg:
                 fetches.setdefault(src_arg, []).append((i, m.group(1)))
 
-    pruned = attempts = 0
+    pruned = discharged = attempts = 0
     for arg, locs in fetches.items():
         for first, second in zip(locs, locs[1:]):
             verified = False
@@ -6058,6 +6058,13 @@ def _check_toctou_double_fetch(lines: list, refiner=None) -> TocTouResult:
                 if verdict.status == "pruned":
                     pruned += 1
                     continue
+                if verdict.status == "discharged":
+                    # Unreachable for copy-family uses today (atomic
+                    # idioms are open/fopen-specific), but a future
+                    # idiom must map to inconclusive exactly as in the
+                    # pairs lane, never silently sustain the finding.
+                    discharged += 1
+                    continue
                 if verdict.verified:
                     verified = True
                     reasoning += f"; {verdict.reason}"
@@ -6072,9 +6079,9 @@ def _check_toctou_double_fetch(lines: list, refiner=None) -> TocTouResult:
                 ordering_verified=verified,
             )
 
-    return _toctou_negative(pruned, 0) if pruned else TocTouResult(
-        reasoning="no double-fetch pattern found",
-    )
+    if pruned or discharged:
+        return _toctou_negative(pruned, discharged)
+    return TocTouResult(reasoning="no double-fetch pattern found")
 
 
 def check_toctou(source: str, *, file_path: str | None = None) -> TocTouResult:

@@ -331,11 +331,16 @@ guard. Anything unmodeled derives nothing.
 The TOCTOU ordering refiner re-examines each lexical check/use pair on the
 statement-level control-flow graph and can only narrow: `pruned` when the
 pair is provably not an ordered flow (different functions, no CFG path, or
-every path reassigns the checked variable), `discharged` to inconclusive —
-never refuted — when the use carries an atomicity idiom, and `sustained`
-otherwise, leaving the lexical verdict exactly as before. A verified
-ordering stamps the confirmed finding; an unmodeled source sustains without
-the stamp.
+every path rebinds the checked variable to an unrelated value — a plain
+`=` whose right-hand side never mentions it; self-derived reassignments
+keep the checked value in the data flow, declarations introduce a new
+inner-scope object, and a shadowed name stands the kill-prune down
+entirely), `discharged` to inconclusive — never refuted — when the use
+carries an atomicity idiom matched structurally (flags built only from
+identifiers joined by `|`, so `flags & ~O_NOFOLLOW` and commented-out flag
+names never match), and `sustained` otherwise, leaving the lexical verdict
+exactly as before. A verified ordering stamps the confirmed finding; an
+unmodeled source sustains without the stamp.
 
 The lifetime guard-contradiction oracle discharges a release/use refusal
 only when both statements' governing `if` conditions, conjoined over
@@ -349,8 +354,11 @@ keep the conservative refusal. Z3 absence keeps every refusal.
 plain literal printf-family format exactly, inside a closed directive and
 escape grammar, against the supplied arguments. A counted deficit is
 undefined behaviour regardless of values (C11 7.21.6.1p2) and survives as a
-confirmed detection receipt; a surplus is never a defect; and positional
+confirmed detection receipt; a surplus is never a defect; the count stops
+at the first embedded NUL because the runtime format does; and positional
 forms, `%m`, wide conversions, unknown flags, non-literal or prefixed
-formats and va_list variants decline the whole call, because an over-count
-would manufacture a false positive. Negatives remain capped at inconclusive —
-arity says nothing about the call's reachability.
+formats, va_list variants, calls under a preprocessor conditional and
+calls to a name a same-file `#define`/`#undef` touches decline the whole
+call, because an over-count would manufacture a false positive. Negatives
+remain capped at inconclusive — arity says nothing about the call's
+reachability.

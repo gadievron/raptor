@@ -8,7 +8,9 @@ control-flow graph and can only narrow the lexical verdict:
 
 - ``pruned`` — the pair is provably not an ordered flow: the calls sit
   in different functions, no CFG path leads from the check to the use,
-  or every such path first reassigns the checked variable.
+  or every such path first rebinds the checked variable to an unrelated
+  value (a plain ``=`` whose right-hand side never mentions it; the
+  kill-prune stands down entirely when an inner scope shadows the name).
 - ``discharged`` — the ordered flow exists but the use carries an
   atomicity idiom (``O_NOFOLLOW``, ``O_CREAT|O_EXCL``, ``fopen``'s
   exclusive ``"x"`` mode) that closes the checked race's primary
@@ -31,9 +33,6 @@ from .lifetime_witness import CFG_EXIT, build_statement_cfg
 
 _MAX_SOURCE_CHARS = 1 << 20
 _IDENTIFIER_RE = re.compile(r"[A-Za-z_]\w*\Z")
-_NOFOLLOW_RE = re.compile(r"\bO_NOFOLLOW\b")
-_CREAT_RE = re.compile(r"\bO_CREAT\b")
-_EXCL_RE = re.compile(r"\bO_EXCL\b")
 #: Zero-based flags-argument position for the atomically-flaggable
 #: openers; fopen is handled separately via its mode string.
 _OPEN_FLAG_POSITIONS = {"open": 1, "openat": 2}
@@ -142,8 +141,53 @@ class ToctouRefiner:
             queue.extend(cfg.succ.get(nid, ()))
         return False
 
+    def _mentions(self, node, variable: str) -> bool:
+        stack = [node]
+        while stack:
+            n = stack.pop()
+            if n.type == "identifier" and self._text(n) == variable:
+                return True
+            stack.extend(n.named_children)
+        return False
+
+    def _declaring_occurrences(self, func, variable: str) -> int:
+        """Declarator occurrences of *variable* anywhere in *func*,
+        parameters included. Two or more means an inner scope shadows
+        the name somewhere, so without a scope model an assignment's
+        target object is ambiguous and the kill-prune must not run.
+        Initializer values are excluded; other declaration subtree
+        identifiers (array sizes etc.) may over-count, which only makes
+        the guard more conservative."""
+        count = 0
+        stack = [func]
+        while stack:
+            node = stack.pop()
+            stack.extend(node.named_children)
+            if node.type not in ("declaration", "parameter_declaration"):
+                continue
+            decl_stack = list(node.named_children)
+            while decl_stack:
+                d = decl_stack.pop()
+                if d.type == "init_declarator":
+                    declarator = d.child_by_field_name("declarator")
+                    if declarator is not None:
+                        decl_stack.append(declarator)
+                    continue
+                if d.type == "identifier":
+                    if self._text(d) == variable:
+                        count += 1
+                    continue
+                decl_stack.extend(d.named_children)
+        return count
+
     def _kill_nodes(self, cfg, variable, exclude):
-        """CFG nodes that rebind *variable* (assignment or declaration)."""
+        """CFG nodes that provably rebind *variable* to an unrelated
+        value: a plain ``=`` to the bare identifier whose right-hand
+        side never mentions it. Compound assignments, updates and
+        self-referencing assignments (``p = p``, ``p = fix(p)``) keep
+        the checked value in the data flow, and a declaration
+        introduces a NEW object in an inner scope rather than rebinding
+        the checked one — none of those count as kills."""
         kills = set()
         for nid, stmts in cfg.exprs.items():
             if nid in exclude:
@@ -152,20 +196,53 @@ class ToctouRefiner:
                 stack = [stmt]
                 while stack:
                     node = stack.pop()
-                    if node.type == "assignment_expression":
-                        left = node.child_by_field_name("left")
-                        if (left is not None and left.type == "identifier"
-                                and self._text(left) == variable):
-                            kills.add(nid)
-                    elif node.type in ("declaration", "init_declarator"):
-                        declarator = node.child_by_field_name("declarator")
-                        inner = declarator
-                        while inner is not None and inner.type != "identifier":
-                            inner = inner.child_by_field_name("declarator")
-                        if inner is not None and self._text(inner) == variable:
-                            kills.add(nid)
                     stack.extend(node.named_children)
+                    if node.type != "assignment_expression":
+                        continue
+                    operator = node.child_by_field_name("operator")
+                    left = node.child_by_field_name("left")
+                    right = node.child_by_field_name("right")
+                    if (operator is None or self._text(operator) != "="
+                            or left is None or left.type != "identifier"
+                            or self._text(left) != variable
+                            or right is None):
+                        continue
+                    if not self._mentions(right, variable):
+                        kills.add(nid)
         return kills
+
+    def _flag_identifiers(self, node) -> set[str] | None:
+        """The identifier set of a flags expression built ONLY from
+        identifiers and integer literals joined by ``|`` (parentheses
+        allowed), else None. Any other operator, a call or a cast makes
+        the active flag set unknowable by name: ``flags & ~O_NOFOLLOW``
+        textually contains the very flag it strips. Field-based descent
+        never visits comments, so commented-out flag names never match."""
+        idents: set[str] = set()
+        stack = [node]
+        while stack:
+            n = stack.pop()
+            if n.type == "identifier":
+                idents.add(self._text(n))
+            elif n.type == "number_literal":
+                continue
+            elif n.type == "parenthesized_expression":
+                inner = [c for c in n.named_children if c.type != "comment"]
+                if len(inner) != 1:
+                    return None
+                stack.append(inner[0])
+            elif n.type == "binary_expression":
+                operator = n.child_by_field_name("operator")
+                if operator is None or self._text(operator) != "|":
+                    return None
+                for field in ("left", "right"):
+                    side = n.child_by_field_name(field)
+                    if side is None:
+                        return None
+                    stack.append(side)
+            else:
+                return None
+        return idents
 
     def _atomic_discharge(self, use_call, use_name: str) -> str:
         """A mitigation reason when the use is an atomic idiom, else ''."""
@@ -174,15 +251,24 @@ class ToctouRefiner:
                 [c for c in arguments.named_children if c.type != "comment"])
         position = _OPEN_FLAG_POSITIONS.get(use_name)
         if position is not None and position < len(args):
-            flags = self._text(args[position])
-            if _NOFOLLOW_RE.search(flags):
-                return "O_NOFOLLOW on the use mitigates the symlink vector"
-            if _CREAT_RE.search(flags) and _EXCL_RE.search(flags):
-                return "O_CREAT|O_EXCL makes the creation atomic"
+            flags = self._flag_identifiers(args[position])
+            if flags is not None:
+                if "O_NOFOLLOW" in flags:
+                    return ("O_NOFOLLOW on the use mitigates the "
+                            "symlink vector")
+                if {"O_CREAT", "O_EXCL"} <= flags:
+                    return "O_CREAT|O_EXCL makes the creation atomic"
         if use_name == "fopen" and len(args) >= 2:
             mode = args[1]
-            if mode.type == "string_literal" and "x" in self._text(mode):
-                return 'fopen exclusive "x" mode makes the creation atomic'
+            if mode.type == "string_literal":
+                raw = self._text(mode)
+                body = raw[1:-1] if len(raw) >= 2 else ""
+                # Plain literal only; any escape could spell or hide an
+                # 'x' that the runtime mode string does not contain.
+                if (raw[:1] == '"' and raw[-1:] == '"'
+                        and "\\" not in body and "x" in body):
+                    return ('fopen exclusive "x" mode makes the '
+                            "creation atomic")
         return ""
 
     def refine(
@@ -234,7 +320,8 @@ class ToctouRefiner:
                 status="pruned",
                 reason="no control-flow path from the check to the use",
             )
-        if _IDENTIFIER_RE.match(variable):
+        if (_IDENTIFIER_RE.match(variable)
+                and self._declaring_occurrences(check_func, variable) <= 1):
             kills = self._kill_nodes(
                 cfg, variable, exclude={check_node, use_node},
             )

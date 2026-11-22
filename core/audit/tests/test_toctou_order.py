@@ -138,9 +138,9 @@ def test_mutually_exclusive_branches_are_pruned():
 
 
 REASSIGNED = _c("""
-    void F(char *p) {
+    void F(char *p, char *q) {
         if (access(p, R_OK) != 0) return;
-        p = realpath(p, 0);
+        p = q;
         open(p, O_RDONLY);
     }
 """)
@@ -151,6 +151,66 @@ def test_variable_reassigned_on_every_path_is_pruned():
     result = check_toctou(REASSIGNED, file_path="unit.c")
     assert result.toctou_found is False
     assert "pruned" in result.reasoning
+
+
+def test_self_referencing_reassignment_sustains():
+    # p = realpath(p, 0) derives the used value from the checked one:
+    # the race through the derived path is real, so no prune.
+    source = _c("""
+        void F(char *p) {
+            if (access(p, R_OK) != 0) return;
+            p = realpath(p, 0);
+            open(p, O_RDONLY);
+        }
+    """)
+    result = check_toctou(source, file_path="unit.c")
+    assert result.toctou_found is True
+    assert result.ordering_verified is True
+
+
+def test_plain_self_assignment_sustains():
+    source = REASSIGNED.replace("p = q;", "p = p;")
+    result = check_toctou(source, file_path="unit.c")
+    assert result.toctou_found is True
+    assert result.ordering_verified is True
+
+
+def test_compound_assignment_is_not_a_kill():
+    source = REASSIGNED.replace("p = q;", "p += 1;")
+    result = check_toctou(source, file_path="unit.c")
+    assert result.toctou_found is True
+    assert result.ordering_verified is True
+
+
+def test_inner_scope_shadow_declaration_sustains():
+    # The block-scoped p is a NEW object; the outer checked p flows to
+    # the use untouched. A prune here would clear a real race.
+    source = _c("""
+        int F(const char *p) {
+            if (access(p, R_OK) != 0) return -1;
+            { char *p = tmpname(); log_name(p); }
+            return open(p, O_RDONLY);
+        }
+    """)
+    assert check_toctou(source).toctou_found is True
+    result = check_toctou(source, file_path="unit.c")
+    assert result.toctou_found is True
+    assert result.ordering_verified is True
+
+
+def test_shadowed_name_stands_down_the_kill_prune():
+    # An assignment to a shadowed name targets the inner object; with
+    # two declarations of the name in scope the kill-prune must not run.
+    source = _c("""
+        int F(const char *p) {
+            if (access(p, R_OK) != 0) return -1;
+            { char *p; p = tmpname(); log_name(p); }
+            return open(p, O_RDONLY);
+        }
+    """)
+    result = check_toctou(source, file_path="unit.c")
+    assert result.toctou_found is True
+    assert result.ordering_verified is True
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +245,35 @@ def test_o_creat_o_excl_discharges():
     result = check_toctou(source, file_path="unit.c")
     assert result.toctou_found is False
     assert result.applicable is False
+
+
+def test_masked_out_nofollow_is_not_discharged():
+    # ``flags & ~O_NOFOLLOW`` textually contains the flag name while
+    # stripping the flag itself; only a plain |-composition may match.
+    source = _c("""
+        void F(const char *p, int flags) {
+            if (access(p, R_OK) != 0) return;
+            open(p, flags & ~O_NOFOLLOW);
+        }
+    """)
+    result = check_toctou(source, file_path="unit.c")
+    assert result.toctou_found is True
+    assert result.ordering_verified is True
+
+
+def test_commented_flag_name_is_not_discharged():
+    # Structural descent never treats comment text as an active flag,
+    # even when the comment sits inside the flags expression itself —
+    # a raw-text match on the argument would see "O_NOFOLLOW" here.
+    source = _c("""
+        void F(const char *p) {
+            if (access(p, R_OK) != 0) return;
+            open(p, (O_RDONLY /* | O_NOFOLLOW */));
+        }
+    """)
+    result = check_toctou(source, file_path="unit.c")
+    assert result.toctou_found is True
+    assert result.ordering_verified is True
 
 
 def test_o_creat_alone_is_not_discharged():

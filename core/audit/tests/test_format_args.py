@@ -146,6 +146,24 @@ def test_no_directives_no_deficit():
     assert r.applicable is True
 
 
+def test_directives_after_embedded_nul_are_not_counted():
+    # printf stops at the first NUL: "%d" after \0 is never read, so a
+    # deficit minted from it would be a false positive.
+    r = check_format_args(_wrap('\tprintf("x\\0%d\\n");'))
+    assert r.deficit_found is False
+    assert r.applicable is True
+    assert r.analysed_calls == 1
+
+
+def test_deficit_before_an_embedded_nul_still_confirms():
+    # Only the pre-NUL "%d" counts; it is unsupplied, so this confirms
+    # with required 1, not 2.
+    r = check_format_args(_wrap('\tprintf("%d\\0%d\\n");'))
+    assert r.deficit_found is True
+    assert r.required == 1
+    assert r.supplied == 0
+
+
 # ---------------------------------------------------------------------------
 # Red team: every unmodeled shape declines — a count here could be wrong
 # ---------------------------------------------------------------------------
@@ -226,6 +244,59 @@ def test_preprocessor_inside_call_declines():
     assert r.deficit_found is False
     assert r.applicable is False
     assert r.analysed_calls == 0
+
+
+def test_call_under_preproc_conditional_declines():
+    # An #if 0 region is excluded from translation; a deficit counted
+    # there asserts a defect the compiled program cannot contain. The
+    # same decline covers #if 1 / #ifdef — conservatively, the refiner
+    # does not evaluate conditions.
+    src = (
+        "#include <stdio.h>\n"
+        "void f(void)\n{\n"
+        "#if 0\n"
+        '\tprintf("%d %d\\n");\n'
+        "#endif\n"
+        "}\n"
+    )
+    r = check_format_args(src)
+    assert r.deficit_found is False
+    assert r.applicable is False
+    assert r.analysed_calls == 0
+    assert r.declined_calls >= 1
+
+
+def test_same_file_define_of_a_seeded_name_declines():
+    # The call expands to my_log(...), not printf: counting its literal
+    # arguments would assert a deficit about a call that never happens.
+    src = (
+        "#define printf(f) my_log(f)\n"
+        "void f(void)\n{\n"
+        '\tprintf("%d %d\\n");\n'
+        "}\n"
+    )
+    r = check_format_args(src)
+    assert r.deficit_found is False
+    assert r.applicable is False
+    assert r.analysed_calls == 0
+    assert r.declined_calls >= 1
+
+
+def test_same_file_undef_of_a_seeded_name_declines():
+    # An #undef signals macro games around the name somewhere in this
+    # translation unit; every call to it declines.
+    src = (
+        "#include <stdio.h>\n"
+        "#undef printf\n"
+        "void f(void)\n{\n"
+        '\tprintf("%d %d\\n");\n'
+        "}\n"
+    )
+    r = check_format_args(src)
+    assert r.deficit_found is False
+    assert r.applicable is False
+    assert r.analysed_calls == 0
+    assert r.declined_calls >= 1
 
 
 def test_missing_format_argument_declines():
