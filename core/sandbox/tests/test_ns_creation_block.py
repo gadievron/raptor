@@ -336,6 +336,52 @@ def test_plain_lane_blocks_namespace_creation(
 
 @pytest.mark.integration
 @pytest.mark.skipif(sys.platform != "linux", reason="namespace sandbox")
+def test_plain_lane_ns_denials_survive_audit_mode(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Landlock-only audit fallback builds its own filter at a
+    THIRD call site (context.py constructs it and hands it to
+    _landlock_audit), so neither the mount-ns audit test nor the
+    enforcement-mode plain-lane test covers it. Force the demoted
+    shape AND audit mode together: the namespace denies must stay
+    hard ERRNO rules there too. The uid-map echo pins the plain
+    lane; the evidence JSONL under <run_dir>/.audit/ pins audit
+    engagement."""
+    from core.sandbox import context as _ctx
+    from core.sandbox import state
+    from core.sandbox.errors import SandboxSetupError
+    if not _host_grants_unprivileged_userns():
+        pytest.skip("host already denies unprivileged userns outside "
+                    "the sandbox — kernel EPERM is indistinguishable "
+                    "from the filter's, the test would be vacuous")
+    monkeypatch.setattr(state, "_mount_available_cache", False)
+    monkeypatch.setattr(state, "_mount_ns_available_cache", False)
+    monkeypatch.setenv("RAPTOR_ALLOW_DEGRADED_UNTRUSTED", "1")
+    try:
+        r = _ctx.run_untrusted(
+            ["sh", "-c", _NS_PROBE_SH + _CLONE_PROBE_SH],
+            target=str(tmp_path), output=str(tmp_path), timeout=120,
+            capture_output=True, text=True,
+            audit=True, audit_required=True,
+            audit_run_dir=str(tmp_path),
+        )
+    except (Exception, SandboxSetupError) as e:  # noqa: BLE001
+        pytest.skip(f"audited landlock-only lane unavailable: {e}")
+    out = _skip_or_fail_probe(r)
+    _assert_ns_probe_denied(out)
+    if "clone-arch-unsupported" not in out:
+        assert "clone-denied: 9" in out, out
+        assert "clone-control-ok: True" in out, out
+    caller_map = Path("/proc/self/uid_map").read_text(
+        encoding="utf-8").split()
+    assert f"uid-map: {caller_map}" in out, (
+        "payload left the caller's user namespace — the forced "
+        "plain lane did not engage\n" + out)
+    assert (tmp_path / ".audit" / ".sandbox-denials.jsonl").exists(), (
+        "audit evidence JSONL missing — the audit tier did not engage")
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(sys.platform != "linux", reason="namespace sandbox")
 def test_out_of_tree_tool_refuses_untrusted_run(tmp_path, monkeypatch):
     """The containment-floor contract covers the tool-visibility
     pre-flight: an untrusted cmd[0] that resolves OUTSIDE the mount-ns
