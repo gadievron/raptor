@@ -145,22 +145,22 @@ class TestPlantedRows:
         assert "auth.c:check_pw" in _gap_keys(gaps)
 
 
-class TestLegacyTolerance:
-    def test_unstamped_exact_hash_row_keeps_credit(self, tmp_path):
-        """Pre-MAC journals carry unstamped rows: with an EXACT
-        full-length source-hash match the historical suppression
-        stands (the doctrine's unstamped tier), so hardening this
-        fold does not re-buy every legacy review."""
+class TestUnverifiedNeverCredits:
+    def test_unstamped_exact_hash_row_resurfaces(self, tmp_path):
+        """Pre-MAC journals carry unstamped rows: even with an EXACT
+        full-length source-hash match they earn no credit — the span
+        hash is unkeyed (a plant computes it from the target tree),
+        so it cannot stand in for provenance. Legacy rows re-earn on
+        their next live review, which stamps."""
         target = _write_target(tmp_path)
         run_dir = tmp_path / "run1"
         real = hash_span(target / "auth.c", 1, 5)
         _plant_raw_row(run_dir, source_hash=real)
         gaps = _legacy_policy_gaps(_checklist(target), [], out_dir=run_dir)
-        assert "auth.c:check_pw" not in _gap_keys(gaps)
+        assert "auth.c:check_pw" in _gap_keys(gaps)
 
     def test_unstamped_exact_hash_stale_source_resurfaces(self, tmp_path):
-        """...and the same row resurfaces once the source drifts —
-        hash-gated credit is bound to the reviewed bytes."""
+        """...and the same row with drifted source resurfaces too."""
         target = _write_target(tmp_path)
         run_dir = tmp_path / "run1"
         real = hash_span(target / "auth.c", 1, 5)

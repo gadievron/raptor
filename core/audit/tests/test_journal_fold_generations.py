@@ -130,12 +130,12 @@ class TestIncidentReconstruction:
             self, tmp_path: Path, target: Path, monkeypatch) -> None:
         """Fail-closed unweakened: the same skewed reader, but a
         covered byte flipped in the persisted row — no generation and
-        no enumerated form verifies, no reuse."""
+        no enumerated form verifies, no credit, no reuse."""
         import json
         run = _incident_row(tmp_path, target)
         jf = run / "review-journal.jsonl"
         row = json.loads(jf.read_text())
-        row["source_hash"] = _real_hash(target)  # keep the hash gate
+        row["source_hash"] = _real_hash(target)  # current hash is no escape
         row["verdict"] = "clean"
         row["run_id"] = "forged-run"  # covered byte flip
         jf.write_text(json.dumps(row) + "\n")
@@ -146,8 +146,8 @@ class TestIncidentReconstruction:
 
         reuse_sink: dict = {}
         covered = _fold([entry], target, reuse_sink=reuse_sink)
-        assert covered == {"a.c:f"}  # unstamped tier: exact-hash credit
-        assert reuse_sink == {}      # never verdict reuse
+        assert covered == set()  # unverified: resurfaces for re-review
+        assert reuse_sink == {}  # never verdict reuse
 
 
 class TestFoldTelemetry:

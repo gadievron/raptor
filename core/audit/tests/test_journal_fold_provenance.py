@@ -95,10 +95,10 @@ def test_unverifiable_token_row_demotes_to_unstamped_tier(
 ) -> None:
     """A row whose token does not verify (edited content — or,
     equivalently, a newer-schema row this reader's round-trip loses
-    fields from) gets UNSTAMPED-tier authority: exact-hash-gated
-    fold credit, never verdict reuse. Not dropped below unstamped —
-    the token is strippable, so a lower tier would punish only
-    honest newer-schema rows."""
+    fields from) gets UNSTAMPED-tier authority: no fold credit, no
+    verdict reuse — resurface for re-review. Not dropped below
+    unstamped — the token is strippable, so a lower tier would
+    punish only honest newer-schema rows."""
     out = tmp_path / "run"
     real = _real_hash(target)
     entry = _entry(source_hash=real, verdict="finding")
@@ -107,14 +107,14 @@ def test_unverifiable_token_row_demotes_to_unstamped_tier(
     loaded.verdict = "clean"  # content no longer matches the token
     assert journal_mac.entry_provenance(loaded) == journal_mac.ROW_TAMPERED
 
-    # Exact-hash gate holds → fold credit, but NEVER the $0 reuse an
-    # authenticated row earns.
+    # Even with a CURRENT exact hash: no credit, no $0 reuse. The
+    # span hash is unkeyed — it is not an escape from the demotion.
     reuse_sink: dict = {}
     covered = _fold([loaded], target, reuse_sink=reuse_sink)
-    assert covered == {"a.c:f"}
+    assert covered == set()
     assert reuse_sink == {}
 
-    # Without a matching hash it carries nothing at all.
+    # Without a matching hash, the same.
     loaded.source_hash = "ffffffffffff"
     assert _fold([loaded], target) == set()
     loaded.source_hash = ""
@@ -124,11 +124,11 @@ def test_unverifiable_token_row_demotes_to_unstamped_tier(
 def test_unstamped_finding_class_row_never_hash_credits(
     target: Path,
 ) -> None:
-    """Finding-class rows are excluded from the unstamped hash tier
-    even with a CURRENT exact hash: only a verified row re-imports
-    its finding into findings.json, so hash-tier credit here would
-    retire the function while its claimed finding surfaces nowhere —
-    silent finding loss. Re-review, rediscover honestly."""
+    """Finding-class rows discriminate the universal rule: only a
+    verified row re-imports its finding into findings.json, so
+    credit here would retire the function while its claimed finding
+    surfaces nowhere — silent finding loss. Re-review, rediscover
+    honestly."""
     real = _real_hash(target)
     for verdict in ("finding", "suspicious"):
         assert _fold(
@@ -138,8 +138,8 @@ def test_unstamped_finding_class_row_never_hash_credits(
 def test_verified_finding_class_row_keeps_credit(
     tmp_path: Path, target: Path,
 ) -> None:
-    """The exclusion is unstamped-tier only: a VERIFIED finding row
-    both re-imports (findings gate) and folds."""
+    """A VERIFIED finding row both re-imports (findings gate) and
+    folds — verification is the discriminator."""
     out = tmp_path / "run"
     real = _real_hash(target)
     append_entry(out, _entry(source_hash=real, verdict="finding"))
@@ -148,13 +148,13 @@ def test_verified_finding_class_row_keeps_credit(
 
 
 def test_unstamped_row_never_enters_reuse_sink(target: Path) -> None:
-    """Legacy tolerance: exact-hash unstamped rows keep suppression,
-    but a $0 verdict import requires an authenticated row."""
+    """An exact-hash unstamped row earns neither suppression nor a
+    $0 verdict import — both require an authenticated row."""
     real = _real_hash(target)
     reuse_sink: dict = {}
     covered = _fold([_entry(source_hash=real)], target,
                     reuse_sink=reuse_sink)
-    assert covered == {"a.c:f"}
+    assert covered == set()
     assert reuse_sink == {}
 
 

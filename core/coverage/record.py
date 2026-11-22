@@ -907,10 +907,10 @@ def build_from_journal(run_dir: Path,
         # inherits — never upgrades — the journal row's provenance
         # tier: only a MAC-verified journal entry earns a stamped
         # coverage row. Unstamped/tampered journal rows (planted
-        # lines, pre-MAC legacy) flow through UNSTAMPED carrying
-        # their source hash, and the gap fold's exact-hash gate
-        # decides — stamping them here would launder a forged
-        # journal line into verified review credit.
+        # lines, pre-MAC legacy) flow through UNSTAMPED, and the
+        # consumers withhold review credit (store: machine-tier
+        # demotion; gap views: resurface) — stamping them here would
+        # launder a forged journal line into verified review credit.
         if journal_mac.entry_provenance(entry) == journal_mac.ROW_VERIFIED:
             token = journal_mac.mint_coverage_row(func_entry, tool_name)
             if token:

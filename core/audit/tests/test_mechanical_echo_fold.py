@@ -8,8 +8,8 @@ review. They are written for GAP functions (the decomp sweep runs over
 exactly the functions no review visited), so any fold route that
 credits them retires never-reviewed functions from the queue: the
 plain per-run fold on a reuse-disabled resume, and the verified fold's
-plain-credit routes (reuse disabled, unstamped tier, hashless
-verified). With verdict reuse ENABLED the eligibility screen already
+plain-credit routes (reuse disabled, hashless verified). With verdict
+reuse ENABLED the eligibility screen already
 refused the mechanical strategy tags — pinned here as the control
 direction. Zero LLM calls.
 """
@@ -213,10 +213,17 @@ class TestVerifiedFoldRoutes:
         assert sink == {}
 
     def test_genuine_row_routes_unchanged(self, tmp_path):
-        # An in-memory (unstamped) genuine row keeps the hash-gated
-        # legacy credit — the echo screen must not widen into a
-        # review-row screen. (Verdict-reuse for stamped genuine rows
-        # is pinned in test_same_run_resume.)
+        # A STAMPED genuine row keeps fold credit — the echo screen
+        # must not widen into a review-row screen. (Verdict-reuse for
+        # stamped genuine rows is pinned in test_same_run_resume;
+        # unstamped rows universally resurface — no provenance, no
+        # credit, the exact-hash escape is gone.)
+        from core.coverage.journal import load_entries
         target = _write_target(tmp_path)
-        covered = self._fold(target, [_entry(target)], reuse_sink=None)
+        run_dir = _run_dir(tmp_path, _entry(target))
+        stamped = load_entries(run_dir)[0]
+        covered = self._fold(target, [stamped], reuse_sink=None)
         assert covered == {"auth.c:check_pw"}
+        # The same row in-memory (unstamped) resurfaces.
+        covered = self._fold(target, [_entry(target)], reuse_sink=None)
+        assert covered == set()

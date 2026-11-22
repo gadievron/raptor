@@ -11,14 +11,17 @@ function forever.
 
 Writers stamp each row at append time with an HMAC-SHA256 token over
 the row's canonical JSON (token key excluded); the fold verifies
-before granting a row verdict-reuse authority, and rows whose token
-is present but invalid are skipped entirely (tampered). Rows with NO
-token (pre-MAC legacy, or forged-unstamped) keep fold-credit only
-behind the exact full-length source-hash gate and are never eligible
-for $0 verdict reuse — the tolerant-reader compromise that avoids a
-re-review storm on upgrade while denying unauthenticated rows every
-authority tier above "the source hash checks out". Same trust story
-and key-handling discipline as ``core/witness/provenance.py`` /
+before granting a row ANY authority. Rows that do not verify —
+unstamped (pre-MAC legacy, or forged) and tampered alike — earn no
+fold credit and no verdict reuse: the function resurfaces as a gap
+and re-earns on its next live review, which stamps. An earlier
+tolerant-reader compromise let unstamped rows keep fold credit
+behind the exact full-length source-hash gate, but that hash is
+UNKEYED — computable by anything that can read the target tree — so
+the gate could not distinguish an honest legacy row from a planted
+one, and it was removed. The cost is a one-time re-review of
+pre-MAC history; the safe direction. Same trust story and
+key-handling discipline as ``core/witness/provenance.py`` /
 ``core/llm/scorecard/integrity.py``.
 
 Key
@@ -26,8 +29,8 @@ Key
     ``~/.local/share/raptor/journal-mac.key``). Deliberately its OWN
     key file — per-purpose keys keep reset/rotation semantics scoped.
     No rotation: deleting the key demotes every stamped row to the
-    unstamped tier (fold-credit behind the hash gate, no reuse) and
-    new appends re-key lazily.
+    unstamped tier (no fold credit, no reuse — the covered functions
+    resurface for re-review) and new appends re-key lazily.
 
 The ``.audit-log.jsonl`` event log in the same directory carries one
 row class with the same authority (resume review-suppression via
@@ -68,8 +71,9 @@ fields this reader doesn't know) — or stamped by another install's
 key — reads as token-present-but-unverifiable. That is NOT treated
 as a distinct security tier: whoever can edit a row can simply strip
 its token and land in the unstamped tier anyway, so consumers demote
-unverifiable rows to the same unstamped tier (exact-hash-gated fold
-credit, never verdict reuse) instead of dropping them below it.
+unverifiable rows to the same unstamped tier (no fold credit, no
+verdict reuse — resurface for re-review) instead of dropping them
+below it.
 
 Canonicalisation generations. A token attests the row's canonical
 byte form, and that form is a shipped artifact: the serializer pin
@@ -335,8 +339,9 @@ def _warn_once_suspect_key(path: Path, reason: str, remedy: str) -> None:
     logger.warning(
         f"journal integrity: refusing key {path} — {reason}. Journal "
         f"rows will not mint or verify (stamped rows demote to the "
-        f"unstamped tier: hash-gated fold credit only, no verdict "
-        f"reuse) until this is fixed: {remedy}"
+        f"unstamped tier: no fold credit, no verdict reuse — covered "
+        f"functions resurface for re-review) until this is fixed: "
+        f"{remedy}"
     )
 
 
@@ -491,8 +496,8 @@ def _verify(row: dict, token: str | None, domain: bytes) -> bool:
 def mint_row(row: dict) -> str | None:
     """Hex HMAC-SHA256 token over the row's canonical payload, or
     None when no usable key is available. Writers treat None as
-    "persist unstamped" — the fold then applies unstamped-tier
-    semantics."""
+    "persist unstamped" — the fold then withholds credit and the
+    function resurfaces for re-review."""
     return _mint(row, _JOURNAL_DOMAIN)
 
 
@@ -541,8 +546,8 @@ def verify_audit_log_row(
     own run binding. Consumers that grant a row suppression authority
     MUST fail toward NOT suppressing when this returns False
     (unstamped legacy, tampered, and cross-run-replayed rows all
-    re-review — the same tolerant-reader compromise as the journal's
-    unstamped tier, which grants no verdict authority either)."""
+    re-review — the same posture as the journal's unstamped tier,
+    which grants no fold credit or verdict authority either)."""
     return _verify(row, token, _audit_domain(run_binding))
 
 
@@ -609,15 +614,15 @@ def mint_coverage_row(row: dict, tool: str) -> str | None:
     across runs by design and a replayed stamped row is genuine
     install history for the row it names.
 
-    ``None`` = persist unstamped — the fold then grants credit only
-    behind the exact full-length source-hash gate
-    (``core.audit.gaps._build_covered_set``), the journal's
-    tolerant-reader compromise. That gate is source-CURRENCY, not
-    authentication: the hash is unkeyed and computable from readable
-    source, so a hash-carrying plant passes it — the gate exists to
-    keep legacy rows credited while refusing hashless plants and
-    stale credit. Authorship assurance is this token, nothing
-    weaker."""
+    ``None`` = persist unstamped — the consumers
+    (``core.coverage.importer.import_functions_analysed``,
+    ``core.audit.gaps._build_covered_set``) then withhold review
+    credit entirely: the store demotes the row to ``<tool>:machine``
+    (examination evidence kept) and the gap views resurface the
+    function. There is deliberately no source-hash escape — the span
+    hash is unkeyed and computable from readable source, so it is
+    currency evidence, never authorship. Authorship assurance is
+    this token, nothing weaker."""
     return _mint(row, _coverage_row_domain(tool))
 
 
@@ -625,7 +630,7 @@ def verify_coverage_row(row: dict, token: str | None, tool: str) -> bool:
     """Coverage-row twin of :func:`verify_row`, against the record's
     ``tool`` label. Consumers that grant a row review-suppression
     authority MUST fail toward NOT suppressing when this returns
-    False unless the row carries positive source-hash evidence."""
+    False — a carried source hash is not an escape (unkeyed)."""
     return _verify(row, token, _coverage_row_domain(tool))
 
 
@@ -656,8 +661,8 @@ def entry_provenance(entry) -> str:
       "tampered" is attribution, not a security boundary) but log
       them distinctly.
     * ``unstamped`` — no token (pre-MAC legacy or forged-unstamped):
-      fold-credit only behind the exact source-hash gate, never
-      verdict reuse.
+      no fold credit, no verdict reuse — the function resurfaces and
+      re-earns on its next live review, which stamps.
     """
     return entry_provenance_detail(entry)[0]
 

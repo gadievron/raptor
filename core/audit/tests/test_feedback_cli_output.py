@@ -93,6 +93,17 @@ def test_feedback_output_groups_by_referee_outcome(tmp_path, capsys):
     _seed(out_dir, "missed_fn", "clean")
     _seed(out_dir, "corroborated_fn", "finding")
 
+    # Confirmed rulings carry the ruling-confirmation receipt the
+    # trusted /validate acts mint — the import demotes unreceipted
+    # plain-"confirmed" claims to confirmed_unverified, which never
+    # upgrades or corroborates.
+    from core.witness.provenance import stamp_ruling_confirmation
+    confirmed_missed = {"file": "src/vuln.c", "function": "missed_fn",
+                        "ruling": {"status": "confirmed"}}
+    confirmed_prior = {"file": "src/vuln.c", "function": "corroborated_fn",
+                       "ruling": {"status": "confirmed"}}
+    for f in (confirmed_missed, confirmed_prior):
+        stamp_ruling_confirmation(f, f["ruling"], tmp_path)
     report = tmp_path / "findings.json"
     report.write_text(json.dumps([
         {"file": "src/vuln.c", "function": "tool_backed_fn",
@@ -101,10 +112,8 @@ def test_feedback_output_groups_by_referee_outcome(tmp_path, capsys):
         {"file": "src/vuln.c", "function": "llm_tier_fn",
          "ruling": {"status": "ruled_out", "disqualifier": "D-0",
                     "reason": "hypothesis wrong"}},
-        {"file": "src/vuln.c", "function": "missed_fn",
-         "ruling": {"status": "confirmed"}},
-        {"file": "src/vuln.c", "function": "corroborated_fn",
-         "ruling": {"status": "confirmed"}},
+        confirmed_missed,
+        confirmed_prior,
     ]))
     ann_dir = tmp_path / "annotations"
 

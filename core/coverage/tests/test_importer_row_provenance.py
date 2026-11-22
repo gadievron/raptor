@@ -5,11 +5,12 @@ the audit gap fold, and coverage records live in target-writable
 run/project directories. Pre-fix the importer marked every
 ``functions_analysed`` row under the record's review-grade tool label
 — one planted ``coverage-llm.json`` row cleared its function from
-every store-derived gap view. These tests pin the fold's three tiers
-at the importer seam: verified rows import under the tool label,
-unstamped rows only behind the exact current-source-hash gate (never
-finding-class), everything else demotes to ``<tool>:machine`` —
-examination extent kept, review credit withheld. Zero LLM calls.
+every store-derived gap view. These tests pin the two tiers at the
+importer seam: verified rows import under the tool label, everything
+else (unstamped or tampered, with or without a matching source hash —
+the hash is unkeyed and computable by anything that can read the
+target tree) demotes to ``<tool>:machine`` — examination extent kept,
+review credit withheld. Zero LLM calls.
 """
 
 from __future__ import annotations
@@ -95,14 +96,18 @@ def test_planted_hashless_row_demotes_to_machine_tier(tmp_path, target):
     assert _reviewed(store) == 0
 
 
-def test_unstamped_row_with_exact_hash_keeps_tool_label(tmp_path, target):
-    """The tolerant-reader compromise, same as the fold: pre-MAC
-    legacy rows keep credit behind positive source evidence."""
+def test_unstamped_row_with_exact_hash_demotes(tmp_path, target):
+    """The former tolerant-reader escape: an unstamped row carrying
+    the function's CURRENT source hash. That hash is unkeyed — a
+    plant computes it from the target tree — so it must not lift the
+    row above machine tier."""
     row = {"file": "auth.c", "function": "check_pw",
            "hash": hash_span(target / "auth.c", 1, 5)}
     store, _ = _import(tmp_path, target, [row])
-    assert "llm" in store.tool_coverage_of_range("auth.c", 1, 5)
-    assert _reviewed(store) == 1
+    tools = store.tool_coverage_of_range("auth.c", 1, 5)
+    assert "llm:machine" in tools
+    assert "llm" not in tools
+    assert _reviewed(store) == 0
 
 
 def test_unstamped_row_with_hash_prefix_demotes(tmp_path, target):
@@ -116,9 +121,9 @@ def test_unstamped_row_with_hash_prefix_demotes(tmp_path, target):
 def test_unstamped_finding_class_row_demotes_despite_hash(
     tmp_path, target,
 ):
-    """Same rule as both gap-fold lanes: a finding-class row earns
-    review credit only when verified — hash-tier credit would retire
-    a function whose claimed finding no consumer surfaces."""
+    """A finding-class row earns review credit only when verified —
+    credit here would retire a function whose claimed finding no
+    consumer surfaces."""
     for status in ("finding", "suspicious"):
         row = {"file": "auth.c", "function": "check_pw",
                "status": status,

@@ -8,10 +8,11 @@ never flipped the hash and changed code was silently reused as
 reviewed. The hash now covers the SAME window the prompt showed
 (``core.audit.context.fallback_span_end``), on the stamp side
 (``core.audit.record._compute_hash``) and on every verify side (the
-journal fold's span candidates, the resume drift gate, the
-coverage-record import gate) — a verify side left on the single line
-would read every window-stamped row as permanent drift and re-buy the
-same review on every fold.
+journal fold's span candidates, the resume drift gate) — a verify
+side left on the single line would read every window-stamped row as
+permanent drift and re-buy the same review on every fold. (The
+coverage-record import no longer hashes at all: unstamped rows
+demote unconditionally — provenance, not source currency, decides.)
 
 Measured-``line_end`` spans are byte-identical to the pre-fix hashes
 (pinned literals below): only None geometry changes, so existing
@@ -292,8 +293,10 @@ class TestResumeDriftGate:
 
 
 class TestCoverageImportGate:
-    """The unstamped-row source-currency gate hashes the same window
-    the stamp covered — and withdraws credit when the body changed."""
+    """Unstamped rows demote to machine tier at the store import
+    regardless of source currency — the window-hash escape is gone
+    (the span hash is unkeyed, so it is not provenance). A stamped
+    None-geometry row keeps review credit."""
 
     def _import(self, tmp_path: Path, target: Path, rows: list[dict]):
         from core.coverage.importer import (
@@ -312,10 +315,34 @@ class TestCoverageImportGate:
             checklist_target=str(target))
         return store, marked
 
-    def test_current_window_hash_earns_review_credit(self, tmp_path: Path):
+    def test_current_window_hash_does_not_earn_review_credit(
+        self, tmp_path: Path,
+    ) -> None:
         target = _target(tmp_path)
         row = {"file": "a.c", "function": "handler",
                "hash": _compute_hash(target, "a.c", _HEADER_LINE, None)}
+        store, marked = self._import(tmp_path, target, [row])
+        assert marked == 1
+        labels = store.tool_coverage_of_range(
+            "a.c", _HEADER_LINE, _HEADER_LINE)
+        assert "llm:machine" in labels, (
+            "an unstamped row must demote to machine tier even when "
+            "its window hash matches current source — the hash is "
+            "computable by anything that can read the target tree"
+        )
+        assert "llm" not in labels
+
+    def test_stamped_none_geometry_row_keeps_credit(
+        self, tmp_path: Path, monkeypatch,
+    ) -> None:
+        from core.coverage import journal_mac
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+        target = _target(tmp_path)
+        row = {"file": "a.c", "function": "handler",
+               "hash": _compute_hash(target, "a.c", _HEADER_LINE, None)}
+        token = journal_mac.mint_coverage_row(row, "llm")
+        assert token
+        row[journal_mac.TOKEN_KEY] = token
         store, marked = self._import(tmp_path, target, [row])
         assert marked == 1
         labels = store.tool_coverage_of_range(
@@ -331,8 +358,5 @@ class TestCoverageImportGate:
         assert marked == 1
         labels = store.tool_coverage_of_range(
             "a.c", _HEADER_LINE, _HEADER_LINE)
-        assert "llm:machine" in labels, (
-            "an unstamped row whose reviewed window changed must "
-            "demote to machine tier, not keep review credit"
-        )
+        assert "llm:machine" in labels
         assert "llm" not in labels

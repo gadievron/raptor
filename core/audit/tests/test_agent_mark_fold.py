@@ -137,9 +137,20 @@ class TestVerifiedFoldRoutes:
         assert sink == {}
 
     def test_operator_mark_routes_unchanged(self, tmp_path):
-        # In-memory (unstamped) operator row keeps the hash-gated
-        # legacy credit — the screen keys on the stamp tier, never on
-        # producer="mark" alone.
+        # A STAMPED operator row keeps full fold credit — the agent-
+        # mark screen keys on the invocation tier (``model``), never
+        # on producer="mark" alone.
+        from core.coverage.journal import load_entries
+        target = _write_target(tmp_path)
+        run_dir = _run_dir(tmp_path, _mark_row(target, model="operator"))
+        stamped = load_entries(run_dir)[0]
+        covered = self._fold(target, [stamped])
+        assert covered == {"auth.c:check_pw"}
+
+    def test_unstamped_operator_mark_resurfaces(self, tmp_path):
+        # An in-memory (unstamped) operator row follows the universal
+        # provenance rule: no MAC, no fold credit — the exact-hash
+        # escape is gone (the span hash is unkeyed).
         target = _write_target(tmp_path)
         covered = self._fold(target, [_mark_row(target, model="operator")])
-        assert covered == {"auth.c:check_pw"}
+        assert covered == set()

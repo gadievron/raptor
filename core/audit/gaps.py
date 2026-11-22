@@ -2237,22 +2237,17 @@ def _build_covered_set(
     * stamped + verified (``coverage_row_provenance`` under the
       record's tool label — see ``core.coverage.journal_mac``) →
       full credit.
-    * unstamped / tampered → credit ONLY when the row's ``hash``
-      exactly matches the function's CURRENT source hash, recomputed
-      from the checklist's spans against ``target_path`` (full-length
-      equality; a prefix is not evidence), AND the row is not
-      finding-class (``status`` finding/suspicious — those rows have
-      no re-import route, so hash credit would silently retire a
-      claimed finding; they re-review instead). The journal's
-      tolerant-reader compromise: the hash is UNKEYED (computable by
-      anything that can read the source), so this tier is a source-
-      currency check that keeps pre-MAC legacy rows credited — it is
-      NOT authentication, and a plant that copies the current hash is
-      indistinguishable from a legacy row by construction. It stops
-      hashless plants and stale-source credit; authorship assurance
-      comes only from the verified tier. Rows for functions absent
-      from the checklist get no credit — no gap exists for them, so
-      credit is moot.
+    * unstamped / tampered → NO review credit; the function
+      resurfaces as a gap. There was previously a tolerant-reader
+      escape that kept credit when the row's ``hash`` exactly
+      matched the function's CURRENT source hash, but that hash is
+      UNKEYED — computable by anything that can read the source — so
+      a plant carrying the current hash was indistinguishable from a
+      pre-MAC legacy row by construction, and the escape was a
+      provenance-free review-suppression channel. Honest unstamped
+      rows (pre-MAC legacy, cross-install imports) re-earn on their
+      next live review, which stamps — over-review, the safe
+      direction.
     * the legacy ``files{...functions{}}`` shape earns NO review
       credit at all: it names functions with no verdict, no hash and
       no stamp (and it credited under ANY non-runtime tool label,
@@ -2268,18 +2263,9 @@ def _build_covered_set(
         category_of,
         classify,
     )
-    from core.staleness import hash_spans
 
-    from .context import fallback_span_end
-
-    # (file, function) → current-source hash oracle for the
-    # unstamped tier, built lazily: spans come from the checklist,
-    # hashes are computed per-file on the first candidate row
-    # (hash_spans batches the file read) and only for files that
-    # actually have unstamped rows to verify.
     current_binary_hashes = (_current_binary_hashes(checklist, target_path)
                              if _binary_hashes is None else _binary_hashes)
-    spans_by_file: dict[str, list[tuple[str, tuple[int, int]]]] = {}
     binary_sites: set[tuple[str, str]] = set()
     files_val = (checklist or {}).get("files")
     for file_info in files_val if isinstance(files_val, list) else []:
@@ -2297,45 +2283,6 @@ def _build_covered_set(
             if (isinstance(name, str) and name and item.get("address") is not None
                     and not (type(ls) is int and ls > 0)):
                 binary_sites.add((fp, name))
-            if (name and isinstance(name, str) and isinstance(ls, int)
-                    and not isinstance(ls, bool) and ls > 0):
-                le = item.get("line_end")
-                if le is None:
-                    # Missing line_end = the fallback read window —
-                    # the writer stamped the row's hash over that
-                    # window (core.audit.record._compute_hash), so
-                    # the oracle must hash the same lines or a
-                    # window-stamped row can never earn hash credit.
-                    le = fallback_span_end(ls, None)
-                elif not isinstance(le, int) or isinstance(le, bool):
-                    le = ls
-                spans_by_file.setdefault(fp, []).append((name, (ls, le)))
-    current_hashes: dict[str, dict[str, set]] = {}
-
-    def _row_hash_current(file_path: str, func_name: str,
-                          stored: str) -> bool:
-        if not target_path or not stored:
-            return False
-        entries = spans_by_file.get(file_path)
-        if not entries:
-            return False
-        if file_path not in current_hashes:
-            per_name: dict[str, set] = {}
-            resolved = safe_join(Path(target_path), file_path)
-            if resolved is not None and resolved.is_file():
-                try:
-                    hashes = hash_spans(
-                        resolved, [sp for _n, sp in entries])
-                except OSError:
-                    hashes = []
-                for (name, _sp), h in zip(entries, hashes):
-                    if h:
-                        per_name.setdefault(name, set()).add(h)
-            current_hashes[file_path] = per_name
-        # Exact, full-length equality with a freshly computed span
-        # hash — same discipline as the journal fold's compare (a
-        # short stored prefix simply never matches).
-        return stored in current_hashes[file_path].get(func_name, ())
 
     covered = set()
     refused_rows = 0
@@ -2406,25 +2353,18 @@ def _build_covered_set(
                     continue
             prov = journal_mac.coverage_row_provenance(fa, tool)
             if prov != journal_mac.ROW_VERIFIED:
-                if fa.get("status") in ("finding", "suspicious"):
-                    # Same rule as the journal fold: a finding-class
-                    # row earns suppression only when its finding is
-                    # live, which only a verified row can prove —
-                    # hash-tier credit here would suppress review of
-                    # a function whose claimed finding no consumer
-                    # surfaces. Re-review, rediscover honestly.
-                    refused_rows += 1
-                    continue
-                stored = fa.get("hash")
-                if not (isinstance(stored, str) and _row_hash_current(
-                        file_path, func_name, stored)):
-                    refused_rows += 1
-                    logger.debug(
-                        "coverage record %s: refusing review credit for "
-                        "%s:%s (%s row, no matching source hash)",
-                        tool, file_path, func_name, prov,
-                    )
-                    continue
+                # Unverified rows (unstamped or tampered) earn no
+                # review credit — there is deliberately no source-hash
+                # escape: the span hash is unkeyed, so a plant
+                # carrying the current hash is indistinguishable from
+                # a pre-MAC legacy row. Re-review, re-stamp.
+                refused_rows += 1
+                logger.debug(
+                    "coverage record %s: refusing review credit for "
+                    "%s:%s (%s row)",
+                    tool, file_path, func_name, prov,
+                )
+                continue
             accepted_key = make_function_key(file_path, func_name)
             covered.add(accepted_key)
             if (manual_binary_covered is not None and tool in {"mark", "annotations"}
@@ -2439,11 +2379,11 @@ def _build_covered_set(
     if refused_rows or legacy_shape_records:
         logger.warning(
             "coverage records: %d unverified functions_analysed row(s) "
-            "refused review credit (no stamp, no matching source hash, "
-            "or an unverified finding-class status); %d legacy files{} "
-            "record(s) carry no review credit — affected functions "
-            "resurface as gaps and will be re-reviewed (over-review, "
-            "the safe direction; on a large pre-migration run dir this "
+            "refused review credit (unstamped or tampered provenance); "
+            "%d legacy files{} record(s) carry no review credit — "
+            "affected functions resurface as gaps and will be "
+            "re-reviewed, re-stamping as they go (over-review, the "
+            "safe direction; on a large pre-migration run dir this "
             "can be a substantial paid re-review)",
             refused_rows, legacy_shape_records,
         )
@@ -3574,30 +3514,6 @@ def _fold_project_index(
         except Exception:
             logger.debug("strategy backfill build failed", exc_info=True)
 
-    known_run_ids: set[str] | None = None
-    try:
-        # The project's recorded runs corroborate unstamped rows: run
-        # dirs under the project, plus session-ledger pins naming it
-        # (external --out runs, whose ids are not in the dir listing).
-        known_run_ids = {
-            d.name for d in Path(project_dir).iterdir() if d.is_dir()
-        }
-        try:
-            from core.project.project import ProjectManager
-            from core.project.sessions import ledger_pinned_dirs
-            _resolved = Path(project_dir).resolve()
-            for _proj in ProjectManager().list_projects():
-                if Path(_proj.output_dir).resolve() == _resolved:
-                    known_run_ids.update(
-                        rec["run_id"]
-                        for rec in ledger_pinned_dirs(_proj.name))
-                    break
-        except Exception:  # noqa: BLE001 — ledger leg best-effort
-            logger.debug("journal-fold: ledger corroboration "
-                         "unavailable", exc_info=True)
-    except Exception:  # noqa: BLE001 — corroboration unavailable
-        known_run_ids = None
-
     _verify_entries_fold(
         covered,
         list(latest_function_grade_collapse(full_entries).values()),
@@ -3618,7 +3534,6 @@ def _fold_project_index(
         source_label="prior-run",
         reuse_stats=reuse_stats,
         strategy_backfill=strategy_backfill,
-        known_run_ids=known_run_ids,
         current_tools=current_tools,
         context_barriers=context_barriers,
     )
@@ -3675,7 +3590,6 @@ def _verify_entries_fold(
     domain_ctx: dict | None = None,
     reuse_stats: dict | None = None,
     strategy_backfill=None,
-    known_run_ids: set[str] | None = None,
     sidecar_dir: Path | None = None,
     current_tools: frozenset[str] | None = None,
     context_barriers: _ContextReviewBarriers | None = None,
@@ -3686,12 +3600,15 @@ def _verify_entries_fold(
 
     Shared verification core for the project-index fold (cross-run
     verdict reuse) and the same-run resume fold — both apply identical
-    semantics (see ``_fold_project_index``'s docstring): unverifiable
-    entries keep suppression, hash mismatches resurface as gaps,
-    verified + eligible entries land in ``reuse_sink`` via
-    ``setdefault`` so an earlier fold's candidate (the run's own
-    latest verdict) is never overwritten by a later one (a prior
-    run's).
+    semantics (see ``_fold_project_index``'s docstring): only
+    MAC-VERIFIED rows participate at all (unstamped and tampered rows
+    resurface as gaps — the span hash is unkeyed, so hash-gated
+    credit for them was a provenance-free review-suppression
+    channel); for verified rows, hash-uncheckable entries keep
+    suppression, hash mismatches resurface as gaps, and verified +
+    eligible entries land in ``reuse_sink`` via ``setdefault`` so an
+    earlier fold's candidate (the run's own latest verdict) is never
+    overwritten by a later one (a prior run's).
 
     ``source_label`` names the entry source in log lines
     (``same-run`` / ``prior-run``).
@@ -3700,10 +3617,10 @@ def _verify_entries_fold(
     coverage credit on the route that also RE-ADJUDICATES them: the
     $0 verdict-reuse import, whose imported outcomes the post-loop
     dark-verification pass walks. Every route that credits without
-    importing — reuse disabled, binary rows, hashless rows, unstamped
-    rows — resurfaces them instead (``dark_unresolved`` in the
-    not-reusable split): plain credit would suppress the very
-    re-review that settles the row.
+    importing — reuse disabled, binary rows, hashless rows —
+    resurfaces them instead (``dark_unresolved`` in the not-reusable
+    split): plain credit would suppress the very re-review that
+    settles the row.
 
     ``reuse_stats`` (optional dict) accumulates ``function key →
     reason class`` for entries the eligibility screens refused
@@ -3792,8 +3709,7 @@ def _verify_entries_fold(
     # rather than forfeited.
     tampered_reasons: dict[str, int] = {}
     legacy_verified: dict[str, int] = {}
-    unstamped_credited = 0
-    unstamped_unverifiable = 0
+    unstamped_resurfaced = 0
     reuse_blocked: dict[str, int] = {}
     barriers = (context_barriers if context_barriers is not None
                 else _review_context_barriers(entries))
@@ -3939,16 +3855,26 @@ def _verify_entries_fold(
             continue
         # Row provenance (core.coverage.journal_mac): the journal is
         # target-writable during runs and import-restorable, so a
-        # row's authority is tiered on its MAC. Verified rows keep
-        # full behaviour (including $0 verdict reuse); everything
-        # else — unstamped rows AND token-present-but-unverifiable
-        # rows (edited content, another install's key, or a
-        # newer-schema row this reader's round-trip loses fields
-        # from) — gets fold-credit only behind the exact source-hash
-        # gate below and is never imported as a reused verdict.
-        # Unverifiable-token rows are not dropped BELOW the unstamped
-        # tier: the token is strippable, so that would punish only
-        # honest newer-schema rows, not attackers.
+        # row's authority is gated on its MAC. Verified rows keep
+        # full behaviour (hash-gated fold credit and, when eligible,
+        # $0 verdict reuse); everything else — unstamped rows AND
+        # token-present-but-unverifiable rows (edited content,
+        # another install's key, or a newer-schema row this reader's
+        # round-trip loses fields from) — earns NO fold credit and
+        # resurfaces as a gap. There was previously a tolerant-reader
+        # tier that kept fold credit for unverified rows behind the
+        # exact source-hash gate, but the span hash is UNKEYED
+        # (computable by anything that can read the target tree), so
+        # a planted row carrying the current hash was
+        # indistinguishable from a pre-MAC legacy row by construction
+        # — a provenance-free review-suppression channel. Honest
+        # unstamped rows (pre-MAC legacy, cross-install imports, key
+        # deletion) re-earn on their next live review, which stamps —
+        # over-review, the safe direction, and the same posture the
+        # audit-log lane already takes for moved run dirs.
+        # Unverifiable-token rows get the SAME treatment as unstamped
+        # ones (not worse): the token is strippable, so a lower tier
+        # would punish only honest newer-schema rows, not attackers.
         provenance, prov_reason = journal_mac.entry_provenance_detail(entry)
         if provenance == journal_mac.ROW_TAMPERED:
             tampered += 1
@@ -3956,8 +3882,8 @@ def _verify_entries_fold(
                 tampered_reasons.get(prov_reason, 0) + 1)
             logger.debug(
                 "journal-fold: %s row has a provenance token that "
-                "does not verify (%s) — demoted to the unstamped "
-                "tier (hash-gated credit only, no verdict reuse)",
+                "does not verify (%s) — no fold credit, no verdict "
+                "reuse; resurfacing for re-review",
                 key, prov_reason,
             )
         elif (provenance == journal_mac.ROW_VERIFIED
@@ -3968,7 +3894,15 @@ def _verify_entries_fold(
             # ladder (drift that is being absorbed, not forfeited).
             legacy_verified[prov_reason] = (
                 legacy_verified.get(prov_reason, 0) + 1)
-        verified_row = provenance == journal_mac.ROW_VERIFIED
+        if provenance != journal_mac.ROW_VERIFIED:
+            if dark_row:
+                # Keep the dark split visible: an unresolved row
+                # resurfaces for the re-adjudication it was always
+                # going to need.
+                _dark_resurface(key, "unverified rows never credit")
+            elif provenance == journal_mac.ROW_UNSTAMPED:
+                unstamped_resurfaced += 1
+            continue
         # Candidate spans, tried in order — a match on ANY verifies:
         # * the entry's OWN recorded span: same-named items (macro
         #   redefinitions, C++ overloads) live at different spans
@@ -4037,35 +3971,30 @@ def _verify_entries_fold(
                 _dark_resurface(key, "binary rows never import")
             elif expected is not None and expected == entry.source_hash:
                 _credit(key, 0)
-            elif verified_row:
+            else:
                 logger.debug(
                     "journal-fold: %s bin-hash %s — resurfacing "
                     "(verified row, stale/missing anchor)",
                     key, "mismatch" if expected else "anchor missing",
                 )
-            else:
-                unstamped_unverifiable += 1
             continue
         if not entry.source_hash or target_path is None or not spans:
-            # No hash evidence to check. A VERIFIED row keeps the
-            # historical suppression (this install's writer recorded
-            # the review; hash computation failed at review time or
-            # there is no current source to compare). An UNSTAMPED
-            # row with no checkable hash carries nothing — crediting
-            # it was the forged-empty-hash suppression channel.
+            # No hash evidence to check. The row is VERIFIED (the
+            # provenance gate above resurfaced everything else), so
+            # it keeps the historical suppression: this install's
+            # writer recorded the review; hash computation failed at
+            # review time or there is no current source to compare.
             if dark_row:
                 # Reuse requires positive hash evidence, so a
                 # hashless dark row can never be imported — and
                 # without the import there is no dark pass to settle
                 # it. Historical suppression is for SETTLED verdicts.
                 _dark_resurface(key, "no hash evidence, no import")
-            elif verified_row:
-                _credit(key, getattr(entry, "line_start", 0))
             else:
-                unstamped_unverifiable += 1
+                _credit(key, getattr(entry, "line_start", 0))
             continue
         to_verify.setdefault(entry.file, []).append(
-            (entry, key, spans, hash_windows, verified_row))
+            (entry, key, spans, hash_windows))
 
     if legacy_verified:
         split = ", ".join(
@@ -4089,18 +4018,19 @@ def _verify_entries_fold(
             "(%s: edited content, another install's key, a newer row "
             "schema outside the shipped vocabulary, or an index copy "
             "written by a version-skewed merge that dropped a stamped "
-            "field) — demoted to the unstamped tier: exact-hash fold "
-            "credit only, no verdict reuse. If these are "
-            "project-index rows whose run journal still verifies, "
-            "`raptor-audit journal reindex <run-dir>` re-projects the "
-            "verifying copies",
+            "field) — no fold credit, no verdict reuse; resurfaced "
+            "for re-review. If these are project-index rows whose "
+            "run journal still verifies, `raptor-audit journal "
+            "reindex <run-dir>` re-projects the verifying copies",
             tampered, split,
         )
-    if unstamped_unverifiable:
+    if unstamped_resurfaced:
         logger.info(
-            "journal-fold: %d unstamped row(s) without checkable "
-            "source hash resurfaced as gaps",
-            unstamped_unverifiable,
+            "journal-fold: %d unstamped row(s) resurfaced as gaps "
+            "(no provenance token — pre-MAC legacy or cross-install; "
+            "affected functions re-earn on their next live review, "
+            "which stamps)",
+            unstamped_resurfaced,
         )
 
     if not to_verify:
@@ -4120,12 +4050,12 @@ def _verify_entries_fold(
             # and their verdicts stood as coverage; compute_drift
             # flags the identical case as drift. Resurface instead.
             stale += len(items)
-            # 5-tuples, matching the to_verify append above. A
+            # 4-tuples, matching the to_verify append above. A
             # shorter unpack here raised ValueError for ANY missing
             # file, and the fold-level except then aborted the ENTIRE
             # fold — every prior verdict re-bought because one
             # reviewed file was deleted.
-            for _entry, key, _spans, _windows, _verified in items:
+            for _entry, key, _spans, _windows in items:
                 logger.debug(
                     "journal-fold: %s source missing since %s review "
                     "— resurfacing as gap",
@@ -4134,7 +4064,7 @@ def _verify_entries_fold(
             continue
         flat_spans: list[tuple] = []
         span_counts: list[int] = []
-        for _entry, _key, entry_spans, windows, _verified in items:
+        for _entry, _key, entry_spans, windows in items:
             # windows is index-aligned with entry_spans by
             # construction: hash the WINDOW, report the span.
             span_counts.append(len(entry_spans))
@@ -4148,7 +4078,7 @@ def _verify_entries_fold(
         else:
             all_hashes, source_digest = hash_spans(resolved, flat_spans), None
         hash_idx = 0
-        for (entry, key, entry_spans, _windows, verified_row), n_spans in zip(
+        for (entry, key, entry_spans, _windows), n_spans in zip(
                 items, span_counts):
             candidates = all_hashes[hash_idx:hash_idx + n_spans]
             hash_idx += n_spans
@@ -4195,57 +4125,6 @@ def _verify_entries_fold(
                 )
                 continue
             if not _context_admitted(entry, key):
-                continue
-            if not verified_row:
-                # Unstamped row, hash checks out: the historical
-                # suppression (legacy tolerance). The run_id check
-                # bounds FOREIGN-run injection (adopted/merged journal
-                # rows naming runs the project never had); it is NOT a
-                # defense against a hostile run of this project itself
-                # — such a run's own id is always known, and its rows
-                # are unstamped-creditable by the legacy tolerance.
-                # Stamped (MAC) rows are the real bar; new writes
-                # stamp. No known set = no corroboration possible =
-                # keep legacy behaviour (same-run folds, standalone).
-                if (known_run_ids is not None
-                        and getattr(entry, "run_id", None)
-                        not in known_run_ids):
-                    stale += 1
-                    logger.debug(
-                        "journal-fold: unstamped %s row from unknown "
-                        "run %r — resurfacing as gap",
-                        key, getattr(entry, "run_id", None),
-                    )
-                    continue
-                if entry.verdict == "dark":
-                    # Unstamped rows are never imported as reused
-                    # verdicts, so an unstamped dark row has no
-                    # re-adjudication route — legacy tolerance is for
-                    # SETTLED verdicts, not the unresolved bucket.
-                    _dark_resurface(key, "unstamped rows never import")
-                    continue
-                if entry.verdict in ("finding", "suspicious"):
-                    # Finding-class rows need their finding to be
-                    # LIVE to earn suppression, and only a verified
-                    # row re-materialises into findings.json (the
-                    # re-import gate refuses unstamped/tampered
-                    # rows). Crediting here while the finding is
-                    # refused would be the worst joint outcome —
-                    # finding dropped AND review suppressed. Re-
-                    # review instead: the finding is honestly
-                    # rediscovered (cross-install resume / key
-                    # rotation pay re-review only for the tiny
-                    # finding-bearing fraction).
-                    stale += 1
-                    logger.debug(
-                        "journal-fold: unstamped %s row carries a "
-                        "finding-class verdict (%s) with no re-import "
-                        "route — resurfacing as gap",
-                        key, entry.verdict,
-                    )
-                    continue
-                unstamped_credited += 1
-                _credit(key, matched_span[0])
                 continue
             if reuse_sink is not None:
                 recorded_strategies = None
@@ -4350,13 +4229,6 @@ def _verify_entries_fold(
             "journal-fold: %d %s review(s) stale (source "
             "changed) — resurfacing as gaps for re-review",
             stale, source_label,
-        )
-    if unstamped_credited:
-        logger.info(
-            "journal-fold: %d unstamped %s row(s) kept legacy "
-            "suppression behind the exact hash gate (no verdict "
-            "reuse; rows re-stamp on their next live review)",
-            unstamped_credited, source_label,
         )
     _log_blocked_split()
 

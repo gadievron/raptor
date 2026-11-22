@@ -884,8 +884,9 @@ class TestDarkRowResumeMatrix:
 class TestDarkRowVerifiedFoldRoutes:
     """Reuse ON is not blanket permission: inside the verified fold,
     only the route that actually IMPORTS a dark row may credit it.
-    Binary rows, hashless rows, and unstamped rows credit without
-    importing for settled verdicts — for dark they must resurface."""
+    Verified binary rows and verified hashless rows credit without
+    importing for settled verdicts — for dark they must resurface.
+    Unstamped rows never credit at all (no provenance, no credit)."""
 
     def _fold(self, entries, target, current_spans=None,
               binary_hashes=None, binary_view_hashes=None):
@@ -913,17 +914,17 @@ class TestDarkRowVerifiedFoldRoutes:
         return load_entries(run_dir)[-1]
 
     def test_unstamped_dark_row_never_credits(self, tmp_path):
-        # Unstamped rows are hash-gated fold credit ONLY (no reuse
-        # import) — so an unstamped dark row has no re-adjudication
-        # route and must resurface even though its hash verifies.
+        # Unstamped rows earn NO fold credit of any kind (the exact-
+        # hash escape is gone — the span hash is unkeyed), so an
+        # unstamped dark row resurfaces even though its hash verifies.
         target = _write_target(tmp_path)
         covered, sink = self._fold([_entry(target, verdict="dark")], target)
         assert covered == set()
         assert sink == {}
-        # Control: the same unstamped row with a settled verdict keeps
-        # the legacy hash-gated suppression.
+        # Same for a settled verdict: unstamped means resurface —
+        # provenance, not the verdict class, decides.
         covered, sink = self._fold([_entry(target, verdict="clean")], target)
-        assert covered == {"auth.c:check_pw"}
+        assert covered == set()
         assert sink == {}
 
     def test_hashless_dark_row_never_credits(self, tmp_path):

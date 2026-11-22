@@ -167,20 +167,22 @@ class TestPlantedRecords:
         assert "auth.c:check_pw" in _gap_keys(gaps)
 
 
-class TestLegacyTolerance:
-    def test_unstamped_row_with_exact_hash_keeps_credit(self, tmp_path):
-        """Pre-MAC legacy records keep credit behind positive source
-        evidence — the journal's tolerant-reader compromise."""
+class TestUnverifiedNeverCredits:
+    def test_unstamped_row_with_exact_hash_resurfaces(self, tmp_path):
+        """The former tolerant-reader escape: an unstamped row
+        carrying the function's CURRENT span hash. That hash is
+        unkeyed — a plant computes it from the target tree — so it
+        is not provenance and the row earns no review credit.
+        Pre-MAC legacy records re-earn on the next live review."""
         target = _write_target(tmp_path)
         row = {"file": "auth.c", "function": "check_pw",
                "hash": hash_span(target / "auth.c", 1, 5)}
         gaps = _legacy_policy_gaps(_checklist(target), [_record(rows=[row])])
-        assert "auth.c:check_pw" not in _gap_keys(gaps)
+        assert "auth.c:check_pw" in _gap_keys(gaps)
 
     def test_unstamped_row_with_hash_prefix_resurfaces(self, tmp_path):
         """A strict PREFIX of the canonical span digest
-        (``hash_span`` = SHA-256[:12]) is not evidence — the gate is
-        exact equality against the freshly computed digest."""
+        (``hash_span`` = SHA-256[:12]) is not evidence either."""
         target = _write_target(tmp_path)
         full = hash_span(target / "auth.c", 1, 5)
         assert len(full) == 12
@@ -192,11 +194,10 @@ class TestLegacyTolerance:
     def test_unstamped_finding_class_row_never_hash_credits(
         self, tmp_path,
     ):
-        """Finding-class rows are excluded from the hash tier even
-        with a CURRENT exact hash — only a verified journal row
-        re-imports its finding, so hash credit here would retire the
-        function while the claimed finding surfaces nowhere. Same
-        rule as the journal fold."""
+        """Finding-class rows discriminate the same rule: only a
+        verified journal row re-imports its finding, so credit here
+        would retire the function while the claimed finding surfaces
+        nowhere. Same rule as the journal fold."""
         target = _write_target(tmp_path)
         for status in ("finding", "suspicious"):
             row = {"file": "auth.c", "function": "check_pw",
@@ -246,7 +247,7 @@ class TestJournalProjection:
     def test_planted_journal_row_projects_unstamped(self, tmp_path):
         """A raw journal line (no MAC) must NOT be laundered into a
         verified coverage row by the record builder — it flows
-        through unstamped, carrying its hash for the fold's gate."""
+        through unstamped, where consumers withhold review credit."""
         target = _write_target(tmp_path)
         run_dir = tmp_path / "run1"
         run_dir.mkdir()
@@ -290,7 +291,9 @@ class TestAnnotationProjection:
     """Annotation .md files are human-editable plaintext with
     forgeable provenance metadata, living in a target-writable
     directory — the builder must not launder them into verified
-    rows. Credit rides the exact-hash gate only."""
+    rows, and unverified rows earn no review credit (the hash-gate
+    escape is gone; durable annotation credit flows through the
+    stamped journal lane instead)."""
 
     def _annotate(self, tmp_path, **metadata):
         from core.annotations import Annotation, write_annotation
@@ -311,9 +314,10 @@ class TestAnnotationProjection:
         assert len(rows) == 1
         assert journal_mac.coverage_row_provenance(
             rows[0], "annotations") == journal_mac.ROW_UNSTAMPED
-        # ...and the fold still credits it via the hash gate.
+        # ...and the fold refuses review credit: unstamped rows
+        # resurface even with a current hash (the hash is unkeyed).
         gaps = _legacy_policy_gaps(_checklist(target), [record])
-        assert "auth.c:check_pw" not in _gap_keys(gaps)
+        assert "auth.c:check_pw" in _gap_keys(gaps)
 
     def test_planted_hashless_annotation_stays_a_gap(self, tmp_path):
         """A planted note claiming a clean review (no source
