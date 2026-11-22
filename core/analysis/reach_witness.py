@@ -313,6 +313,7 @@ VERDICTS: dict[str, VerdictSpec] = {
 
 _UNCERTAIN_SPEC = VERDICTS["uncertain"]
 
+
 def _pin_frida_witness_invariants(verdicts: dict[str, VerdictSpec]) -> None:
     """Structural pin — dynamic evidence proves presence, never absence.
 

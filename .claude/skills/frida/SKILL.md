@@ -137,15 +137,32 @@ warning; routine startup drops on evidence-bearing runs log at debug.
 
 Evidence grade: frida receipts speak the evidence_grade exact-spelling
 vocabulary (`core/audit/evidence_grade.py`) — ONE taxonomy across
-`/audit`, `/validate` and dark_verify. Attributed execution facts
-(`frida:token-at-sink` io-correlation, `frida:sanitizer-crash`,
-`frida:exec-load`) are verification role; unattributed presence
-(`frida:runtime`, `frida:sink-observed`, `frida:coverage`,
-`frida:jni-trace`, `frida:call-edge`) is detection role —
-corroboration that never convicts alone. Dynamic evidence proves
-presence, never absence: no frida receipt refutes a finding, except
-that a positive runtime observation refutes a dead-code/unreachable
-dismissal (the reach-witness promote family).
+`/audit`, `/validate` and dark_verify. Attributed execution facts are
+verification role; unattributed presence is detection role —
+corroboration that never convicts alone. Not every registered spelling
+has a producer yet; what actually stamps artifacts today:
+
+- `frida:token-at-sink` (verification) — minted by the io-correlation
+  join (`packages/frida/correlate.py`, `receipt_stamp` in
+  `io-correlation.json`). The stamp is an operator-facing annotation:
+  no automated consumer promotes it into an outcome's `evidence_tool`
+  (census-enforced, `packages/frida/tests/test_io_correlation_consumers.py`).
+- `frida:sink-observed` (detection) — minted by the patch oracle's
+  still-fires report (`packages/frida/patch_oracle.py`).
+- `frida:runtime` (detection) — minted by the `/audit` observation
+  seam (`core/audit/frida_observe.py`) and the `/validate` Stage B
+  bridge (`core/orchestration/frida_validation_bridge.py`).
+- `frida:sanitizer-crash`, `frida:exec-load` (verification) —
+  registered and operator-recordable at the G2 gate once a confirmed
+  sweep receipt exists; no automated producer mints them yet.
+- `frida:coverage`, `frida:jni-trace`, `frida:call-edge` (detection) —
+  forward-declared vocabulary for those collection templates; no
+  producer mints them yet (coverage/JNI output feeds its own
+  pipelines, unstamped).
+
+Dynamic evidence proves presence, never absence: no frida receipt
+refutes a finding, except that a positive runtime observation refutes
+a dead-code/unreachable dismissal (the reach-witness promote family).
 
 No flags needed — consumers discover evidence via `packages.frida.evidence.discover_evidence()` and gate on `packages.frida.available()`.
 
