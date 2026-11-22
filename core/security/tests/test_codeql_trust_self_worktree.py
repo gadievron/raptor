@@ -175,24 +175,45 @@ def _spoof_read_fd_uid(
 
 
 def _spoof_root_fd_uid(
-    monkeypatch: pytest.MonkeyPatch, victim: Path, delta: int = 1,
+    monkeypatch: pytest.MonkeyPatch, *victims: Path, delta: int = 1,
 ) -> None:
-    """Doctor the fstat of the very fd the gate's single fd-bound root
-    observation opens on ``victim`` — the stat the registered-root
-    type/ownership/identity checks bind to."""
-    doctored = _spellings(victim)
+    """Doctor the fstat of the very fds the gate's fd-bound directory
+    observations open on each ``victim`` — the stats the
+    registered-root and registry-entry-anchor type/ownership/identity
+    checks bind to. Matches both spellings an observation open can
+    use: the absolute path, and the victim's NAME opened relative to
+    a ``dir_fd`` on the victim's parent directory (the gate's
+    fd-anchored registry enumeration). All of one test's victims must
+    come through ONE call: the fakes delegate to the real os, so a
+    second call would silently disarm the first."""
+    doctored = frozenset().union(*(_spellings(v) for v in victims))
+    by_name = {v.name: v.parent for v in victims}
     real_open = os.open
     real_close = os.close
     real_fstat = os.fstat
     victim_fds: set[int] = set()
 
+    def _victim_relative(spelled: str, kwargs: dict) -> bool:
+        dir_fd = kwargs.get("dir_fd")
+        parent = by_name.get(spelled)
+        if dir_fd is None or parent is None:
+            return False
+        try:
+            st_dir = real_fstat(dir_fd)
+            st_parent = os.stat(parent)
+        except OSError:
+            return False
+        return (st_dir.st_dev, st_dir.st_ino) == (
+            st_parent.st_dev, st_parent.st_ino)
+
     def fake_open(path, flags, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003, ANN202 — delegating shim, signature mirrors os.open
         fd = real_open(path, flags, *args, **kwargs)
         try:
-            if os.fsdecode(path) in doctored:
-                victim_fds.add(fd)
+            spelled = os.fsdecode(path)
         except TypeError:
-            pass
+            return fd
+        if spelled in doctored or _victim_relative(spelled, kwargs):
+            victim_fds.add(fd)
         return fd
 
     def fake_close(fd: int) -> None:
@@ -320,7 +341,7 @@ class TestRegisteredWorktreeIsSelf:
         entry = root / ".git" / "worktrees" / "wt1"
         (wt / "qlpack.yml").write_text(_DANGEROUS_PACK)
         _spoof_lstat_uid(monkeypatch, [entry, entry / "gitdir"])
-        _spoof_root_fd_uid(monkeypatch, wt)
+        _spoof_root_fd_uid(monkeypatch, wt, entry)
         _spoof_read_fd_uid(monkeypatch, entry / "gitdir")
         _spoof_read_fd_uid(monkeypatch, wt / ".git")
         _pin_raptor_dir(monkeypatch, root)
@@ -587,56 +608,53 @@ class TestRegistryPathologiesFailClosed:
         _pin_raptor_dir(monkeypatch, root)
         self._assert_scanned(wt, capsys)
 
-    def test_registry_entry_lstat_error_fails_closed(
+    def test_registry_entry_open_error_fails_closed(
         self, tmp_path, monkeypatch, capsys,
     ):
-        """An OSError from the registrant-anchor lstat of the registry
-        entry directory means no anchor — no candidate, scan runs."""
+        """An OSError from the registrant-anchor OPEN of the registry
+        entry directory (dir_fd-relative to the held registry fd)
+        means no anchor — no candidate, scan runs."""
         root, wt = _mk_linked_worktree(tmp_path)
-        entry = root / ".git" / "worktrees" / "wt1"
         (wt / "qlpack.yml").write_text(_DANGEROUS_PACK)
-        victims = _spellings(entry)
-        real_lstat = os.lstat
+        real_open = os.open
 
-        def failing_lstat(path, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003, ANN202 — delegating shim, signature mirrors os.lstat
+        def failing_open(path, flags, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003, ANN202 — delegating shim, signature mirrors os.open
             try:
                 spelled = os.fsdecode(path)
             except TypeError:
                 spelled = None
-            if spelled in victims:
+            if spelled == "wt1" and kwargs.get("dir_fd") is not None:
                 raise OSError(13, "Permission denied", spelled)
-            return real_lstat(path, *args, **kwargs)
+            return real_open(path, flags, *args, **kwargs)
 
-        patch_module_attribute(monkeypatch, _trust_common, "os", "lstat", failing_lstat)
+        patch_module_attribute(monkeypatch, _trust_common, "os", "open", failing_open)
         _pin_raptor_dir(monkeypatch, root)
         self._assert_scanned(wt, capsys)
 
-    def test_registry_entry_lstat_error_skips_only_that_candidate(
+    def test_registry_entry_open_error_skips_only_that_candidate(
         self, tmp_path, monkeypatch, capsys,
     ):
-        """The anchor lstat's OSError is a PER-CANDIDATE reject, never
-        a registry-wide abort: with candidate #1's entry lstat raising
+        """The anchor open's OSError is a PER-CANDIDATE reject, never
+        a registry-wide abort: with candidate #1's entry open raising
         (doctored) and candidate #2 a legitimate same-uid worktree,
         #2 must still be recognized as self — an escape to the outer
         fail-closed handler would wrongly refuse every remaining
         candidate."""
         root, _wt1 = _mk_linked_worktree(tmp_path, name="wt1")
         _root, wt2 = _mk_linked_worktree(tmp_path, name="wt2")
-        entry1 = root / ".git" / "worktrees" / "wt1"
         (wt2 / "qlpack.yml").write_text(_DANGEROUS_PACK)
-        victims = _spellings(entry1)
-        real_lstat = os.lstat
+        real_open = os.open
 
-        def failing_lstat(path, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003, ANN202 — delegating shim, signature mirrors os.lstat
+        def failing_open(path, flags, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003, ANN202 — delegating shim, signature mirrors os.open
             try:
                 spelled = os.fsdecode(path)
             except TypeError:
                 spelled = None
-            if spelled in victims:
+            if spelled == "wt1" and kwargs.get("dir_fd") is not None:
                 raise OSError(13, "Permission denied", spelled)
-            return real_lstat(path, *args, **kwargs)
+            return real_open(path, flags, *args, **kwargs)
 
-        patch_module_attribute(monkeypatch, _trust_common, "os", "lstat", failing_lstat)
+        patch_module_attribute(monkeypatch, _trust_common, "os", "open", failing_open)
         _pin_raptor_dir(monkeypatch, root)
         assert _check(str(wt2)) is False
         assert capsys.readouterr().out == ""
@@ -646,8 +664,8 @@ class TestRegistryPathologiesFailClosed:
     ):
         """``worktrees/<name>`` itself replaced by a symlink to an
         equivalent directory elsewhere is not a nomination: the
-        registrant anchor lstats the entry (never follows), and a
-        non-directory entry yields no candidate."""
+        registrant anchor's O_NOFOLLOW | O_DIRECTORY open refuses the
+        link, and a refused entry yields no candidate."""
         root, wt = _mk_linked_worktree(tmp_path)
         entry = root / ".git" / "worktrees" / "wt1"
         elsewhere = tmp_path / "elsewhere-entry"
@@ -656,3 +674,113 @@ class TestRegistryPathologiesFailClosed:
         (wt / "qlpack.yml").write_text(_DANGEROUS_PACK)
         _pin_raptor_dir(monkeypatch, root)
         self._assert_scanned(wt, capsys)
+
+
+class TestRegistryFdBinding:
+    """The registry walk's evidence binds to held fds — the opened
+    ``worktrees`` directory, each entry opened dir_fd-relative to it,
+    and the entry's ``gitdir`` payload read dir_fd-relative to the
+    entry fd — never to path re-walks of the registry spelling.
+    Trusted-side data, so these are consistency pins (the same
+    evidence rules the gates apply everywhere else), not a new trust
+    boundary."""
+
+    def test_registry_reads_survive_doctored_path_lstats(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """The registrant anchor comes from the fstat of the opened
+        entry fd, never from a path-level lstat of the entry spelling:
+        with every lstat under ``worktrees`` doctored to fail, a
+        genuine registered worktree must still be recognised as self."""
+        root, wt = _mk_linked_worktree(tmp_path)
+        reg = root / ".git" / "worktrees"
+        prefixes = tuple(s + os.sep for s in _spellings(reg))
+        real_lstat = os.lstat
+
+        def failing_lstat(path, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003, ANN202 — delegating shim, signature mirrors os.lstat
+            try:
+                spelled = os.fsdecode(path)
+            except TypeError:
+                spelled = None
+            if spelled is not None and spelled.startswith(prefixes):
+                raise OSError(13, "Permission denied", spelled)
+            return real_lstat(path, *args, **kwargs)
+
+        patch_module_attribute(
+            monkeypatch, _trust_common, "os", "lstat", failing_lstat)
+        (wt / "qlpack.yml").write_text(_DANGEROUS_PACK)
+        _pin_raptor_dir(monkeypatch, root)
+        assert _check(str(wt)) is False
+        assert capsys.readouterr().out == ""
+
+    def test_gitdir_payload_read_bound_to_entry_fd(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """The registry ``gitdir`` payload is read RELATIVE to the
+        opened entry fd (openat semantics), never through the entry's
+        absolute spelling: with the absolute spelling's open doctored
+        to fail, recognition must still succeed."""
+        root, wt = _mk_linked_worktree(tmp_path)
+        entry = root / ".git" / "worktrees" / "wt1"
+        victims = _spellings(entry / "gitdir")
+        real_open = os.open
+
+        def fake_open(path, flags, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003, ANN202 — delegating shim, signature mirrors os.open
+            try:
+                spelled = os.fsdecode(path)
+            except TypeError:
+                spelled = None
+            if spelled in victims:
+                raise OSError(13, "Permission denied", spelled)
+            return real_open(path, flags, *args, **kwargs)
+
+        patch_module_attribute(
+            monkeypatch, capped_read_module, "os", "open", fake_open)
+        (wt / "qlpack.yml").write_text(_DANGEROUS_PACK)
+        _pin_raptor_dir(monkeypatch, root)
+        assert _check(str(wt)) is False
+        assert capsys.readouterr().out == ""
+
+    def test_backlink_grant_needs_live_entry_inode(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """The back-link comparison grants on INODE IDENTITY with the
+        held entry fd, never on textual path resolution: non-strict
+        resolve() equates two spellings even when nothing exists at
+        them, so a registry entry that vanishes mid-walk could still
+        earn self from a spelling comparison. Rename the entry away
+        at the comparison's stat of the back-link payload — the grant
+        must be refused and the scan must run."""
+        root, wt = _mk_linked_worktree(tmp_path)
+        entry = root / ".git" / "worktrees" / "wt1"
+        victims = _spellings(entry)
+        moved = {"done": False}
+        real_stat = os.stat
+
+        def vanishing_stat(path, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003, ANN202 — delegating shim, signature mirrors os.stat
+            try:
+                spelled = os.fsdecode(path)
+            except TypeError:
+                spelled = None
+            if (
+                spelled in victims
+                and not moved["done"]
+                and kwargs.get("dir_fd") is None
+            ):
+                moved["done"] = True
+                os.rename(entry, tmp_path / "entry-aside")
+            return real_stat(path, *args, **kwargs)
+
+        patch_module_attribute(
+            monkeypatch, _trust_common, "os", "stat", vanishing_stat)
+        (wt / "qlpack.yml").write_text(_DANGEROUS_PACK)
+        _pin_raptor_dir(monkeypatch, root)
+        self._assert_scanned(wt, capsys)
+        assert moved["done"], (
+            "probe wiring: the walk never statted the back-link "
+            "payload's spelling"
+        )
+
+    def _assert_scanned(self, wt: Path, capsys: pytest.CaptureFixture) -> None:
+        assert _check(str(wt)) is True
+        assert "extractor" in capsys.readouterr().out

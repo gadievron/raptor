@@ -78,14 +78,16 @@ def read_trust_config(path: Path, *, dir_fd: int | None = None) -> bytes | None:
 GIT_LINK_MAX_BYTES = 8192
 
 
-def read_git_link(path: Path) -> str | None:
+def read_git_link(path: Path, *, dir_fd: int | None = None) -> str | None:
     """Read a single-line git link file, bounded and fail-closed.
 
     Returns the stripped one-line payload, or None on ANY problem:
     unreadable, non-regular, symlink (O_NOFOLLOW via the shared capped
-    read), oversized, empty, or multi-line.
+    read), oversized, empty, or multi-line. ``dir_fd`` anchors a
+    RELATIVE ``path`` to an already-open directory fd (openat
+    semantics), same contract as :func:`read_git_link_with_stat`.
     """
-    return read_git_link_with_stat(path)[0]
+    return read_git_link_with_stat(path, dir_fd=dir_fd)[0]
 
 
 def read_git_link_with_stat(
@@ -295,163 +297,208 @@ def _match_registered_worktree(
     """Registry walk for :func:`is_registered_worktree_of_self` —
     same fail-closed contract, split out so the target fd's lifetime
     (opened before, closed after, in the caller) stays obvious. May
-    raise; the caller's outer handler owns the catch-all."""
-    for entry in sorted(worktrees_dir.iterdir()):
-        payload = read_git_link(entry / "gitdir")
-        if payload is None:
-            continue
-        # Registry payload = path of the worktree's ``.git`` entry
-        # (one absolute path line); the worktree root is its
-        # parent.
-        wt_git = Path(payload)
-        if not wt_git.is_absolute():
-            continue
-        # Registrant anchor: the nominating registry entry
-        # directory's owner. lstat (never follow) — a symlinked
-        # registry entry is not a nomination. Trusted-side data:
-        # the assumed attacker cannot write inside raptor_dir/
-        # .git, so there is no TOCTOU of interest between this
-        # lstat and the capped read above. ``git worktree add``
-        # creates this directory, the worktree root, and the
-        # ``.git`` back-link in one operation under one uid, so
-        # every single-principal add (including sudo adds and
-        # second-operator adds) satisfies the equality below by
-        # construction.
-        try:
-            st_entry = os.lstat(entry)
-        except OSError:
-            continue
-        if not stat.S_ISDIR(st_entry.st_mode):
-            continue
-        anchor_uid = st_entry.st_uid
-        # One atomic, fd-bound observation of the registered root.
-        # A symlink at a registered path re-aims trust at a path
-        # the registry never named (following it equates the
-        # link's target with the registered root, and a forged
-        # back-link in that target completes the bidirectional
-        # check — target-side files carry the operator's own uid
-        # after an ordinary clone/extract, so the uid checks alone
-        # do not refuse it). The old shape lstat-gated the path
-        # and then resolve()d it SEPARATELY: a symlink swapped in
-        # between the two walks was followed, defeating the gate.
-        # Open with the shared O_NOFOLLOW | O_DIRECTORY flag set
-        # instead — a symlink or anything else that is not a
-        # directory is refused at the open — and take type,
-        # ownership, and identity from the fstat of that very fd.
-        # ``git worktree add`` always creates a real directory, so
-        # no legitimate shape is refused.
-        try:
-            root_fd = os.open(str(wt_git.parent), _DIR_OBSERVE_FLAGS)
-        except OSError:
-            continue
-        # Per-candidate containment, same doctrine as the anchor
-        # lstat above: an fstat (or close) surprise on THIS
-        # candidate's fd rejects this candidate only — an escape
-        # to the outer fail-closed handler would wrongly refuse
-        # every remaining registry entry. The fd is closed on
-        # every path.
-        try:
+    raise; the caller's outer handler owns the catch-all.
+
+    The registry itself is read through held fds: the ``worktrees``
+    directory is opened once and enumerated from that fd, each entry
+    is opened dir_fd-relative to it, and the entry's ``gitdir``
+    payload is read dir_fd-relative to the entry fd — so the anchor
+    uid, the nomination, and the back-link comparison all bind to one
+    observed registry identity, never to re-walks of its spelling.
+    Trusted-side data (the assumed attacker cannot write inside
+    ``raptor_dir/.git``) — the fd discipline here is consistency with
+    the evidence rules the gates apply everywhere else, not a new
+    trust boundary."""
+    try:
+        reg_fd = os.open(str(worktrees_dir), _DIR_OBSERVE_FLAGS)
+    except OSError:
+        return False
+    try:
+        with os.scandir(reg_fd) as it:
+            names = sorted(e.name for e in it)
+        for name in names:
+            # One atomic, fd-bound observation of the nominating
+            # registry entry: opened O_NOFOLLOW | O_DIRECTORY
+            # relative to the held registry fd — a symlinked
+            # registry entry is refused at the open (not a
+            # nomination) — and the registrant anchor (type,
+            # ownership, identity) comes from the fstat of that
+            # very fd, so the anchor and the ``gitdir`` payload
+            # below are one inode's evidence, never two walks of
+            # the entry spelling. ``git worktree add`` creates
+            # this directory, the worktree root, and the ``.git``
+            # back-link in one operation under one uid, so every
+            # single-principal add (including sudo adds and
+            # second-operator adds) satisfies the equality below
+            # by construction.
             try:
-                st_root = os.fstat(root_fd)
-            finally:
-                os.close(root_fd)
-        except OSError:
-            continue
-        if not stat.S_ISDIR(st_root.st_mode):
-            continue
-        # The root at the registered path must be owned by the
-        # registrant. A re-plant in a sticky world-writable parent
-        # is necessarily owned by its creator (chown needs
-        # CAP_CHOWN), so a foreign-uid root is not the registered
-        # worktree, whatever its contents claim.
-        if st_root.st_uid != anchor_uid:
-            continue
-        # Identity first: the vetted target must BE the inode just
-        # observed at the registered path — device and inode from
-        # the two fd-bound fstats, never a re-walked path spelling.
-        # This is the check that carries the trust.
-        if (st_root.st_dev, st_root.st_ino) != (st_target.st_dev,
-                                                st_target.st_ino):
-            continue
-        # Spelling agreement on top — conjunctive and REFUSE-ONLY
-        # (the inode match above already passed, so this re-walk
-        # can only refuse, never grant; a swap racing it produces
-        # a mismatch or an error, both of which refuse). It keeps
-        # the self verdict from attaching to an ALIAS spelling of
-        # the registered root (a directory raced into the target
-        # path, a bind-mount view): the verdict's consumer acts on
-        # the target SPELLING after the gate returns, and only the
-        # registered spelling is covered by the registrant's
-        # ownership of the registered path.
-        try:
-            if wt_git.parent.resolve() != target:
+                entry_fd = os.open(name, _DIR_OBSERVE_FLAGS, dir_fd=reg_fd)
+            except OSError:
                 continue
-        except (OSError, RuntimeError):
-            continue
-        # Bidirectional link check, anchored to the held target
-        # fd: ``.git`` is reached RELATIVE to target_fd (openat
-        # semantics), both here and in the capped read below, so
-        # the trust evidence comes from inside the very directory
-        # whose identity matched above even if the target's
-        # spelling is re-aimed mid-walk. The target's own ``.git``
-        # must be a regular FILE — os.lstat first (never
-        # followed): a symlink, or a real ``.git`` DIRECTORY
-        # squatting the registered path (an ordinary clone), is
-        # not self. This lstat is a cheap early reject only — it
-        # carries no trust; type and ownership are re-taken below
-        # from the fstat of the read fd.
-        try:
-            st = os.lstat(".git", dir_fd=target_fd)
-        except OSError:
-            continue
-        if not stat.S_ISREG(st.st_mode):
-            continue
-        # Type + ownership bound to the READ fd: S_ISREG and
-        # st_uid come from the fstat of the very inode the bytes
-        # came from (the capped read opens with O_NOFOLLOW and
-        # fstats the open fd), so type, ownership, and content are
-        # one atomic observation — an lstat-then-open pair would
-        # leave a swap window between the stat and the read. The
-        # ownership check closes the composite where a
-        # registrant-owned directory is renamed into the vacated
-        # path and the attacker authors the back-link inside it:
-        # a forged back-link file is attacker-owned, and a real
-        # worktree's back-link names its OWN registry entry, not
-        # the nominating one.
-        back, st_git = read_git_link_with_stat(
-            Path(".git"), dir_fd=target_fd,
-        )
-        if back is None or st_git is None:
-            continue
-        if not stat.S_ISREG(st_git.st_mode):
-            continue
-        if st_git.st_uid != anchor_uid:
-            continue
-        if not back.startswith("gitdir:"):
-            continue
-        back_path = Path(back[len("gitdir:"):].strip())
-        try:
-            if back_path.is_absolute():
-                if back_path.resolve() == entry.resolve():
-                    return True
-            else:
-                # git can write the back-link relative to the
-                # worktree root (relative-path worktrees). Walk the
-                # relative payload FROM the held target fd (fstatat
-                # semantics) and compare inode identity with the
-                # nominating entry: resolving ``target / back_path``
-                # would re-walk the target SPELLING in grant position
-                # — the one place attacker-staged path content could
-                # still steer the verdict after a mid-walk re-aim of
-                # the spelling.
-                st_back = os.stat(str(back_path), dir_fd=target_fd)
-                st_entry_dir = os.stat(entry)
-                if (st_back.st_dev, st_back.st_ino) == (
-                        st_entry_dir.st_dev, st_entry_dir.st_ino):
-                    return True
-        except (OSError, RuntimeError):
-            continue
-    return False
+            try:
+                # Per-candidate containment: a surprise on THIS
+                # candidate rejects this candidate only — an escape
+                # to the outer fail-closed handler would wrongly
+                # refuse every remaining registry entry.
+                try:
+                    st_entry = os.fstat(entry_fd)
+                except OSError:
+                    continue
+                if not stat.S_ISDIR(st_entry.st_mode):
+                    continue
+                anchor_uid = st_entry.st_uid
+                # Registry payload = path of the worktree's ``.git``
+                # entry (one absolute path line), read RELATIVE to
+                # the entry fd just anchored; the worktree root is
+                # its parent.
+                payload = read_git_link(Path("gitdir"), dir_fd=entry_fd)
+                if payload is None:
+                    continue
+                wt_git = Path(payload)
+                if not wt_git.is_absolute():
+                    continue
+                # One atomic, fd-bound observation of the registered
+                # root. A symlink at a registered path re-aims trust
+                # at a path the registry never named (following it
+                # equates the link's target with the registered
+                # root, and a forged back-link in that target
+                # completes the bidirectional check — target-side
+                # files carry the operator's own uid after an
+                # ordinary clone/extract, so the uid checks alone do
+                # not refuse it). The old shape lstat-gated the path
+                # and then resolve()d it SEPARATELY: a symlink
+                # swapped in between the two walks was followed,
+                # defeating the gate. Open with the shared
+                # O_NOFOLLOW | O_DIRECTORY flag set instead — a
+                # symlink or anything else that is not a directory
+                # is refused at the open — and take type, ownership,
+                # and identity from the fstat of that very fd.
+                # ``git worktree add`` always creates a real
+                # directory, so no legitimate shape is refused. The
+                # registered path itself is walked from its spelling
+                # BY DESIGN: the registry names a path — that
+                # spelling is the datum being checked.
+                try:
+                    root_fd = os.open(str(wt_git.parent), _DIR_OBSERVE_FLAGS)
+                except OSError:
+                    continue
+                try:
+                    try:
+                        st_root = os.fstat(root_fd)
+                    finally:
+                        os.close(root_fd)
+                except OSError:
+                    continue
+                if not stat.S_ISDIR(st_root.st_mode):
+                    continue
+                # The root at the registered path must be owned by
+                # the registrant. A re-plant in a sticky
+                # world-writable parent is necessarily owned by its
+                # creator (chown needs CAP_CHOWN), so a foreign-uid
+                # root is not the registered worktree, whatever its
+                # contents claim.
+                if st_root.st_uid != anchor_uid:
+                    continue
+                # Identity first: the vetted target must BE the
+                # inode just observed at the registered path —
+                # device and inode from the two fd-bound fstats,
+                # never a re-walked path spelling. This is the check
+                # that carries the trust.
+                if (st_root.st_dev, st_root.st_ino) != (st_target.st_dev,
+                                                        st_target.st_ino):
+                    continue
+                # Spelling agreement on top — conjunctive and
+                # REFUSE-ONLY (the inode match above already passed,
+                # so this re-walk can only refuse, never grant; a
+                # swap racing it produces a mismatch or an error,
+                # both of which refuse). It keeps the self verdict
+                # from attaching to an ALIAS spelling of the
+                # registered root (a directory raced into the target
+                # path, a bind-mount view): the verdict's consumer
+                # acts on the target SPELLING after the gate
+                # returns, and only the registered spelling is
+                # covered by the registrant's ownership of the
+                # registered path.
+                try:
+                    if wt_git.parent.resolve() != target:
+                        continue
+                except (OSError, RuntimeError):
+                    continue
+                # Bidirectional link check, anchored to the held
+                # target fd: ``.git`` is reached RELATIVE to
+                # target_fd (openat semantics), both here and in the
+                # capped read below, so the trust evidence comes
+                # from inside the very directory whose identity
+                # matched above even if the target's spelling is
+                # re-aimed mid-walk. The target's own ``.git`` must
+                # be a regular FILE — os.lstat first (never
+                # followed): a symlink, or a real ``.git`` DIRECTORY
+                # squatting the registered path (an ordinary clone),
+                # is not self. This lstat is a cheap early reject
+                # only — it carries no trust; type and ownership are
+                # re-taken below from the fstat of the read fd.
+                try:
+                    st = os.lstat(".git", dir_fd=target_fd)
+                except OSError:
+                    continue
+                if not stat.S_ISREG(st.st_mode):
+                    continue
+                # Type + ownership bound to the READ fd: S_ISREG and
+                # st_uid come from the fstat of the very inode the
+                # bytes came from (the capped read opens with
+                # O_NOFOLLOW and fstats the open fd), so type,
+                # ownership, and content are one atomic observation
+                # — an lstat-then-open pair would leave a swap
+                # window between the stat and the read. The
+                # ownership check closes the composite where a
+                # registrant-owned directory is renamed into the
+                # vacated path and the attacker authors the
+                # back-link inside it: a forged back-link file is
+                # attacker-owned, and a real worktree's back-link
+                # names its OWN registry entry, not the nominating
+                # one.
+                back, st_git = read_git_link_with_stat(
+                    Path(".git"), dir_fd=target_fd,
+                )
+                if back is None or st_git is None:
+                    continue
+                if not stat.S_ISREG(st_git.st_mode):
+                    continue
+                if st_git.st_uid != anchor_uid:
+                    continue
+                if not back.startswith("gitdir:"):
+                    continue
+                back_path = Path(back[len("gitdir:"):].strip())
+                # The back-link must name the NOMINATING entry —
+                # compared by inode identity against the fstat of
+                # the held entry fd, never by resolve()ing two
+                # spellings: non-strict textual resolution can
+                # equate two ABSENT paths (granting self on an entry
+                # that vanished mid-walk), and a spelling comparison
+                # re-walks the registry in grant position. An
+                # absolute payload (git's normal shape) walks from
+                # the filesystem root; a relative payload
+                # (relative-path worktrees) walks FROM the held
+                # target fd (fstatat semantics) — never
+                # ``target / back_path``, which would re-walk the
+                # target SPELLING in grant position, the one place
+                # attacker-staged path content could still steer the
+                # verdict after a mid-walk re-aim of the spelling.
+                try:
+                    if back_path.is_absolute():
+                        st_back = os.stat(str(back_path))
+                    else:
+                        st_back = os.stat(str(back_path), dir_fd=target_fd)
+                    if (st_back.st_dev, st_back.st_ino) == (
+                            st_entry.st_dev, st_entry.st_ino):
+                        return True
+                except (OSError, RuntimeError):
+                    continue
+            finally:
+                os.close(entry_fd)
+        return False
+    finally:
+        os.close(reg_fd)
 
 
 # U+2028/U+2029 line-separators — Zl/Zp categories slip past the Cc/Cf

@@ -124,8 +124,12 @@ class TestSharedHelperBeltAndBraces:
         target = (tmp_path / "wt").resolve()
         (target / ".git").mkdir(parents=True)  # .git as a DIRECTORY
 
-        def permissive_read(path):
-            if Path(path) == entry / "gitdir":
+        def permissive_read(path, *, dir_fd=None):
+            # The registry ``gitdir`` payload is read dir_fd-relative
+            # to the opened entry fd; match the relative spelling as
+            # well as the legacy absolute one so the stub stays
+            # permissive across both shapes.
+            if Path(path) in (Path("gitdir"), entry / "gitdir"):
                 return str(target / ".git")
             return "gitdir: " + str(entry)
 
