@@ -1909,8 +1909,16 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
         )
         prompt = next(m.content for m in bundle.messages if m.role == "user")
 
-        from core.security.cc_trust import check_repo_claude_trust
-        if check_repo_claude_trust(str(self.repo_path)):
+        # Held-handle trust check: keep the observation fd open across the
+        # dispatch-config staging below and re-bracket it immediately before
+        # the sandboxed `claude` spawn, so a repo swapped in after the
+        # verdict cannot ride a stale "trusted" result into the child. The
+        # fd is O_CLOEXEC and never crosses into the spawned CLI — the
+        # sandbox re-walks the spelling for its binds.
+        from core.security.cc_trust import open_cc_trust_check
+        held = open_cc_trust_check(str(self.repo_path))
+        if held.refused:
+            held.close()
             logger.info("  Skipping CC flag inference — target repo has dangerous "
                         "Claude Code config (see earlier warning). "
                         "Pass --trust-repo to override.")
@@ -1961,6 +1969,14 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
                 readable_paths = readable_paths_for_cc_dispatch(claude_bin)
                 if _sys_prompt_path is not None:
                     readable_paths = [*readable_paths, str(_sys_prompt_path)]
+                if held.recheck():
+                    logger.info(
+                        "  Skipping CC flag inference — target repo changed "
+                        "during the Claude Code config trust check (swapped "
+                        "after the verdict, before dispatch)."
+                    )
+                    return None
+                held.close()
                 result = _sandbox_run(
                     build_cc_command(
                         config, system_prompt_file=_sys_prompt_path,
@@ -2077,6 +2093,10 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
             logger.info("  CC flag suggestion timed out (180s)")
         except Exception as e:  # noqa: BLE001 — CC suggestion is best-effort enrichment
             logger.debug("CC flag suggestion failed: %s", e)
+        finally:
+            # Idempotent — the happy path already closed before the spawn;
+            # this covers the recheck-refusal return and every error exit.
+            held.close()
 
         return None
 
