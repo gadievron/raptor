@@ -22,6 +22,7 @@ MAC key.
 from __future__ import annotations
 
 import os
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -141,7 +142,6 @@ class TestDigestSubset:
             db = _plant_db(manager)
             (db / rel).symlink_to(outside)
             assert database_content_digest(db) is None, rel
-            import shutil
             shutil.rmtree(db.parent)
 
     def test_special_file_refuses(self, manager):
@@ -160,7 +160,6 @@ class TestDigestSubset:
             db = _plant_db(manager)
             os.link(outside, db / rel)
             assert database_content_digest(db) is None, rel
-            import shutil
             shutil.rmtree(db.parent)
 
     @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores modes")
