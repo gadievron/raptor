@@ -159,7 +159,7 @@ def test_fully_handled_table_never_builds_unused_index(monkeypatch):
     assert dispatch.find_dispatch_gaps({}, data) == []
 
 
-# 30s, not the 10s default: the provider's four gc.collect() calls are
+# 60s, not the 10s default: the provider's four gc.collect() calls are
 # full collections, so their cost scales with the WORKER's whole heap —
 # ~0.1s in isolation but 11-22s observed inside a full-battery xdist
 # worker that has imported and exercised the entire tree (the upper end
