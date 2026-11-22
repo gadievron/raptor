@@ -1016,7 +1016,14 @@ def iter_verification_receipts(ev: str):
     Outcome-specific policies may further restrict these receipts. Splitting
     a composite directly must not turn model-owned suffix text into proof.
     """
-    if not ev or ev.startswith(_NON_MECHANICAL_LEAD):
+    if not ev:
+        return
+    # The lead rule judges the FIRST part the way the per-part loop
+    # judges every part — stripped and lowercased. Testing the raw
+    # string let a single leading space (or a miscased "Prefilter:")
+    # slip a non-mechanical lead past the rule while the loop below
+    # then skipped the prefilter part and admitted the rest.
+    if ev.split("+", 1)[0].strip().lower().startswith(_NON_MECHANICAL_LEAD):
         return
     if _poisons_verification(ev):
         return

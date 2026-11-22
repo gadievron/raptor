@@ -858,6 +858,33 @@ class TestCompositePoisonParity:
             assert is_verification_evidence(stamp), stamp
 
 
+class TestNonMechanicalLead:
+    """The lead rule ('a stamp whose FIRST part is non-mechanical is
+    never verification') judges the first part the way the per-part
+    loop judges every part — stripped and lowercased. Testing the raw
+    string let a single leading space or a miscased marker slip the
+    lead past the rule, after which the loop skipped the prefilter
+    part and admitted the receipt behind it."""
+
+    @pytest.mark.parametrize("stamp", [
+        "prefilter:x+semgrep",
+        " prefilter:x+semgrep",
+        "\tprefilter:x+semgrep",
+        "\N{NO-BREAK SPACE}prefilter:x+semgrep",
+        "Prefilter:x+semgrep",
+        " llm-claimed:smt+semgrep",
+        "LLM-Claimed:smt+semgrep",
+    ])
+    def test_non_mechanical_lead_never_verifies(self, stamp):
+        assert not is_verification_evidence(stamp), stamp
+        assert list(iter_verification_receipts(stamp)) == [], stamp
+
+    def test_receipt_lead_keeps_verification(self):
+        # The rule binds the LEAD only: a receipt-led stamp with a
+        # later prefilter part stays admitted.
+        assert is_verification_evidence("semgrep+prefilter:x")
+
+
 class TestProducerStampClosure:
     """Mechanical closure of pipeline evidence_tool producers against
     the evidence-grade firewall.
