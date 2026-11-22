@@ -5,6 +5,7 @@ from __future__ import annotations
 from core.testing.processes import run_in_process_group as _run_memory_process
 
 from core.orchestration.validate_joern import (
+    attach_slice_evidence,
     confirm_finding_flow,
     enrich_attack_surface_with_taint,
 )
@@ -451,3 +452,85 @@ class TestSameFile:
     def test_resolution_error_fails_toward_not_same(self):
         from core.orchestration.validate_joern import _same_file
         assert not _same_file("a\x00b.c", "x/a\x00b.c")
+
+
+def _slice_doc():
+    return {
+        "$type": "DataFlowSlice",
+        "nodes": [
+            {"id": 3, "label": "CALL", "code": "memcpy(out, buf, n)",
+             "name": "memcpy", "lineNumber": 9, "parentFile": "a.c",
+             "parentMethod": "parse_alpha"},
+            {"id": 1, "label": "METHOD_PARAMETER_IN", "code": "char *buf",
+             "name": "buf", "lineNumber": 4, "parentFile": "a.c",
+             "parentMethod": "parse_alpha"},
+            {"id": 7, "label": "CALL", "code": "free(p)", "name": "free",
+             "lineNumber": 30, "parentFile": "a.c",
+             "parentMethod": "other_fn"},
+        ],
+        "edges": [
+            {"src": 1, "dst": 3, "label": "REACHING_DEF"},
+            {"src": 3, "dst": 7, "label": "REACHING_DEF"},
+        ],
+    }
+
+
+class TestAttachSliceEvidence:
+    def test_missing_document_is_no_verdict(self):
+        finding = {"function": "parse_alpha"}
+        ev = attach_slice_evidence(finding, None)
+        assert ev["available"] is None
+        assert "skipped" in ev
+        # Tri-state discipline: degraded is null, NEVER False.
+        assert ev["available"] is not False
+        assert finding["joern_slice_evidence"] is ev
+
+    def test_unresolvable_function_is_no_verdict(self):
+        ev = attach_slice_evidence({"function": "a b;"}, _slice_doc())
+        assert ev["available"] is None
+        assert "a b;" in ev["skipped"]
+        assert attach_slice_evidence({}, _slice_doc())["available"] is None
+
+    def test_nodes_filtered_to_function_and_line_sorted(self):
+        finding = {"function": "parse_alpha"}
+        ev = attach_slice_evidence(finding, _slice_doc())
+        assert ev["available"] is True
+        assert ev["node_count"] == 2
+        assert [n["id"] for n in ev["nodes"]] == [1, 3]
+        assert [n["line"] for n in ev["nodes"]] == [4, 9]
+        # Only edges among the selected nodes survive — the edge into
+        # other_fn's node must not leak another function's context.
+        assert ev["edges"] == [{"src": 1, "dst": 3, "label": "REACHING_DEF"}]
+        assert finding["joern_slice_evidence"] is ev
+
+    def test_cap_sets_truncated_and_keeps_count(self):
+        doc = _slice_doc()
+        ev = attach_slice_evidence({"function": "parse_alpha"}, doc,
+                                   max_nodes=1)
+        assert ev["truncated"] is True
+        assert ev["node_count"] == 2
+        assert len(ev["nodes"]) == 1
+        assert ev["nodes"][0]["id"] == 1
+
+    def test_zero_match_is_absence_of_hints_not_a_verdict(self):
+        ev = attach_slice_evidence({"function": "not_in_slice"}, _slice_doc())
+        assert ev["available"] is True
+        assert ev["node_count"] == 0
+        assert ev["nodes"] == [] and ev["edges"] == []
+
+    def test_target_derived_code_is_bounded(self):
+        doc = _slice_doc()
+        doc["nodes"][0]["code"] = "A" * 5000
+        ev = attach_slice_evidence({"function": "parse_alpha"}, doc)
+        assert max(len(n["code"]) for n in ev["nodes"]) <= 200
+
+    def test_malformed_entries_skipped(self):
+        doc = {"$type": "DataFlowSlice",
+               "nodes": ["junk", {"parentMethod": "f", "id": 2,
+                                  "lineNumber": None, "code": None}],
+               "edges": ["junk", {"src": 2, "dst": 99}]}
+        ev = attach_slice_evidence({"function": "f"}, doc)
+        assert ev["available"] is True
+        assert ev["node_count"] == 1
+        assert ev["nodes"][0]["code"] == ""
+        assert ev["edges"] == []

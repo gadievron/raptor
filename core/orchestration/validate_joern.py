@@ -1,6 +1,6 @@
 """Joern taint enrichment for `/validate` Stage B.
 
-Two entry points, both optional and CPG-gated:
+Three entry points, all optional and CPG-gated:
 
 * :func:`enrich_attack_surface_with_taint` — before LLM reasoning
   begins, mechanically confirm which source → sink pairs in
@@ -16,6 +16,15 @@ Two entry points, both optional and CPG-gated:
   (PROOF). ``confirmed: true`` carries ``proximity_floor: 2`` — flow
   confirmed, mitigations unknown; ``confirmed: false`` is evidence,
   not proof of absence (bounded inter-procedural depth).
+
+* :func:`attach_slice_evidence` — carve one finding's def-use context
+  out of a whole-program ``joern-slice data-flow`` document
+  (:func:`packages.joern.slicing.run_data_flow_slice`, run once per
+  run). HINT-TIER only: slice nodes orient the [B-3.1] reading of the
+  host function; they are never GATE-6 proof (only taint flows are)
+  and carry no proximity effect. ``available: null`` + ``skipped``
+  when the slice is missing or the function unresolvable — degraded
+  evidence is "no verdict", never a verdict against the finding.
 
 Function and call names are resolved from the attack-surface entries
 plus the validation checklist (``files[].items`` line spans for the
@@ -504,6 +513,101 @@ def confirm_finding_flow(
     }
     finding["joern_flow_confirmation"] = confirmation
     return confirmation
+
+
+#: Per-finding cap on slice nodes mirrored into the evidence record.
+MAX_SLICE_NODES = 80
+
+#: Per-node cap on the mirrored code excerpt (target-derived text).
+_SLICE_CODE_CAP = 200
+
+
+def attach_slice_evidence(
+    finding: dict[str, Any],
+    slice_doc: dict[str, Any] | None,
+    *,
+    max_nodes: int = MAX_SLICE_NODES,
+) -> dict[str, Any]:
+    """Attach the finding's share of a data-flow slice ([B-3.1] hints).
+
+    ``slice_doc`` is the whole-program document returned by
+    :func:`packages.joern.slicing.run_data_flow_slice`; nodes whose
+    ``parentMethod`` equals the finding's ``function`` are selected,
+    ordered by line, capped at ``max_nodes`` (``truncated: true`` when
+    the cap bites), with the reaching-definition edges among the
+    selected nodes. The record is mirrored onto the finding as
+    ``joern_slice_evidence`` and follows the tri-state convention:
+
+    * ``available: true`` — slice ran; ``nodes``/``edges`` carry the
+      def-use context. ``node_count: 0`` means the slicer saw no
+      data-flow nodes in this function — absence of hint material,
+      NEVER evidence against the finding.
+    * ``available: null`` — no slice document (slicer not installed,
+      failed, or output refused) or the finding's function name is
+      unresolvable; ``skipped`` says why. No verdict either way.
+
+    There is deliberately no ``available: false``: a slice is context,
+    not a classifier, so it can never speak against a finding.
+    """
+    function = finding.get("function")
+    if slice_doc is None:
+        evidence: dict[str, Any] = {
+            "available": None,
+            "skipped": "no slice document (slicer unavailable or degraded)",
+        }
+        finding["joern_slice_evidence"] = evidence
+        return evidence
+    if not _is_identifier(function):
+        evidence = {
+            "available": None,
+            "skipped": f"could not resolve finding function ({function!r})",
+        }
+        finding["joern_slice_evidence"] = evidence
+        return evidence
+
+    raw_nodes = slice_doc.get("nodes")
+    raw_edges = slice_doc.get("edges")
+    selected = [
+        n for n in (raw_nodes if isinstance(raw_nodes, list) else [])
+        if isinstance(n, dict) and n.get("parentMethod") == function
+    ]
+    selected.sort(key=lambda n: (
+        n["lineNumber"] if isinstance(n.get("lineNumber"), int) else 0))
+    truncated = len(selected) > max_nodes
+    kept = selected[:max_nodes]
+
+    nodes = []
+    kept_ids = set()
+    for n in kept:
+        node_id = n.get("id")
+        kept_ids.add(node_id)
+        code = n.get("code")
+        nodes.append({
+            "id": node_id,
+            "label": n.get("label", ""),
+            "code": code[:_SLICE_CODE_CAP] if isinstance(code, str) else "",
+            "name": n.get("name", ""),
+            "line": n.get("lineNumber", 0),
+            "file": n.get("parentFile", ""),
+        })
+    edges = [
+        {"src": e.get("src"), "dst": e.get("dst"), "label": e.get("label", "")}
+        for e in (raw_edges if isinstance(raw_edges, list) else [])
+        if isinstance(e, dict)
+        and e.get("src") in kept_ids and e.get("dst") in kept_ids
+    ]
+
+    evidence = {
+        "available": True,
+        "engine": "joern-slice",
+        "function": function,
+        "node_count": len(selected),
+        "truncated": truncated,
+        "nodes": nodes,
+        "edges": edges,
+    }
+    finding["joern_slice_evidence"] = evidence
+    return evidence
 
 
 def _flow_steps(flow: Any) -> list[dict[str, Any]]:
