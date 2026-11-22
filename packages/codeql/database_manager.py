@@ -210,9 +210,6 @@ SOURCE_EXTRACTED_LANGUAGES = frozenset(
     {"javascript", "typescript", "python", "ruby"},
 )
 
-_TRACE_SENSITIVE_CACHE_LANGUAGES = (
-    BUILDLESS_DEFAULT_LANGUAGES | SOURCE_EXTRACTED_LANGUAGES
-)
 assert not (BUILDLESS_DEFAULT_LANGUAGES & SOURCE_EXTRACTED_LANGUAGES), (
     "language sets must be disjoint — a language in both would take the "
     "source-extracted path and never reach the buildless gate"
@@ -1075,28 +1072,60 @@ class DatabaseManager:
             and metadata.build_system == "source-only"
         )
 
-    def _sibling_canonical_acceptable(
+    #: Lost-promote-race verdicts (``_sibling_adoption_verdict``).
+    _SIBLING_ADOPT = "adopt"
+    _SIBLING_EVICT = "evict"
+    _SIBLING_STAGING = "staging"
+
+    def _sibling_adoption_verdict(
         self,
+        canonical_path: Path,
         repo_hash: str,
         language: str,
         traced_build: bool | None,
-    ) -> bool:
-        """Lost-promote-race check: may we use the sibling's canonical
-        instead of our own just-built staging DB?
+    ) -> str:
+        """Lost-promote-race triage: what to do about the canonical
+        that beat our own just-built staging DB into the slot.
 
-        For a traced request on a mode-sensitive language the sibling's
-        entry must POSITIVELY record a traced build. Missing metadata
-        (their save may not have landed yet) or a lower-fidelity record
-        means we install our own traced staging instead."""
-        if (
-            traced_build is not True
-            or language not in _TRACE_SENSITIVE_CACHE_LANGUAGES
-        ):
-            return True
+        Returns ``"adopt"`` (analyse the sibling's canonical),
+        ``"evict"`` (rename it out of the slot and retry-promote our
+        staging) or ``"staging"`` (leave the slot alone and analyse
+        from our own detached staging).
+
+        The tree at canonical was installed by a process we cannot
+        see — a genuine sibling's promote, or anything else able to
+        create the dirent (the pre-flight raises on ANY existing
+        canonical, including an empty placeholder). Shape checks alone
+        authenticate nothing, so adoption demands the serve-time
+        standard: a MAC-verified metadata sidecar whose stamped
+        content digest matches a fresh recompute over the tree we are
+        about to analyse. Without that proof the tree may equally be a
+        winner whose ``save_metadata`` has not landed yet (the rename
+        lands first) or a planted database — so we neither adopt it
+        (queries would run over unauthenticated content) nor evict it
+        (churning a genuine winner mid-race): we analyse from our own
+        staging and let serve-time lookups judge the slot once its
+        sidecar lands. Eviction stays reserved for trees that are
+        broken outright (shape validation fails, or the digest refuses
+        the tree over an internal symlink / special file) and for
+        authenticated entries that cannot satisfy a traced request
+        (lower-fidelity build mode) — the pre-existing legs.
+        """
+        if not self.validate_database(canonical_path):
+            return self._SIBLING_EVICT
+        digest = database_content_digest(canonical_path)
+        if digest is None:
+            return self._SIBLING_EVICT
         metadata = self.load_metadata(repo_hash, language)
-        if metadata is None:
-            return False
-        return not self._cached_mode_mismatch(metadata, language, traced_build)
+        if (
+            metadata is None
+            or not metadata.content_digest
+            or metadata.content_digest != digest
+        ):
+            return self._SIBLING_STAGING
+        if self._cached_mode_mismatch(metadata, language, traced_build):
+            return self._SIBLING_EVICT
+        return self._SIBLING_ADOPT
 
     def _evict_mode_mismatched_canonical(
         self,
@@ -2326,35 +2355,56 @@ class DatabaseManager:
                         )
                 except OSError as e:
                     if e.errno in (errno.ENOTEMPTY, errno.EEXIST):
-                        # Lost the promotion race. Validate the sibling's
-                        # canonical before trusting it — without this check,
-                        # a sibling who promoted broken content would propagate
-                        # to us as success=True pointing at garbage. Build
-                        # mode joins the check: a traced request must not
-                        # adopt a sibling's buildless (or metadata-less)
-                        # canonical over its own just-built traced staging.
-                        if (
-                            not force_evict_failed
-                            and self.validate_database(canonical_path)
-                            and self._sibling_canonical_acceptable(
-                                repo_hash, language, traced_build,
+                        # Lost the promotion race. Triage the tree that
+                        # beat us into the slot before touching it
+                        # (doctrine: _sibling_adoption_verdict). Shape
+                        # checks alone must never grant adoption — a
+                        # planted database passes them and this run's
+                        # queries would execute over unauthenticated
+                        # content — so adoption requires the sibling's
+                        # MAC-verified metadata to vouch for a fresh
+                        # digest recompute of the canonical tree.
+                        verdict = (
+                            self._SIBLING_EVICT if force_evict_failed
+                            else self._sibling_adoption_verdict(
+                                canonical_path, repo_hash, language,
+                                traced_build,
                             )
-                            # Hostile-shape sweep before adopting a
-                            # tree this process never promoted: an
-                            # internal symlink would ride into this
-                            # run's analyze writable bind. No digest
-                            # COMPARISON here — the winner may not
-                            # have saved metadata yet (rename lands
-                            # before save_metadata), and serve-time
-                            # lookups enforce the match once it does.
-                            and database_content_digest(
-                                canonical_path) is not None
-                        ):
+                        )
+                        if verdict == self._SIBLING_ADOPT:
                             logger.info(
                                 "✓ Database promoted by sibling; using cached %s", canonical_path
                             )
                             rmtree_hardened(staging_path)
                             used_cached = True
+                        elif verdict == self._SIBLING_STAGING:
+                            # Unproven: no verified sidecar vouches for
+                            # the tree (a genuine winner's save may not
+                            # have landed yet — or the tree was
+                            # planted). Leave the slot alone for
+                            # serve-time lookups to judge once its
+                            # sidecar lands; analyse from our own
+                            # staging, which we just built ourselves.
+                            logger.warning(
+                                "Canonical %s exists but no verified "
+                                "metadata record vouches for its "
+                                "content — leaving the slot alone and "
+                                "analysing from this run's own staging "
+                                "build",
+                                canonical_path,
+                            )
+                            final_path = self._detach_staging_from_gc(
+                                staging_path, language,
+                                slot_dir=canonical_path.parent,
+                            )
+                            if final_path is None:
+                                success = False
+                                errors.append(
+                                    f"{language} staging database "
+                                    "could not be safely detached "
+                                    "from the build grant — output "
+                                    "refused"
+                                )
                         else:
                             # Sibling's canonical is broken. Best-effort:
                             # evict it and try to install our (valid)

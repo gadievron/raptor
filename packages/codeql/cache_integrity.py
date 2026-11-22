@@ -4,7 +4,7 @@
 cache: ``load_metadata`` feeds the serve decision
 (``get_cached_database``), the extraction-mode contract
 (``_cached_mode_mismatch``), the lost-race sibling-adoption gate
-(``_sibling_canonical_acceptable``) and both eviction legs. The
+(``_sibling_adoption_verdict``) and both eviction legs. The
 sidecar is plain JSON with a deterministic name derived from the repo
 hash, so anyone who can write the cache tree (a same-user process, a
 restored or shared cache) could plant a sidecar that vouches a stale,

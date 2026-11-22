@@ -1021,35 +1021,55 @@ class TestBuildModeCacheContract:
             repo, "python", traced_build=True,
         ) == planted
 
-    def test_sibling_acceptability_closes_the_race_window(
+    def test_sibling_adoption_verdict_closes_the_race_window(
             self, db_manager, repo):
-        """Lost-promote-race gate: for a traced cpp request the
-        sibling's canonical needs a POSITIVE non-buildless record."""
+        """Lost-promote-race triage: adoption demands the serve-time
+        standard (valid tree + MAC-verified sidecar whose stamped
+        digest matches a recompute + no mode mismatch); unproven trees
+        are neither adopted nor evicted; eviction is reserved for
+        broken trees and authenticated mode-mismatches."""
         repo_hash = db_manager.compute_repo_hash(repo)
-        # No metadata at all → not acceptable for traced.
-        assert db_manager._sibling_canonical_acceptable(
-            repo_hash, "cpp", True) is False
+
+        def verdict(language, traced):
+            return db_manager._sibling_adoption_verdict(
+                db_manager.get_database_dir(repo_hash, language),
+                repo_hash, language, traced,
+            )
+
+        # No canonical at all → broken tree → evict.
+        assert verdict("cpp", True) == db_manager._SIBLING_EVICT
+        # Authenticated buildless cpp entry: a traced request must not
+        # adopt it (mode mismatch — evict so the retry-promote installs
+        # our traced build); buildless / mode-agnostic requests adopt.
         _plant_cached_db(db_manager, repo, "cpp", "buildless")
-        assert db_manager._sibling_canonical_acceptable(
-            repo_hash, "cpp", True) is False
-        # Buildless / mode-agnostic requests accept anything.
-        assert db_manager._sibling_canonical_acceptable(
-            repo_hash, "cpp", False) is True
-        assert db_manager._sibling_canonical_acceptable(
-            repo_hash, "cpp", None) is True
-        # Languages without a lower-fidelity default are out of scope.
-        assert db_manager._sibling_canonical_acceptable(
-            repo_hash, "go", True) is True
-        _plant_cached_db(
-            db_manager, repo, "javascript", "source-only",
-        )
-        assert db_manager._sibling_canonical_acceptable(
-            repo_hash, "javascript", True) is False
-        assert db_manager._sibling_canonical_acceptable(
-            repo_hash, "javascript", False) is True
+        assert verdict("cpp", True) == db_manager._SIBLING_EVICT
+        assert verdict("cpp", False) == db_manager._SIBLING_ADOPT
+        assert verdict("cpp", None) == db_manager._SIBLING_ADOPT
+        # Same contract for the source-extracted default.
+        _plant_cached_db(db_manager, repo, "javascript", "source-only")
+        assert verdict("javascript", True) == db_manager._SIBLING_EVICT
+        assert verdict("javascript", False) == db_manager._SIBLING_ADOPT
+        # A no-build entry records a create that ran build detection
+        # and found no command — what a traced run produces: adopt.
         _plant_cached_db(db_manager, repo, "python", "no-build")
-        assert db_manager._sibling_canonical_acceptable(
-            repo_hash, "python", True) is True
+        assert verdict("python", True) == db_manager._SIBLING_ADOPT
+        # Valid tree WITHOUT a verified sidecar: unproven — neither
+        # adopted (could be planted) nor evicted (could be a genuine
+        # winner whose save_metadata hasn't landed yet).
+        _plant_cached_db(db_manager, repo, "go", "custom")
+        db_manager.get_metadata_path(repo_hash, "go").unlink()
+        assert verdict("go", True) == db_manager._SIBLING_STAGING
+        # Verified sidecar whose stamped digest no longer matches the
+        # tree (bytes swapped under the stamp, or stale sidecar beside
+        # a fresh winner): same unproven verdict.
+        java_db = _plant_cached_db(db_manager, repo, "java", "custom")
+        (java_db / "db-java" / "blob.bin").write_bytes(b"\1" * 20480)
+        assert verdict("java", False) == db_manager._SIBLING_STAGING
+        # Structurally broken tree (fails validate_database) → evict.
+        ruby_db = db_manager.get_database_dir(repo_hash, "ruby")
+        ruby_db.mkdir(parents=True)
+        (ruby_db / "marker").write_text("broken sibling promote")
+        assert verdict("ruby", None) == db_manager._SIBLING_EVICT
 
 
 class TestExtractionOutcomes:

@@ -673,27 +673,56 @@ class TestStagingPromote:
         # No staging dirs left behind (the rename ate ours; no orphans).
         assert not list(canonical.parent.glob(".staging-*"))
 
-    def test_lost_promotion_race_uses_winner_canonical(self, db_manager, tmp_path):
-        # Simulate: another writer populated canonical between our cache-miss
-        # check and our promote attempt. We should cleanup our staging and
-        # return the winner's canonical path.
-        # Canonical must pass validate_database for the lost-race branch
-        # to accept it: batch 399 requires not just `codeql-database.yml`
-        # but also a `db-<lang>/` subdir holding > 100KB of trie content
-        # (real CodeQL DB shape). The fixture mimics that shape so the
-        # test exercises the "winner is valid → use their canonical"
-        # path rather than the "winner looks broken → evict + retry"
-        # path which has its own dedicated tests.
+    @staticmethod
+    def _winner_canonical(db_manager):
+        """Populate the cache slot the way a sibling's finished promote
+        leaves it. Must pass validate_database for the lost-race branch
+        to consider it at all: batch 399 requires not just
+        `codeql-database.yml` but also a `db-<lang>/` subdir holding
+        > 100KB of trie content (real CodeQL DB shape)."""
         canonical = db_manager.cache_dir / "abc" / "python-db"
         canonical.parent.mkdir(parents=True)
-        # Pre-populate canonical (simulating sibling who finished first)
         canonical.mkdir()
         (canonical / "codeql-database.yml").write_text("language: python\n")
         (canonical / "winner-marker").write_text("winner")
         winner_db = canonical / "db-python"
         winner_db.mkdir()
-        # > 100KB to clear validate_database's minimum-substance check.
         (winner_db / "trie.bin").write_bytes(b"w" * 150_000)
+        return canonical
+
+    @staticmethod
+    def _stamp_winner_metadata(db_manager, canonical, repo_path,
+                               content_digest=None):
+        """Land the winner's stamped sidecar — adoption demands the
+        serve-time standard (MAC-verified metadata whose digest matches
+        a recompute of the canonical tree)."""
+        from datetime import datetime, timezone
+
+        from packages.codeql import cache_integrity
+        from packages.codeql.database_manager import database_content_digest
+
+        if content_digest is None:
+            content_digest = database_content_digest(canonical)
+        meta = {
+            "repo_path": str(repo_path), "repo_hash": "abc",
+            "language": "python",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "codeql_version": "2.16.0", "success": True, "errors": [],
+            "build_system": "no-build", "build_command": "",
+            "file_count": 1, "duration_seconds": 1.0,
+            "database_path": str(canonical),
+            "content_digest": content_digest,
+        }
+        (canonical.parent / "python-metadata.json").write_text(
+            json.dumps(cache_integrity.stamp("abc/python", meta)))
+
+    def test_lost_promotion_race_uses_winner_canonical(self, db_manager, tmp_path):
+        # Simulate: another writer populated canonical between our cache-miss
+        # check and our promote attempt — and its stamped metadata has
+        # landed, so the tree authenticates. We should cleanup our
+        # staging and return the winner's canonical path.
+        canonical = self._winner_canonical(db_manager)
+        self._stamp_winner_metadata(db_manager, canonical, tmp_path)
 
         bs = BuildSystem(type="pip", command="", working_dir=tmp_path,
                          env_vars={}, confidence=1.0, detected_files=[])
@@ -732,6 +761,88 @@ class TestStagingPromote:
         # Loser must NOT overwrite winner's metadata (winner already saved
         # consistent metadata; saving again would just be churn)
         save_meta_mock.assert_not_called()
+
+    def _run_lost_race(self, db_manager, tmp_path, canonical):
+        """Lose the promote race against a pre-populated canonical."""
+        bs = BuildSystem(type="pip", command="", working_dir=tmp_path,
+                         env_vars={}, confidence=1.0, detected_files=[])
+
+        def fake_sandbox_run(cmd, **kwargs):
+            staging_arg = Path(cmd[3])
+            staging_arg.mkdir(parents=True, exist_ok=True)
+            (staging_arg / "loser-marker").write_text("loser")
+            r = MagicMock()
+            r.returncode = 0
+            r.stdout = "2.16.0"
+            r.stderr = ""
+            return r
+
+        with patch('core.sandbox.run', side_effect=fake_sandbox_run), \
+             patch.object(db_manager, '_count_database_files', return_value=1), \
+             patch.object(db_manager, 'save_metadata') as save_meta_mock, \
+             patch.object(db_manager, '_evict_stale_canonical'), \
+             patch.object(db_manager, 'get_cached_database', return_value=None), \
+             patch.object(db_manager, 'compute_repo_hash', return_value='abc'), \
+             patch.object(db_manager, 'get_database_dir', return_value=canonical):
+            result = db_manager.create_database(tmp_path, "python", bs)
+        return result, save_meta_mock
+
+    def _assert_slot_left_alone_analysed_from_staging(
+            self, result, canonical, save_meta_mock):
+        """Shared oracle for the two unproven-sibling scenarios: the
+        slot is neither adopted nor evicted; analysis runs from this
+        run's own staging build, detached to a GC-safe `.kept-*` name."""
+        assert result.success is True
+        # NOT adopted: the result is our own build, not the slot.
+        assert result.cached is False
+        assert result.database_path != canonical
+        assert result.database_path.name.startswith(".kept-")
+        assert (result.database_path / "loser-marker").exists()
+        # NOT evicted: the slot is untouched — a genuine winner whose
+        # save_metadata simply hasn't landed yet must not lose its DB.
+        assert (canonical / "winner-marker").exists()
+        assert not list(canonical.parent.glob("*.stale.*"))
+        # Our metadata must not vouch for a tree we didn't analyse at
+        # the canonical slot (did_promote is False on this leg).
+        save_meta_mock.assert_not_called()
+        # No live staging dirs left behind (ours was renamed to .kept-*).
+        assert not list(canonical.parent.glob(".staging-*"))
+
+    def test_lost_race_unauthenticated_canonical_not_adopted(
+            self, db_manager, tmp_path):
+        """Shape checks alone must never grant adoption: a valid-shaped
+        tree planted at canonical (no MAC-verified sidecar vouches for
+        it) would otherwise be analysed as `used_cached` — the planted
+        content becomes analysis ground truth. The tree is also NOT
+        evicted (it could be a genuine winner pre-save_metadata); we
+        analyse from our own staging and leave the slot for serve-time
+        judgement."""
+        canonical = self._winner_canonical(db_manager)
+        # Deliberately NO metadata sidecar.
+
+        result, save_meta_mock = self._run_lost_race(
+            db_manager, tmp_path, canonical)
+
+        self._assert_slot_left_alone_analysed_from_staging(
+            result, canonical, save_meta_mock)
+
+    def test_lost_race_digest_mismatch_canonical_not_adopted(
+            self, db_manager, tmp_path):
+        """A MAC-verified sidecar whose stamped content digest does not
+        match a fresh recompute of the canonical tree must not grant
+        adoption either — the sidecar vouches for DIFFERENT bytes (a
+        swapped tree under a genuine stamp, or a stale sidecar beside a
+        fresh winner). Same verdict as the unauthenticated case: slot
+        left alone, analysis from our own staging."""
+        canonical = self._winner_canonical(db_manager)
+        self._stamp_winner_metadata(
+            db_manager, canonical, tmp_path, content_digest="0" * 64)
+
+        result, save_meta_mock = self._run_lost_race(
+            db_manager, tmp_path, canonical)
+
+        self._assert_slot_left_alone_analysed_from_staging(
+            result, canonical, save_meta_mock)
 
     def test_lost_promotion_race_with_invalid_canonical_evicts_and_promotes_ours(
             self, db_manager, tmp_path):
