@@ -69,11 +69,19 @@ class _BrokenIsattyStream(io.StringIO):
 
 def _run_script(monkeypatch, tmp_path, *, child_stdout: str = "",
                 child_stderr: str = "", timeout_exc: BaseException | None = None,
+                raw_child_output: "tuple[bytes, bytes] | None" = None,
+                sandbox_info: "dict | None" = None,
                 out_stream: TextIO, err_stream: TextIO) -> int:
     """Exec the wrapper against a stubbed sandbox whose run() returns
     the given child output (or raises *timeout_exc*); the given stream
     objects ARE the wrapper's stdout/stderr, so each test owns its
-    display lanes. Returns the exit code."""
+    display lanes. Returns the exit code.
+
+    *raw_child_output* supplies the child's (stdout, stderr) as raw
+    BYTES and makes the stub honour subprocess's capture-decode
+    semantics: text mode decodes with the wrapper's own encoding/errors
+    kwargs — strict by default, exactly where an invalid byte raised
+    UnicodeDecodeError before the errors="replace" fix."""
     fake = types.ModuleType("core.sandbox")
 
     class SandboxSetupError(Exception):
@@ -81,12 +89,22 @@ def _run_script(monkeypatch, tmp_path, *, child_stdout: str = "",
 
     @contextlib.contextmanager
     def sandbox(**kwargs):
-        def run_fn(cmd, **_kwargs):
+        def run_fn(cmd, **run_kwargs):
             if timeout_exc is not None:
                 raise timeout_exc
+            stdout: "str | bytes" = child_stdout
+            stderr: "str | bytes" = child_stderr
+            if raw_child_output is not None:
+                if run_kwargs.get("text"):
+                    enc = run_kwargs.get("encoding") or "utf-8"
+                    errs = run_kwargs.get("errors") or "strict"
+                    stdout = raw_child_output[0].decode(enc, errs)
+                    stderr = raw_child_output[1].decode(enc, errs)
+                else:
+                    stdout, stderr = raw_child_output
             return types.SimpleNamespace(
-                returncode=0, stdout=child_stdout, stderr=child_stderr,
-                sandbox_info={})
+                returncode=0, stdout=stdout, stderr=stderr,
+                sandbox_info=dict(sandbox_info or {}))
 
         yield run_fn
 
@@ -183,6 +201,46 @@ class TestPipeLaneIsVerbatim:
                            out_stream=out, err_stream=err)
         assert code == 0
         assert err.getvalue() == HOSTILE
+
+
+class TestInvalidUtf8NeverAbortsTheRun:
+    """One invalid UTF-8 byte from the untrusted child must not abort
+    the wrapper. Under the default strict decode it raised
+    UnicodeDecodeError (a ValueError), which the generic handler turned
+    into exit 2 — with ALL child output and every ``[sandbox]``
+    blocked/crash diagnostic suppressed: a hostile build could silence
+    the sandbox's own evidence with a single byte. The wrapper now
+    requests ``errors="replace"``, matching the TimeoutExpired
+    partial-output leg."""
+
+    RAW = (b"compiling\xff\x1b[2Kok\n", b"warn\xfe\n")
+
+    def test_output_and_diagnostics_survive_invalid_bytes(
+            self, monkeypatch, tmp_path):
+        out, err = _PipeStream(), _PipeStream()
+        code = _run_script(
+            monkeypatch, tmp_path, raw_child_output=self.RAW,
+            sandbox_info={"blocked": ["network connect denied"]},
+            out_stream=out, err_stream=err)
+        # The child's exit code, not the wrapper's failure code 2.
+        assert code == 0
+        # Undecodable bytes become U+FFFD; everything else survives.
+        assert out.getvalue() == "compiling�\x1b[2Kok\n"
+        assert err.getvalue().startswith("warn�\n")
+        # The sandbox's own evidence still reaches the caller.
+        assert "[sandbox] network connect denied" in err.getvalue()
+
+    def test_tty_lane_still_escapes_after_replacement(
+            self, monkeypatch, tmp_path):
+        out, err = _TtyStream(), _TtyStream()
+        code = _run_script(monkeypatch, tmp_path,
+                           raw_child_output=self.RAW,
+                           out_stream=out, err_stream=err)
+        assert code == 0
+        shown = out.getvalue()
+        assert "\x1b" not in shown
+        assert "\\x1b[2K" in shown
+        assert "�" in shown
 
 
 class TestTimeoutPartialOutputRidesTheLane:

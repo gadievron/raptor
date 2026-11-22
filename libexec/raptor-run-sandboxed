@@ -335,8 +335,17 @@ try:
                  output=output_dir) as run:
         # Run with captured stderr so _check_blocked can inspect it,
         # but print it through so the caller sees it too.
+        # errors="replace": the child is arbitrary and untrusted, so a
+        # single invalid UTF-8 byte in its output must not abort the
+        # wrapper — under the default strict decode it raised
+        # UnicodeDecodeError (a ValueError), turning the whole run into
+        # exit 2 with ALL child output AND the [sandbox] blocked/crash
+        # evidence suppressed: one hostile byte silenced the sandbox's
+        # own diagnostics. U+FFFD per bad byte matches the
+        # TimeoutExpired partial-output leg below and the sandbox's
+        # internal stderr inspection copy.
         result = run(cmd, capture_output=True, text=True,
-                     timeout=child_timeout)
+                     errors="replace", timeout=child_timeout)
 
         # Pass through child output (TTY-conditional display lane —
         # see _emit_child_output).
