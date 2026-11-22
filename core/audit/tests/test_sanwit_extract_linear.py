@@ -359,8 +359,16 @@ class TestAssemblyLoopLinear:
 
 
 class TestTimingHeapScope:
-    @pytest.mark.wall_budget(30)  # Full gc.collect() passes: seconds each
-    # on a battery worker's accumulated heap, though instant in isolation.
+    # Wall budget, not CPU: the test performs three full gc collections
+    # (the _timed entry collect plus the explicit before/after collects),
+    # whose cost scales with the WORKER's whole heap — milliseconds in
+    # isolation but 12-14s observed inside a full-battery xdist worker
+    # that has imported and exercised the entire tree. 40s gives ~3x
+    # headroom over the worst observation for slower runners while still
+    # flagging a pathological regression (collection work leaking into
+    # the measured window, or the harness growing collection roots)
+    # well before it stalls the battery.
+    @pytest.mark.wall_budget(40)
     def test_preexisting_unreachable_cycle_is_collected_before_work(self):
         import weakref
 

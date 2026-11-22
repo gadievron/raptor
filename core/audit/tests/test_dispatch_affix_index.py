@@ -159,8 +159,16 @@ def test_fully_handled_table_never_builds_unused_index(monkeypatch):
     assert dispatch.find_dispatch_gaps({}, data) == []
 
 
-@pytest.mark.wall_budget(30)  # Four full gc.collect() passes: seconds each
-# on a battery worker's accumulated heap, though instant in isolation.
+# 30s, not the 10s default: the provider's four gc.collect() calls are
+# full collections, so their cost scales with the WORKER's whole heap —
+# ~0.1s in isolation but 11-22s observed inside a full-battery xdist
+# worker that has imported and exercised the entire tree (the upper end
+# under heavy ambient machine load). 60s gives ~2.5x headroom over the
+# worst observation for slower runners while still flagging a
+# pathological regression (an accidental extra collect per candidate,
+# or the index growing collection roots) well before it stalls the
+# battery — the test is ~600x under budget in isolation.
+@pytest.mark.wall_budget(60)
 def test_foreign_affix_result_keeps_original_temporary_lifetime(monkeypatch):
     import gc
 
