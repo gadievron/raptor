@@ -182,9 +182,19 @@ def _native(file):
 
 
 def _namespace(module, before):
+    # __warningregistry__ is CPython warnings bookkeeping, not site
+    # pollution: a GC-time ResourceWarning from an UNRELATED test's
+    # leaked object (e.g. tempfile.TemporaryDirectory's "Implicitly
+    # cleaning up" finalizer) plants it in that module's dict whenever
+    # collection happens to run inside this window, so keeping it in
+    # the comparison makes the verdict depend on worker heap history.
+    # Every other key stays load-bearing — a site that really leaks a
+    # binding still fails.
+    bookkeeping = {"__warningregistry__"}
     now = vars(module)
-    assert now.keys() == before.keys(), module.__name__
-    assert all(now[name] is value for name, value in before.items()), module.__name__
+    assert now.keys() - bookkeeping == before.keys() - bookkeeping, module.__name__
+    assert all(now[name] is value for name, value in before.items()
+               if name not in bookkeeping), module.__name__
 
 
 def _setup(native, file, scope, detector=None):
