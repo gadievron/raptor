@@ -773,6 +773,17 @@ FEASIBILITY_TIER_STATUSES = frozenset({
 #: must never vouch for a confirm-direction claim beside it.
 _RECEIPT_CONFIRM_STATUSES = frozenset({"confirmed"}) | FEASIBILITY_TIER_STATUSES
 
+#: Runtime-grade plain-confirmation SPELLINGS the clamp below treats
+#: identically. ``validated`` is the /agentic synonym: the display
+#: layer renders it "Confirmed" (core/reporting/formatting.py), the
+#: harvest counts it a hard confirmation (HARVEST_STATUSES), and the
+#: schema glosses it "confirmed real vulnerability" — so an unclamped
+#: ``validated`` is the plain-confirmed bypass spelled differently.
+#: Trusted chokepoints never stamp it (receipts carry ``confirmed``
+#: or a feasibility tier), so a receipt-less ``validated`` demotes to
+#: the same quarantine tier.
+_PLAIN_CONFIRM_STATUSES = frozenset({"confirmed", "validated"})
+
 #: Statuses a trusted act can legitimately rule out with: the
 #: disproven family. A finished /validate leaves these only behind a
 #: mechanically verified refutation (witness execution with verdict
@@ -1025,9 +1036,12 @@ def sanitise_findings_evidence(
         # verified confirming witness execution. status, final_status
         # and ruling.status each reach display, report and projection
         # consumers on their own, so every claiming channel is
-        # clamped. Unsupported claims demote to confirmed_unverified —
-        # the designed quarantine tier, still witness-eligible, so a
-        # witness run is exactly what can re-earn the confirmation.
+        # clamped, and every plain-confirmation SPELLING with it
+        # (``validated`` renders and harvests as Confirmed — see
+        # _PLAIN_CONFIRM_STATUSES). Unsupported claims demote to
+        # confirmed_unverified — the designed quarantine tier, still
+        # witness-eligible, so a witness run is exactly what can
+        # re-earn the confirmation.
         ruling = finding.get("ruling")
         ruling_status = (
             normalize_status(ruling.get("status"))
@@ -1035,7 +1049,8 @@ def sanitise_findings_evidence(
         )
         claimed_final = normalize_status(finding.get("final_status"))
         claimed_status = normalize_status(finding.get("status"))
-        if "confirmed" in (claimed_final, claimed_status, ruling_status):
+        if _PLAIN_CONFIRM_STATUSES & {claimed_final, claimed_status,
+                                      ruling_status}:
             # Receipt support requires the stamped ruling to be
             # confirm-direction itself: verification recomputes over
             # the CURRENT ruling.status, so a verified receipt proves
@@ -1056,13 +1071,14 @@ def sanitise_findings_evidence(
                 )
             if not supported:
                 demoted = False
-                if claimed_final == "confirmed":
+                if claimed_final in _PLAIN_CONFIRM_STATUSES:
                     finding["final_status"] = "confirmed_unverified"
                     demoted = True
-                if claimed_status == "confirmed":
+                if claimed_status in _PLAIN_CONFIRM_STATUSES:
                     finding["status"] = "confirmed_unverified"
                     demoted = True
-                if ruling_status == "confirmed" and isinstance(ruling, dict):
+                if (ruling_status in _PLAIN_CONFIRM_STATUSES
+                        and isinstance(ruling, dict)):
                     ruling["status"] = "confirmed_unverified"
                     demoted = True
                 if demoted:

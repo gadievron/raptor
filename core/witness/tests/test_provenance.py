@@ -385,6 +385,33 @@ class TestPlainConfirmedClamp:
         # One demoted finding, not three.
         assert stats["confirmation_demoted"] == 1
 
+    def test_unreceipted_validated_spelling_demoted(self, tmp_path):
+        # "validated" is the /agentic plain-confirmation synonym: it
+        # renders as Confirmed and harvests as a hard confirmation, so
+        # every claiming channel clamps exactly like "confirmed" (the
+        # Title-Case variant normalises before the membership test).
+        f = _finding(status="Validated", final_status="validated",
+                     ruling={"status": "validated", "reason": "planted"})
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert f["status"] == "confirmed_unverified"
+        assert f["final_status"] == "confirmed_unverified"
+        assert f["ruling"]["status"] == "confirmed_unverified"
+        assert stats["confirmation_demoted"] == 1
+
+    def test_receipted_confirmed_ruling_supports_validated_beside_it(
+            self, tmp_path):
+        # The trusted act stamped a confirm-direction ruling; the
+        # synonym spelling riding beside it in the status channel is
+        # the same confirmation, not a separate claim.
+        f = _finding(status="validated")
+        ruling = {"status": "confirmed", "reason": "Stage D affirmed"}
+        f["ruling"] = ruling
+        prov.stamp_ruling_confirmation(f, ruling, tmp_path)
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert stats["confirmation_demoted"] == 0
+        assert f["status"] == "validated"
+        assert f["ruling"]["status"] == "confirmed"
+
     def test_receipted_confirmed_survives_all_channels(self, tmp_path):
         f = _finding(status="confirmed", final_status="confirmed")
         ruling = {"status": "confirmed", "reason": "Stage D affirmed"}
