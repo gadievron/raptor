@@ -75,6 +75,7 @@ _COMMANDS = {
     "hunt",
     "siblings",
     "fuzz",
+    "joern",
     "graph",
     "report",
     "handoff",
@@ -236,6 +237,18 @@ def _build_parser() -> argparse.ArgumentParser:
     fuzz_p = sub.add_parser("fuzz", help="Hand off to RAPTOR's existing fuzz workflow")
     fuzz_p.add_argument("target", help="Binary to fuzz")
     fuzz_p.add_argument("fuzz_args", nargs=argparse.REMAINDER, help="Additional /fuzz arguments")
+
+    joern_p = sub.add_parser(
+        "joern",
+        help="Bridge the binary into the Joern stack: ghidra2cpg CPG"
+             " plus the C-profile taint and structural sweeps"
+             " (address-level hint-tier evidence)")
+    joern_p.add_argument("target", help="Binary to analyse (parsed, never executed)")
+    joern_p.add_argument("--out", help="Explicit output directory")
+    joern_p.add_argument("--query-timeout", type=_positive_int,
+                         help="Per-sweep timeout in seconds")
+    joern_p.add_argument("--build-timeout", type=_positive_int,
+                         help="ghidra2cpg build timeout in seconds (default: 900)")
 
     graph_p = sub.add_parser("graph", help="Query the binary graph")
     graph_p.add_argument("run_dir", help="Binary map output directory")
@@ -946,6 +959,76 @@ def _run_corpus(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_joern(args: argparse.Namespace) -> int:
+    """``joern``: ghidra2cpg build + C-profile sweeps on one binary.
+
+    The target is hostile input — Ghidra parses it, nothing executes
+    it. Output is the hint-tier ``joern-binary-scan.json`` artifact;
+    hits are address-level triage evidence, never confirmed findings,
+    so nothing here feeds the source-finding SARIF stream.
+    """
+    resolved = _resolve_target_and_out(args)
+    if resolved is None:
+        return 2
+    target, out_dir = resolved
+
+    from packages.joern.binary_cpg import ghidra2cpg_path
+    from packages.joern.prereqs import is_available
+    if not is_available() or not ghidra2cpg_path():
+        print("raptor-binary: Joern with the ghidra2cpg frontend is not"
+              " installed (joern-cli distribution required)", file=sys.stderr)
+        return 2
+
+    from core.project.oplock import OpLockContention
+    from core.run.pin import ProjectArgvError
+    try:
+        start_run(out_dir, "understand", target=str(target))
+    except (OpLockContention, ProjectArgvError) as e:
+        print(f"raptor-binary: {e}", file=sys.stderr)
+        return 1
+    try:
+        from core.orchestration.joern_binary_scan import run_joern_binary_scan
+        outcome = run_joern_binary_scan(
+            target, out_dir,
+            query_timeout_s=args.query_timeout,
+            build_timeout_s=args.build_timeout,
+        )
+    except KeyboardInterrupt:
+        fail_run(out_dir, "joern binary scan interrupted")
+        raise
+    except Exception as exc:  # noqa: BLE001 - operator-facing clean failure
+        # Exception text can echo hostile binary-derived strings — same
+        # terminal-grade scrub as the sibling subcommands.
+        detail = (f"{type(exc).__name__}: "
+                  f"{sanitise_for_terminal(str(exc), max_len=300)}")
+        fail_run(out_dir, f"joern binary scan failed: {detail}")
+        print(f"raptor-binary: joern failed: {detail}", file=sys.stderr)
+        return 1
+
+    if outcome.artifact_path is None:
+        # No artifact at all (frontend missing/failed/unwritable) — the
+        # run produced nothing bindable.
+        reason = "; ".join(
+            sanitise_for_terminal(e, max_len=200) for e in outcome.errors[:3]
+        ) or "no artifact produced"
+        fail_run(out_dir, f"joern binary scan failed: {reason}")
+        print(f"raptor-binary: joern failed: {reason}", file=sys.stderr)
+        return 1
+
+    complete_run(out_dir)
+    print("Mode: joern (ghidra2cpg bridge; mechanical sweeps)")
+    print(f"Methods recovered: {outcome.method_count}")
+    print(f"Taint flows: {outcome.taint_flow_count}")
+    print(f"Structural hits: {outcome.structural_hit_count}"
+          " (address-level hint-tier evidence — not confirmed findings)")
+    if outcome.degraded:
+        print("Warning: sweep degraded — coverage is incomplete, not clean:")
+        for err in outcome.errors[:5]:
+            print(f"  - {sanitise_for_terminal(err, max_len=200)}")
+    print(f"Artifact: {outcome.artifact_path}")
+    return 0
+
+
 def _validate_hunt_flags(args: argparse.Namespace) -> str | None:
     """Flag-surface validation for ``hunt``; returns an error string.
 
@@ -1418,6 +1501,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_siblings(args)
     if args.command == "fuzz":
         return _run_fuzz(args)
+    if args.command == "joern":
+        return _run_joern(args)
     if args.command == "graph":
         return _run_graph(args)
     if args.command == "report":

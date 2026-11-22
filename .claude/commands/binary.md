@@ -1,5 +1,5 @@
 ---
-description: Black-box binary investigation — autonomous ranking, map, parser tracing, fuzz, graph, report, handoff, diagram
+description: Black-box binary investigation — autonomous ranking, map, parser tracing, fuzz, joern CPG bridge, graph, report, handoff, diagram
 dispatch: libexec/raptor-binary <command> [args]
 ---
 
@@ -30,6 +30,7 @@ With no command, `/binary <path>` defaults to `investigate`.
 | `hunt <run-dir\|binary>` | Operator-steered hunt: `--anchor` string families and `--calls`/`--and-not-calls` caller set algebra |
 | `siblings <run-dir>` | Sibling consistency: peer clusters × per-member check vectors, N-vs-K outlier flagging (review leads with disproof recipes, never findings) |
 | `fuzz <binary> [fuzz args]` | Hand off to the normal `/fuzz` orchestrator for crash witnesses |
+| `joern <binary>` | Bridge the binary into the Joern stack: build a CPG with the ghidra2cpg frontend (parsed, never executed), bind it to the resident graph service, run the C-profile taint sweep plus the fourteen structural queries; writes `joern-binary-scan.json` — address-level HINT-TIER evidence (locations are virtual addresses, literal detection degrades on recovered code), never confirmed findings and never fed into the source-finding SARIF stream. Flags: `--out <dir>`, `--query-timeout <s>`, `--build-timeout <s>` (default 900) |
 | `graph <run-dir>` | Query the persistent binary graph |
 | `report <run-dir>` | Print `binary-investigation-report.md` when present, otherwise the lower-level map report |
 | `handoff <run-dir>` | Print `binary-validation-handoff.json` |
