@@ -1213,7 +1213,7 @@ class AutonomousCodeQLAnalyzer:
         # reflection, cross-file, or address-of edges. The decision is
         # routed through ``check_suppress`` — the canonical chokepoint
         # the /agentic sibling uses — so --allow-unreachable is
-        # honored here exactly as it is there.
+        # honoured here exactly as it is there.
         # SARIF carries NO manual_override authority: the verdict CLI
         # (``core.run.verdicts.set_manual_override``, the only claim
         # minter) stamps findings artifacts, never SARIF, so a token
@@ -1222,7 +1222,7 @@ class AutonomousCodeQLAnalyzer:
         # locations[0].physicalLocation this arm actually consumes
         # via ``_locate_finding_function``, so a copied token+claim
         # pair verified while pointing the override anywhere. Any
-        # flag found here is surfaced (once) and ignored; the
+        # flag found here is surfaced and ignored; the
         # operator opt-outs are --allow-unreachable (run-wide) and
         # the verdict CLI on the findings artifacts the /agentic
         # sibling reads.
