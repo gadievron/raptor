@@ -8,10 +8,14 @@ duty to a first-class scan phase beside Semgrep/CodeQL/OpenAnt:
   runs (``packages/joern/queries/tiered_taint.sc``), but its flows are
   emitted as SARIF results with ``codeFlows`` instead of being used
   only as reviewer context.
-* **Structural queries** — six C/C++ queries ported from the upstream
-  Joern query database (``packages/joern/queries/structural_c.sc``):
-  the use-after-free trio, TOCTOU file races, malloc/memcpy integer
-  overflow, and strlen truncation. These are syntactic/structural
+* **Structural queries** — fourteen C/C++ queries ported from the
+  upstream Joern query database
+  (``packages/joern/queries/structural_c.sc``): the use-after-free
+  trio, TOCTOU file races, malloc/memcpy integer overflow, strlen
+  truncation, format-string control, strncpy null-termination,
+  the privilege-drop-order pair, fixed-offset array access without a
+  length check, unchecked read/recv/malloc returns, and the
+  gets/getwd banned-function pair. These are syntactic/structural
   traversals (milliseconds on a warm CPG) that CodeQL only matches
   with a successful database build — Joern's fuzzy c2cpg parser needs
   no build, which is the distinctive value on unbuildable targets.
@@ -50,7 +54,7 @@ _SCANDONE_MARKER = "JOERN_SCAN_DONE:"
 
 #: Expected query count in structural_c.sc — cross-checked against the
 #: completion sentinel so a script edit that drops a query is caught.
-_STRUCTURAL_QUERY_COUNT = 6
+_STRUCTURAL_QUERY_COUNT = 14
 
 #: Cap on emitted taint results (mirrors the Scala-side flow cap —
 #: a pathological target must not produce an unbounded SARIF file).
@@ -96,6 +100,55 @@ STRUCTURAL_RULES: dict[str, dict[str, str]] = {
                        " int target (truncation)",
         "cwe": "CWE-197",
         "level": "note",
+    },
+    "format-controlled-printf": {
+        "description": "Non-literal format string reaches a"
+                       " printf-family sink",
+        "cwe": "CWE-134",
+        "level": "warning",
+    },
+    "strncpy-no-null-term": {
+        "description": "strncpy fills the whole malloc'd buffer with"
+                       " no explicit null termination",
+        "cwe": "CWE-170",
+        "level": "warning",
+    },
+    "setuid-without-setgid": {
+        "description": "Process user ID changed without dropping"
+                       " group privileges first",
+        "cwe": "CWE-696",
+        "level": "warning",
+    },
+    "setgid-without-setgroups": {
+        "description": "Process group changed without clearing"
+                       " ancillary groups first",
+        "cwe": "CWE-271",
+        "level": "warning",
+    },
+    "constant-array-access-no-check": {
+        "description": "Fixed-offset array access with no sufficient"
+                       " length check found (name-heuristic length"
+                       " sibling)",
+        "cwe": "CWE-129",
+        "level": "note",
+    },
+    "unchecked-read-recv-malloc": {
+        "description": "Return value of read/recv/malloc is never"
+                       " checked in the caller",
+        "cwe": "CWE-252",
+        "level": "note",
+    },
+    "call-to-gets": {
+        "description": "Call to gets() — unbounded read into the"
+                       " destination buffer, inherently dangerous",
+        "cwe": "CWE-242",
+        "level": "error",
+    },
+    "call-to-getwd": {
+        "description": "Call to getwd() — unbounded path write,"
+                       " deprecated in favour of getcwd",
+        "cwe": "CWE-676",
+        "level": "warning",
     },
 }
 

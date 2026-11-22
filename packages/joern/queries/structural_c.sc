@@ -2,12 +2,15 @@
 // /agentic Joern scan phase (consumed by core.orchestration.joern_scan,
 // which maps each query name to a CWE-tagged SARIF rule).
 //
-// Six queries ported from the upstream Joern query database (querydb,
-// Apache-2.0) and adapted to the RAPTOR record transport. Traversals
-// are kept as close to upstream as the transport allows so upstream
-// precision characteristics carry over. Each query runs inside Try so
-// one failing traversal cannot cost the others; a failure emits one
-// error record naming the query instead of aborting the script.
+// Fourteen queries ported from the upstream Joern query database
+// (querydb, Apache-2.0) and adapted to the RAPTOR record transport.
+// Traversals are kept as close to upstream as the transport allows so
+// upstream precision characteristics carry over; the two querydb-only
+// helper extensions they depend on (returnValueNotChecked, literal
+// toInt) are inlined below as plain functions. Each query runs inside
+// Try so one failing traversal cannot cost the others; a failure
+// emits one error record naming the query instead of aborting the
+// script.
 //
 // Dual transport (same contract as standard_sinks.sc): every record
 // line is println'd (the `joern --script` subprocess transport sees
@@ -30,7 +33,8 @@ import io.joern.dataflowengineoss.queryengine._
 import io.joern.dataflowengineoss.language._
 import io.shiftleft.semanticcpg.language._
 import io.shiftleft.codepropertygraph.generated.Operators
-import io.shiftleft.codepropertygraph.generated.nodes.{Call, CfgNode, Local, MethodParameterIn}
+import io.shiftleft.codepropertygraph.generated.nodes.{Call, CfgNode, Literal, Local, Method, MethodParameterIn}
+import io.shiftleft.semanticcpg.language.operatorextension.OpNodes
 import scala.util.{Failure, Success, Try}
 
 implicit val engineContext: EngineContext = EngineContext()
@@ -64,6 +68,80 @@ def hitLine(query: String, n: CfgNode): String = {
 }
 
 var failedQueries = 0
+
+// --- querydb helper inlines (QueryLangExtensions.scala) -------------
+// LiteralExtension.toInt as a plain function: the integer value of
+// each literal whose code Integer.decode can parse.
+def litToInt(lits: Iterator[Literal]): Iterator[Int] =
+  lits.flatMap(lit => Try(Integer.decode(lit.code).intValue()).toOption)
+
+// CallExtension.returnValueNotChecked, inlined verbatim (pure
+// semanticcpg steps): calls whose return value is never used in a
+// condition in the caller — directly, via the assigned variable, or
+// via a direct return.
+def returnValueNotChecked(callTrav: Iterator[Call]): Iterator[Call] = {
+  val notDirectlyChecked = callTrav.filterNot { y =>
+    val code = y.code
+    y.inAstMinusLeaf.isControlStructure.condition.code.exists(_.contains(code))
+  }
+  val notInCondition = notDirectlyChecked.filterNot { call =>
+    val inConditions = call.method.controlStructure.condition.ast.l
+    val checkedVars  = inConditions.isIdentifier.name.toSet ++ inConditions.isCall.code.toSet
+    val targets      = call.inAstMinusLeaf.isCall.isAssignment.target.code.toSet
+    (targets & checkedVars).nonEmpty
+  }
+  notInCondition.whereNot(call => call.inAstMinusLeaf.isReturn)
+}
+
+// --- MissingLengthCheck helpers (upstream private defs, carried with
+// the port). Length-field candidates are matched by name heuristic;
+// the identifier is regex-quoted — a C identifier carries no
+// metacharacters, but a macro-mangled name must fail the match, not
+// blow up the pattern compile.
+def potentialLengthFields(acc: OpNodes.ArrayAccess, method: Method): Seq[String] =
+  acc.simpleName.flatMap { name =>
+    val normalizedName = name.stripSuffix("s")
+    val regex = s"(?i)${java.util.regex.Pattern.quote(normalizedName)}(s?)(_?)(len|siz).*"
+    method.parameter.name(regex).name ++ method.local.name(regex).name
+  }.toSeq
+
+def lengthChecked(acc: OpNodes.ArrayAccess, lens: Seq[String]): Boolean = {
+  // Upstream reads argument(2) node-level, which throws on a
+  // degenerate access — argumentOption keeps one mangled node from
+  // costing the whole query.
+  val arrayIndex = litToInt(acc.argumentOption(2).iterator.ast.isLiteral).nextOption() match {
+    case Some(x) => x
+    case None    => return true // only literal indices are in scope
+  }
+  val lowerBounds = litToInt(
+    acc.method.controlStructure.condition
+      .where(_.ast.isIdentifier.nameExact(lens*))
+      .ast
+      .isLiteral
+  ) ++
+    Option.when(
+      acc.method.controlStructure.condition
+        .codeExact(acc.array.code)
+        .nonEmpty
+    )(0)
+  lowerBounds.exists(_ >= arrayIndex)
+}
+
+// Format-string argument index per printf-family sink. Upstream
+// covers printf/sprintf/vsprintf; the rest of the family is the same
+// shape with the format at a different index.
+val fmtArgIndex: Map[String, Int] = Map(
+  "printf"    -> 1,
+  "vprintf"   -> 1,
+  "fprintf"   -> 2,
+  "vfprintf"  -> 2,
+  "dprintf"   -> 2,
+  "sprintf"   -> 2,
+  "vsprintf"  -> 2,
+  "syslog"    -> 2,
+  "snprintf"  -> 3,
+  "vsnprintf" -> 3
+)
 
 def runStructural(name: String)(body: => IterableOnce[CfgNode]): List[String] =
   Try(body.iterator.take(perQueryCap).toList) match {
@@ -256,10 +334,102 @@ val scanLines = List(
       .inAssignment
       .target
       .evalType("(g?)int")
+  },
+  // format-string: a non-literal format argument reaches a
+  // printf-family sink (querydb format-controlled-printf, extended
+  // beyond printf/sprintf/vsprintf to the fmtArgIndex family).
+  runStructural("format-controlled-printf") {
+    cpg.call
+      .nameExact(fmtArgIndex.keys.toSeq*)
+      .filter { c =>
+        val idx = fmtArgIndex(c.name)
+        // Existence first: a degenerate `printf()` has no format
+        // argument to judge and must not be flagged (upstream's bare
+        // whereNot(isLiteral) would flag it).
+        c.argument.argumentIndex(idx).nonEmpty &&
+        c.argument.argumentIndex(idx).isLiteral.isEmpty
+      }
+  },
+  // null-termination: strncpy fills the whole malloc'd buffer (size
+  // expressions textually equal) and no 0-literal is ever assigned
+  // into the destination (querydb strncpy-no-null-term).
+  runStructural("strncpy-no-null-term") {
+    val allocations = cpg.method(".*malloc$").callIn.argument(1).l
+    // Node-level argument(1)/(3) below throw on a degenerate
+    // `strncpy();` — gate on arity first (malloc-memcpy pattern).
+    cpg.method("(?i)strncpy").callIn
+      .filter(_.argument.size >= 3)
+      .map(c => (c.method, c.argument(1), c.argument(3)))
+      .filter { case (method, dst, size) =>
+        dst.reachableBy(allocations).codeExact(size.code).nonEmpty &&
+        method.call.isAssignment
+          .where(
+            // Upstream's .isArrayAccess step does not exist on a Call
+            // iterator in this semanticcpg — the two index-access
+            // operators are the same set, matched by name.
+            _.target.isCall
+              .nameExact(Operators.indexAccess, Operators.indirectIndexAccess)
+              // Upstream splices dst.code into the regex raw; quoted
+              // here so a `*p`-shaped destination cannot break (or
+              // steer) the pattern.
+              .code(s"${java.util.regex.Pattern.quote(dst.code)}.*\\[.*")
+          )
+          .source
+          .isLiteral
+          .code(".*0.*")
+          .isEmpty
+      }
+      .map(_._2)
+  },
+  // privilege-drop order: set*uid not dominated by any set*gid — the
+  // process keeps its (often root-equivalent) groups (querydb
+  // setuid-without-setgid).
+  runStructural("setuid-without-setgid") {
+    cpg.method("(?i)set(res|re|e|)uid").callIn
+      .whereNot(_.dominatedBy.isCall.name("set(res|re|e|)?gid"))
+  },
+  // privilege-drop order: set*gid not dominated by setgroups — the
+  // ancillary group list survives the drop (querydb
+  // setgid-without-setgroups).
+  runStructural("setgid-without-setgroups") {
+    cpg.method("(?i)set(res|re|e|)gid").callIn
+      .whereNot(_.dominatedBy.isCall.name("setgroups"))
+  },
+  // bounds: fixed-offset access into a non-local array that has a
+  // plausible length sibling, with no condition establishing a
+  // sufficient bound (querydb constant-array-access-no-check).
+  runStructural("constant-array-access-no-check") {
+    cpg.method.arrayAccess
+      .filter { access =>
+        val arrName = access.simpleName
+        arrName.nonEmpty && !arrName.forall(x => access.method.local.nameExact(x).nonEmpty)
+      }
+      .usesConstantOffset
+      .flatMap { access =>
+        val lenFields = potentialLengthFields(access, access.method)
+        if (lenFields.nonEmpty && !lengthChecked(access, lenFields)) List(access)
+        else Nil
+      }
+  },
+  // unchecked return: read/recv/malloc result never used in a
+  // condition — for malloc this is the NULL-deref precursor (querydb
+  // unchecked-read-recv-malloc).
+  runStructural("unchecked-read-recv-malloc") {
+    returnValueNotChecked(cpg.method("(?i)(read|recv|malloc)").callIn)
+  },
+  // inherently dangerous: gets() has no bounded form (querydb
+  // call-to-gets; the anchored regex does not match fgets).
+  runStructural("call-to-gets") {
+    cpg.method("(?i)gets").callIn
+  },
+  // inherently dangerous: getwd() writes an unbounded path (querydb
+  // call-to-getwd; getcwd is not matched).
+  runStructural("call-to-getwd") {
+    cpg.method("(?i)getwd").callIn
   }
 ).flatten
 
-val doneLine = s"""JOERN_SCAN_DONE:{"queries":6,"failed":$failedQueries}"""
+val doneLine = s"""JOERN_SCAN_DONE:{"queries":14,"failed":$failedQueries}"""
 val allLines = scanLines :+ doneLine
 allLines.foreach(println)
 "JOERN_SCAN_START\n" + allLines.mkString("\n") + "\nJOERN_SCAN_END"

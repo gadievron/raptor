@@ -529,6 +529,12 @@ class TestStructuralResults(unittest.TestCase):
             self.assertIn(f'runStructural("{query}")', text)
         self.assertEqual(
             text.count('runStructural("'), _STRUCTURAL_QUERY_COUNT)
+        # Reverse direction: with every table key present in the
+        # script and both cardinalities pinned, table keys and script
+        # queries are exactly the same set — a script query added
+        # without rule metadata can no longer slip through as a
+        # runtime unknown-name warning.
+        self.assertEqual(len(STRUCTURAL_RULES), _STRUCTURAL_QUERY_COUNT)
         # The completion sentinel's hardcoded count must track too —
         # otherwise a consistently-added query passes CI and then
         # emits a drift error on every run.
