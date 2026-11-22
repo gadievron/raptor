@@ -12,7 +12,7 @@ def audit(event, values):
         attempts.append(event);raise PermissionError(event)
 sys.addaudithook(audit)
 p=a.root/'core/audit/tests/test_dark_verify.py';b=p.read_bytes()
-assert hashlib.sha256(b).hexdigest()=='9f34c616819c50c0bb7a1b59102c88bd970254a20230c39cb7e3b83f3d15e83f'
+assert hashlib.sha256(b).hexdigest()=='17c6ea78e746503a636c93e33dc49cb3acb533ee1efd784c6b7259169559e226'
 cls=next(c for c in ast.parse(b).body if isinstance(c,ast.ClassDef) and c.name=='TestSandboxedCompileWriteGrants')
 m=next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='dirs')
 assert len(m.decorator_list)==1 and isinstance(m.body[0],ast.ImportFrom)

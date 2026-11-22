@@ -22,7 +22,7 @@ def audit(event, values):
 sys.addaudithook(audit)
 source_path = args.root / "core/audit/tests/test_frida_observe.py"
 source = source_path.read_bytes()
-assert hashlib.sha256(source).hexdigest() == "3d88722238e20f776b85a5bddd2a8e5113a9c1a686ebb5839c288943433bb728"
+assert hashlib.sha256(source).hexdigest() == "156935eea091a3d7c31e924327fc62ff1ad74ee2c0969aada162ba9ef5557688"
 cls = next(n for n in ast.parse(source).body if isinstance(n, ast.ClassDef) and n.name == "TestParseObservations")
 method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "_write_log")
 assert not method.decorator_list

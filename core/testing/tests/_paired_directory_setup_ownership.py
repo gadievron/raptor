@@ -22,7 +22,7 @@ def audit(event, values):
         raise PermissionError("denied suffix proof boundary: " + event)
 sys.addaudithook(audit)
 path, class_name, digest = {
-    "demotion": ("core/sandbox/tests/test_backend_demotion.py", "_Base", "1be4f46c4a335e6608e3685edea5243598eda43283dde77e8b9d13029236d3b8"),
+    "demotion": ("core/sandbox/tests/test_backend_demotion.py", "_Base", "4b9b51ad700dbac6713bc96e65e07f9922dd69947ec6a8115773b8e2de65cafd"),
     "landlock": ("core/sandbox/tests/test_ll_private_scratch.py", "TestRestrictedLandlockOnlyScratch", "a8011967af39471dd961fefe464b8082dda5dc38179eb9e268ab3439235b4f4c"),
 }[args.site]
 source_path = args.root / path
