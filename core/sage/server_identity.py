@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import threading
 import time
+from ipaddress import ip_address
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -73,7 +74,9 @@ _GATE_TTL_SECONDS = 60.0
 
 _DOCKER_PS_TIMEOUT = 10.0
 
-_LOOPBACK_HOSTS = frozenset({"localhost", "::1"})
+# Host NAMES that mean this machine. IP literals are classified by
+# parsing below, never by shape.
+_LOOPBACK_NAMES = frozenset({"localhost"})
 
 _cache: dict[tuple[str, int, str], tuple[bool, float]] = {}
 _cache_lock = threading.Lock()
@@ -81,7 +84,28 @@ _warned: set[tuple[str, int, str]] = set()
 
 
 def _is_loopback(host: str) -> bool:
-    return host in _LOOPBACK_HOSTS or host.startswith("127.")
+    """Whether *host* addresses THIS machine — the gate's scope test.
+
+    By parse, never by shape: a loopback IP literal (all of
+    127.0.0.0/8, ``::1``, IPv4-mapped forms), the unspecified address
+    (connecting to ``0.0.0.0`` / ``::`` reaches the local host), or
+    the ``localhost`` name (trailing-dot absolute form included). The
+    previous substring test (``startswith("127.")``) also matched
+    HOSTNAMES like ``127.attacker.example`` — vouching for a remote
+    connection with LOCAL docker evidence — while sending genuinely
+    local spellings (``0.0.0.0``, ``::ffff:127.0.0.1``,
+    ``localhost.``) down the ungated remote lane. Same doctrine as
+    ``core.llm.egress._is_loopback``: names that merely look
+    loopback-ish classify as remote — an operator-owned network path.
+    """
+    h = host.strip().lower().strip("[]")
+    if h.rstrip(".") in _LOOPBACK_NAMES:
+        return True
+    try:
+        addr = ip_address(h)
+    except ValueError:
+        return False
+    return addr.is_loopback or addr.is_unspecified
 
 
 def compose_pinned_image(service: str) -> str | None:
@@ -100,7 +124,9 @@ def compose_pinned_image(service: str) -> str | None:
         text = (
             Path(__file__).resolve().parent / "docker-compose.yml"
         ).read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
+        # Undecodable bytes refuse like an unreadable file — the
+        # callers' None path; ``server_identity_ok`` never raises.
         return None
     section: str | None = None
     service_key: str | None = None

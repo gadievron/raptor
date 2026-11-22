@@ -80,6 +80,60 @@ class TestComposePin:
     def test_unknown_service_has_no_pin(self):
         assert si.compose_pinned_image("impostor") is None
 
+    def test_undecodable_compose_file_refuses_instead_of_raising(
+            self, monkeypatch):
+        # A compose file that no longer decodes as UTF-8 must land on
+        # the same None refusal as an unreadable one — the gate's
+        # "never raises" contract covers the pin read too.
+        def _undecodable(self, encoding="utf-8"):
+            raise UnicodeDecodeError(
+                "utf-8", b"\xff", 0, 1, "invalid start byte")
+
+        monkeypatch.setattr(si.Path, "read_text", _undecodable)
+        assert si.compose_pinned_image("sage") is None
+
+
+class TestLoopbackClassification:
+    """The gate's scope test classifies by PARSE, never by shape —
+    the old substring test matched hostnames like
+    ``127.attacker.example`` (local docker evidence vouching for a
+    remote connection) while missing genuinely local spellings
+    (``0.0.0.0``, ``::ffff:127.0.0.1``, ``localhost.``), which rode
+    the ungated remote lane."""
+
+    @pytest.mark.parametrize("host", [
+        "localhost", "localhost.", "LOCALHOST",
+        "127.0.0.1", "127.5.4.3", "::1", "[::1]",
+        "::ffff:127.0.0.1", "0.0.0.0", "::",
+    ])
+    def test_local_spellings_are_in_gate_scope(self, host):
+        assert si._is_loopback(host) is True
+
+    @pytest.mark.parametrize("host", [
+        "127.attacker.example",
+        "localhost.attacker.example",
+        "sage.internal", "10.0.0.5", "192.168.1.9", "",
+    ])
+    def test_names_and_remote_literals_classify_remote(self, host):
+        assert si._is_loopback(host) is False
+
+    def test_local_literal_spelling_is_still_gated(self, docker):
+        # 0.0.0.0 connects to THIS host — an exotic local spelling
+        # must not buy an ungated lane past the identity check.
+        docker.outcome = _outcome("")
+        assert si.server_identity_ok("http://0.0.0.0:8090", "sage") \
+            is False
+        assert docker.calls == 1
+
+    def test_loopback_shaped_hostname_never_gets_local_vouching(
+            self, docker):
+        # A HOSTNAME shaped like a loopback IP is a remote deployment
+        # (operator-owned path) — local docker evidence must never be
+        # consulted to vouch for where that name resolves.
+        assert si.server_identity_ok(
+            "http://127.attacker.example:8090", "sage") is True
+        assert docker.calls == 0
+
 
 class TestGateVerdicts:
     def test_pinned_image_publishing_the_port_serves(self, docker):

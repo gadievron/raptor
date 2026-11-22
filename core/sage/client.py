@@ -22,7 +22,7 @@ from typing import Any
 from core.logging import get_logger
 
 from .config import SageConfig, ensure_loopback_no_proxy
-from .server_identity import server_identity_ok
+from .server_identity import _is_loopback, server_identity_ok
 
 logger = get_logger()
 
@@ -292,7 +292,10 @@ class SageClient:
             host = urlparse(self._config.url).hostname or ""
         except (TypeError, ValueError):
             return
-        if not host or host in ("localhost", "127.0.0.1"):
+        if not host or _is_loopback(host):
+            # The gate's parse-based classifier, not a spelling list:
+            # ::1 / 127.x literals bypass the proxy via NO_PROXY the
+            # same way localhost does — no registration needed.
             return
         try:
             from core.sandbox.proxy import get_proxy

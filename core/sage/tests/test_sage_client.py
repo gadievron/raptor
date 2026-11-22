@@ -502,6 +502,17 @@ class TestSageClientEgressProxyRegistration(unittest.TestCase):
             SageClient(SageConfig(enabled=True, url="http://127.0.0.1:8090"))
             mock_get.assert_not_called()
 
+    def test_no_op_for_ipv6_loopback_url(self):
+        """::1 is as loopback as 127.0.0.1 — the skip is the gate's
+        parse-based classifier, not a spelling list."""
+        from core.sage.config import SageConfig
+        from core.sage.client import SageClient
+
+        self._set_egress_enabled(True)
+        with patch("core.sandbox.proxy.get_proxy") as mock_get:
+            SageClient(SageConfig(enabled=True, url="http://[::1]:8090"))
+            mock_get.assert_not_called()
+
     def test_registers_remote_host_when_egress_active(self):
         """Remote SAGE_URL + LLM egress active → register sage's
         host on the proxy allowlist via UNION semantics."""

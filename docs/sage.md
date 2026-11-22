@@ -172,9 +172,9 @@ hatches:
 - `SAGE_SERVER_TRUSTED=1` skips the check for a local server the
   operator manages outside the shipped compose file (hand-run binary,
   podman, etc.).
-- Verdicts are cached for ~60 s per endpoint, so hook-heavy pipelines
-  cost one `docker ps` per window; expiry re-covers a sidecar that
-  dies mid-session.
+- Verdicts are cached in-process for ~60 s per endpoint, so
+  hook-heavy pipelines cost one `docker ps` per window per process;
+  expiry re-covers a sidecar that dies mid-session.
 
 The gate covers the Python SDK paths (`core/sage/client.py`, including
 the direct-Ollama embed path) and the `raptor-sage` CLI. The MCP boot
