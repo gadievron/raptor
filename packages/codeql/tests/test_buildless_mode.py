@@ -1072,6 +1072,70 @@ class TestBuildModeCacheContract:
         assert verdict("ruby", None) == db_manager._SIBLING_EVICT
 
 
+class TestServePurgesAnalyzeWritableState:
+    """A cache serve must clear the analyze-writable regions the
+    content digest deliberately leaves uncovered (results/, log/,
+    diagnostic/, evaluator cache under db-*): ``--no-rerun`` replays
+    result state found inside the database, so planted pre-baked
+    results under a digest-clean tree would be emitted as this run's
+    verdicts without any query running."""
+
+    def _plant_analysis_state(self, db):
+        results = db / "results" / "pack"
+        results.mkdir(parents=True)
+        (results / "pre-baked.bqrs").write_bytes(b"planted")
+        (db / "log").mkdir()
+        (db / "log" / "x.log").write_text("x")
+        (db / "diagnostic").mkdir()
+        (db / "diagnostic" / "d.jsonl").write_text("{}")
+        cache = db / "db-cpp" / "default" / "cache"
+        cache.mkdir(parents=True)
+        (cache / "stale.bin").write_bytes(b"\2" * 64)
+
+    def test_serve_clears_planted_results_and_evaluator_cache(
+            self, db_manager, repo):
+        planted = _plant_cached_db(db_manager, repo, "cpp", "buildless")
+        # Planted AFTER the digest stamp — all four regions are
+        # digest-excluded, so the serve-time recompute still matches.
+        self._plant_analysis_state(planted)
+
+        served = db_manager.get_cached_database(repo, "cpp")
+
+        assert served == planted
+        assert not (planted / "results").exists()
+        assert not (planted / "log").exists()
+        assert not (planted / "diagnostic").exists()
+        assert not (planted / "db-cpp" / "default" / "cache").exists()
+        # Digest-covered content is untouched.
+        assert (planted / "codeql-database.yml").exists()
+        assert (planted / "db-cpp" / "blob.bin").exists()
+
+    def test_serve_refused_when_purge_fails(self, db_manager, repo):
+        _plant_cached_db(db_manager, repo, "cpp", "buildless")
+        with patch.object(
+            db_manager, '_purge_unauthenticated_analysis_state',
+            return_value=False,
+        ):
+            assert db_manager.get_cached_database(repo, "cpp") is None
+
+    def test_purge_helper_clears_odd_shapes(self, db_manager, repo):
+        """Direct helper contract: a regular FILE squatting on an
+        analyze-writable name is removed too (it is digest-invisible
+        and would block analyze from writing the real directory), and
+        nested ``cache`` dirs under db-* all go."""
+        planted = _plant_cached_db(db_manager, repo, "cpp", "buildless")
+        (planted / "results").write_text("squatter")
+        inner = planted / "db-cpp" / "deep" / "cache" / "cache"
+        inner.mkdir(parents=True)
+        (inner / "stale.bin").write_bytes(b"\3")
+
+        assert db_manager._purge_unauthenticated_analysis_state(
+            planted, "cpp") is True
+        assert not (planted / "results").exists()
+        assert not (planted / "db-cpp" / "deep" / "cache").exists()
+        assert (planted / "db-cpp" / "blob.bin").exists()
+
+
 class TestExtractionOutcomes:
     @staticmethod
     def _write_summary(db, attributes, source_id="cpp/extractor/summary"):

@@ -1048,8 +1048,104 @@ class DatabaseManager:
             )
             return None
 
+        # The digest deliberately leaves the analyze-writable regions
+        # uncovered — so nothing vouches for their bytes, and
+        # ``--no-rerun`` would replay them as this run's verdicts.
+        # Clear them before serving; a failed clear is a miss.
+        if not self._purge_unauthenticated_analysis_state(db_path, language):
+            logger.warning(
+                "Cached %s database carries analyze-written state "
+                "that could not be cleared — treating as a cache "
+                "miss and rebuilding", language,
+            )
+            return None
+
         logger.info("✓ Using cached database for %s: %s", language, db_path)
         return db_path
+
+    #: Top-level analyze-writable regions deliberately OUTSIDE the
+    #: content digest (see ``_digest_included``): ``database analyze``
+    #: owns them, so the MAC'd sidecar cannot vouch for their bytes.
+    _ANALYZE_WRITABLE_TOP = ("results", "log", "diagnostic")
+
+    def _purge_unauthenticated_analysis_state(
+        self, db_path: Path, language: str,
+    ) -> bool:
+        """Strip analyze-writable state from a database served FROM
+        CACHE (the serve path and the lost-race sibling adoption).
+
+        The content digest deliberately excludes ``results/``,
+        ``log/``, ``diagnostic/`` and any ``cache`` directory under
+        ``db-*`` — ``database analyze`` legitimately writes there, so
+        covering them would false-miss every serve after the first
+        analyze. But ``--no-rerun`` (the default analyze mode when no
+        model packs are staged — see QueryRunner) REUSES result and
+        evaluator-cache state found inside the database: anyone who
+        can write the cache tree could plant pre-baked query results
+        under a digest-clean tree and have them emitted as this run's
+        SARIF verdicts without any query ever running. A cache serve
+        therefore clears those regions first; the honest cost is one
+        query re-evaluation per serve. Fresh builds are never purged —
+        their analyze state is this run's own output.
+
+        Returns False when any removal failed: the unauthenticated
+        bytes are still in the tree and the caller must treat the
+        entry as unservable (cache miss / fall back to own staging).
+        """
+        doomed: list[Path] = [
+            db_path / name for name in self._ANALYZE_WRITABLE_TOP
+        ]
+        try:
+            for child in sorted(db_path.iterdir()):
+                if (
+                    not child.name.startswith("db-")
+                    or child.is_symlink()
+                    or not child.is_dir()
+                ):
+                    continue
+                for root, dirs, _files in os.walk(
+                    child, followlinks=False,
+                ):
+                    doomed.extend(
+                        Path(root) / name for name in dirs
+                        if name == "cache"
+                    )
+        except OSError as e:
+            logger.warning(
+                "Could not sweep the cached %s database for "
+                "analyze-written state (%s)", language, e,
+            )
+            return False
+        for entry in doomed:
+            try:
+                info = os.lstat(entry)
+            except FileNotFoundError:
+                continue
+            except OSError as e:
+                logger.warning(
+                    "Could not inspect analyze-written state in the "
+                    "cached %s database (%s)", language, e,
+                )
+                return False
+            if stat.S_ISDIR(info.st_mode):
+                if not rmtree_hardened(entry):
+                    logger.warning(
+                        "Could not clear analyze-written directory "
+                        "%s from the cached %s database",
+                        entry.name, language,
+                    )
+                    return False
+            else:
+                try:
+                    os.unlink(entry)
+                except OSError as e:
+                    logger.warning(
+                        "Could not clear analyze-written entry %s "
+                        "from the cached %s database (%s)",
+                        entry.name, language, e,
+                    )
+                    return False
+        return True
 
     @staticmethod
     def _cached_mode_mismatch(
@@ -2372,11 +2468,39 @@ class DatabaseManager:
                             )
                         )
                         if verdict == self._SIBLING_ADOPT:
-                            logger.info(
-                                "✓ Database promoted by sibling; using cached %s", canonical_path
-                            )
-                            rmtree_hardened(staging_path)
-                            used_cached = True
+                            # Adoption is a cache serve: clear the
+                            # analyze-writable regions the digest
+                            # cannot vouch for (--no-rerun would
+                            # replay them as this run's verdicts).
+                            if self._purge_unauthenticated_analysis_state(
+                                canonical_path, language,
+                            ):
+                                logger.info(
+                                    "✓ Database promoted by sibling; using cached %s", canonical_path
+                                )
+                                rmtree_hardened(staging_path)
+                                used_cached = True
+                            else:
+                                logger.warning(
+                                    "Sibling's canonical %s "
+                                    "authenticated but its analyze-"
+                                    "written state could not be "
+                                    "cleared — analysing from this "
+                                    "run's own staging build",
+                                    canonical_path,
+                                )
+                                final_path = self._detach_staging_from_gc(
+                                    staging_path, language,
+                                    slot_dir=canonical_path.parent,
+                                )
+                                if final_path is None:
+                                    success = False
+                                    errors.append(
+                                        f"{language} staging database "
+                                        "could not be safely detached "
+                                        "from the build grant — "
+                                        "output refused"
+                                    )
                         elif verdict == self._SIBLING_STAGING:
                             # Unproven: no verified sidecar vouches for
                             # the tree (a genuine winner's save may not

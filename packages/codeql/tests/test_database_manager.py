@@ -723,6 +723,12 @@ class TestStagingPromote:
         # staging and return the winner's canonical path.
         canonical = self._winner_canonical(db_manager)
         self._stamp_winner_metadata(db_manager, canonical, tmp_path)
+        # Digest-excluded analyze-writable state planted in the slot:
+        # adoption is a cache serve, so it must be cleared (--no-rerun
+        # would replay it as this run's verdicts).
+        results = canonical / "results" / "pack"
+        results.mkdir(parents=True)
+        (results / "pre-baked.bqrs").write_bytes(b"planted")
 
         bs = BuildSystem(type="pip", command="", working_dir=tmp_path,
                          env_vars={}, confidence=1.0, detected_files=[])
@@ -761,6 +767,27 @@ class TestStagingPromote:
         # Loser must NOT overwrite winner's metadata (winner already saved
         # consistent metadata; saving again would just be churn)
         save_meta_mock.assert_not_called()
+        # The adopted slot's unauthenticated analyze state was cleared.
+        assert not (canonical / "results").exists()
+
+    def test_lost_race_adopt_purge_failure_falls_back_to_staging(
+            self, db_manager, tmp_path):
+        """When an authenticated sibling slot's analyze-written state
+        cannot be cleared, adoption is refused: --no-rerun would replay
+        those unauthenticated bytes as this run's verdicts. Fall back
+        to our own staging build; the slot itself is left alone."""
+        canonical = self._winner_canonical(db_manager)
+        self._stamp_winner_metadata(db_manager, canonical, tmp_path)
+
+        with patch.object(
+            db_manager, '_purge_unauthenticated_analysis_state',
+            return_value=False,
+        ):
+            result, save_meta_mock = self._run_lost_race(
+                db_manager, tmp_path, canonical)
+
+        self._assert_slot_left_alone_analysed_from_staging(
+            result, canonical, save_meta_mock)
 
     def _run_lost_race(self, db_manager, tmp_path, canonical):
         """Lose the promote race against a pre-populated canonical."""
