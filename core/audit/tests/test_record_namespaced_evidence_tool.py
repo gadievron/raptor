@@ -58,7 +58,11 @@ def _record_args(out_dir: Path, target: Path, **overrides) -> SimpleNamespace:
     return SimpleNamespace(**base)
 
 
-def _seed_run(tmp_path: Path, *, sweep_tool: str = "dynamic:crash"):
+def _seed_run(
+    tmp_path: Path, *,
+    sweep_tool: str = "dynamic:crash",
+    sweep_rule_id: str | None = None,
+):
     """Minimal run dir: context breadcrumb + confirmed sweep receipt."""
     from core.audit.record import append_audit_log
 
@@ -73,11 +77,14 @@ def _seed_run(tmp_path: Path, *, sweep_tool: str = "dynamic:crash"):
         "action": "context", "key": "src/a.c:foo",
         "file": "src/a.c", "function": "foo",
     })
-    append_audit_log(out_dir, {
+    sweep_entry = {
         "action": "sweep", "key": "src/a.c:foo",
         "file": "src/a.c", "function": "foo",
         "tool": sweep_tool, "outcome": "confirmed",
-    })
+    }
+    if sweep_rule_id is not None:
+        sweep_entry["rule_id"] = sweep_rule_id
+    append_audit_log(out_dir, sweep_entry)
     return out_dir, target
 
 
@@ -176,4 +183,85 @@ def test_attributed_frida_receipt_records_finding(tmp_path, capsys):
     captured = capsys.readouterr()
     assert rc == 0, captured.err
     assert "not a recognised tool" not in captured.err
+    assert "recorded: src/a.c:foo" in captured.out
+
+
+@pytest.mark.parametrize("sweep_tool,evidence_tool", [
+    # The receipt gate matches sweep entries by BASE tool, so a
+    # detection-role receipt from the same namespace used to satisfy
+    # the verification spelling named on --evidence-tool: the registry
+    # namespaces have no channel classifier module and defaulted to
+    # verification-grade in _verification_grade.
+    ("frida:runtime", "frida:token-at-sink"),
+    ("frida:sink-observed", "frida:token-at-sink"),
+    ("dynamic:exception", "dynamic:crash"),
+    ("dark_verify:confirmed", "dark_verify:sanitizer-violation"),
+])
+def test_detection_grade_receipt_cannot_ground_sibling_spelling(
+        tmp_path, capsys, sweep_tool, evidence_tool):
+    mod = _load_cli()
+    out_dir, target = _seed_run(tmp_path, sweep_tool=sweep_tool)
+    rc = mod.cmd_record(
+        _record_args(out_dir, target, evidence_tool=evidence_tool),
+    )
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "detection-grade" in captured.err
+
+
+@pytest.mark.parametrize("sweep_tool", ["frida", "dynamic"])
+def test_bare_namespace_root_receipt_fails_closed(
+        tmp_path, capsys, sweep_tool):
+    """A sweep receipt carrying only the namespace root names no
+    spelling the registry enumerates — fail closed, like every
+    unlisted spelling in a registry-owned namespace."""
+    mod = _load_cli()
+    out_dir, target = _seed_run(tmp_path, sweep_tool=sweep_tool)
+    evidence_tool = (
+        "frida:token-at-sink" if sweep_tool == "frida" else "dynamic:crash"
+    )
+    rc = mod.cmd_record(
+        _record_args(out_dir, target, evidence_tool=evidence_tool),
+    )
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "detection-grade" in captured.err
+
+
+def test_rule_id_spelling_outranks_bare_tool_field(tmp_path, capsys):
+    """When the sweep entry's rule_id carries the earned spelling, the
+    gate grades that spelling (verification role) even though the tool
+    field is the bare namespace root."""
+    mod = _load_cli()
+    out_dir, target = _seed_run(
+        tmp_path, sweep_tool="frida",
+        sweep_rule_id="frida:token-at-sink",
+    )
+    rc = mod.cmd_record(
+        _record_args(out_dir, target, evidence_tool="frida:token-at-sink",
+                     body="ingest token observed in exec argv"),
+    )
+    captured = capsys.readouterr()
+    assert rc == 0, captured.err
+    assert "recorded: src/a.c:foo" in captured.out
+
+
+def test_mixed_receipts_record_on_the_verification_entry(tmp_path, capsys):
+    """A detection-role receipt next to a verification-role one must
+    not veto it — any() semantics are part of the gate's contract."""
+    from core.audit.record import append_audit_log
+
+    mod = _load_cli()
+    out_dir, target = _seed_run(tmp_path, sweep_tool="frida:runtime")
+    append_audit_log(out_dir, {
+        "action": "sweep", "key": "src/a.c:foo",
+        "file": "src/a.c", "function": "foo",
+        "tool": "frida:token-at-sink", "outcome": "confirmed",
+    })
+    rc = mod.cmd_record(
+        _record_args(out_dir, target, evidence_tool="frida:token-at-sink",
+                     body="ingest token observed in exec argv"),
+    )
+    captured = capsys.readouterr()
+    assert rc == 0, captured.err
     assert "recorded: src/a.c:foo" in captured.out

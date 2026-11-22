@@ -546,7 +546,34 @@ def cmd_record(args: argparse.Namespace) -> int:
         # symbolic-reach — guard-blind reachability) corroborates but
         # may not ground a finding alone.
         def _verification_grade(entry) -> bool:
-            rid = entry.get("rule_id") or ""
+            rid = (entry.get("rule_id") or "").strip()
+            # Exact-spelling registry namespaces (frida, dynamic, ...)
+            # have no channel classifier module, so they used to fall
+            # through every consult below and default to
+            # verification-grade — a detection-role sweep receipt
+            # (frida:runtime presence observation, dynamic:exception
+            # hint) could ground --status finding recorded under a
+            # verification spelling of the same base tool. Consult the
+            # registry first on the receipt spelling this entry
+            # actually earned (rule_id when present, else the entry's
+            # own tool stamp): the enumerated role decides, fail-closed
+            # — a detection-role or unlisted spelling corroborates but
+            # cannot ground a finding. Imported outside the classifier
+            # try/except: the membership gate above already imported
+            # this module, and the registry consult must not fail open.
+            from core.audit.evidence_grade import (
+                _ROLE_VERIFICATION,
+                registered_spelling_role,
+                registry_owns,
+            )
+            receipt = rid or (entry.get("tool") or "").strip().lower()
+            if receipt and not receipt.startswith(f"{base_tool}:") \
+                    and receipt != base_tool:
+                receipt = f"{base_tool}:{receipt}"
+            if registry_owns(receipt or base_tool):
+                return (
+                    registered_spelling_role(receipt) == _ROLE_VERIFICATION
+                )
             if not rid:
                 return True
             try:
