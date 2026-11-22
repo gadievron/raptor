@@ -452,12 +452,20 @@ def ruling_confirmation_fields(
     authenticated together with the finding coordinates so a stamped
     ruling cannot be spliced onto another finding or have its claim
     or justification rewritten in the file-writable findings
-    artifact."""
+    artifact. ``vuln_type`` is bound for the same reason the
+    manual-override MAC binds it: it classifies WHAT was confirmed,
+    and reaches report prose and SARIF rows under the surviving
+    Confirmed — a post-stamp rewrite must demote, not re-label the
+    confirmation. Records stamped before ``vuln_type`` joined the
+    field set fail verification and demote to ``confirmed_unverified``
+    — fail closed, re-earnable by the next pipeline run (the
+    ``feasibility_fields`` digest precedent)."""
     return {
         "kind": _RULING_KIND,
         "run": binding if binding is not None else run_binding(run_dir),
         "status": str(ruling.get("status") or ""),
         "reason": str(ruling.get("reason") or ""),
+        "vuln_type": str(finding.get("vuln_type") or ""),
         **_finding_coords(finding),
     }
 

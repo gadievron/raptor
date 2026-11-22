@@ -197,6 +197,18 @@ class TestRulingConfirmationStamp:
         other["ruling"] = dict(ruling)
         assert not prov.verify_ruling_confirmation(other, tmp_path)
 
+    def test_vuln_type_tamper_fails(self, tmp_path):
+        # vuln_type classifies WHAT was confirmed and reaches report
+        # prose and SARIF rows — a post-stamp re-label must demote,
+        # not ride the surviving Confirmed.
+        f = _finding(vuln_type="off-by-one read")
+        ruling = {"status": "confirmed", "reason": "r"}
+        f["ruling"] = ruling
+        prov.stamp_ruling_confirmation(f, ruling, tmp_path)
+        assert prov.verify_ruling_confirmation(f, tmp_path)
+        f["vuln_type"] = "remote code execution"
+        assert not prov.verify_ruling_confirmation(f, tmp_path)
+
     def test_unstamped_or_non_dict_never_verifies(self, tmp_path):
         assert not prov.verify_ruling_confirmation(
             _finding(ruling={"status": "confirmed"}), tmp_path)
