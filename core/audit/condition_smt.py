@@ -1087,6 +1087,7 @@ def check_guard_sufficiency(
     *,
     buffer_size: int | None = None,
     sink_context: dict[str, Any] | None = None,
+    size_signedness: str | None = None,
 ) -> list[SmtSufficiencyResult]:
     """Check whether guard conditions are sufficient via SMT.
 
@@ -1097,6 +1098,10 @@ def check_guard_sufficiency(
         sink_guard: The guard set to check.
         buffer_size: Known buffer size for overflow sinks (from allocation).
         sink_context: Additional context (e.g., from annotations).
+        size_signedness: Declared signedness of the sink's size argument
+            when a source oracle proved it ("signed"/"unsigned"), else
+            None. Governs whether the model's negative-to-huge length
+            conversion range is real, excluded, or undecidable.
 
     Returns:
         List of SMT results, one per resolvable guard.
@@ -1121,10 +1126,15 @@ def check_guard_sufficiency(
     )
 
     for guard in sink_guard.guards:
-        if not guard.resolvable or not guard.concrete_values:
-            continue
-
         constraints = constraints_for_guard(guard, respect_polarity=True)
+        if constraints is None and not (guard.resolvable and guard.concrete_values):
+            # Unresolved guards (the tree-sitter extractions carry no
+            # constant resolution) are analyzed only when their text
+            # already forms a complete literal conjunction; otherwise
+            # the text may simply contain unresolved constants, which
+            # is the absence of an analysis, not boolean structure
+            # worth reporting.
+            continue
         if constraints is None:
             # Boolean structure (||/!/ternary or negated conjunction)
             # the conjunctive model cannot represent.  A "sufficient"
@@ -1144,8 +1154,21 @@ def check_guard_sufficiency(
         if not constraints:
             continue
 
+        checked = constraints
+        if size_signedness == "unsigned" and size_idents:
+            # The size argument's declared type is proven unsigned: its
+            # value can never be negative, so the negative-to-huge
+            # conversion range is excluded exactly. The bound rides as
+            # an ordinary constraint on already-constrained variables
+            # only — it must never widen the modeled variable set.
+            constrained = {c.variable for c in constraints}
+            checked = constraints + [
+                BoundsConstraint(ident, ">=", 0, "declared unsigned")
+                for ident in size_idents if ident in constrained
+            ]
+
         result = _check_constraints_vs_safety(
-            constraints=constraints,
+            constraints=checked,
             guard=guard,
             buffer_size=buffer_size,
             sink_api=sink_guard.sink_api,
@@ -1153,6 +1176,29 @@ def check_guard_sufficiency(
             size_idents=size_idents,
             size_exprs=size_exprs,
         )
+        if (result.feasible is True and size_signedness is None
+                and not (guard.resolvable and guard.concrete_values)):
+            # Unresolved-lane guards carry no value types. A violation
+            # witness in the non-negative range holds under either
+            # signedness; one needing a negative value is real only for
+            # a signed declaration, which is unproven here — so it is
+            # not evidence, and the honest verdict is inconclusive.
+            witness = result.witness
+            if witness is None or any(
+                not isinstance(value, int) or value < 0
+                for value in witness.values()
+            ):
+                result = SmtSufficiencyResult(
+                    guard_text=result.guard_text,
+                    feasible=None,
+                    reasoning=(
+                        "violation witness requires a negative value whose "
+                        "reinterpretation depends on the size argument's "
+                        "declared signedness, which is underived — "
+                        "sufficiency inconclusive"
+                    ),
+                    concrete_values=guard.concrete_values,
+                )
         results.append(result)
 
     return results
@@ -2780,12 +2826,15 @@ def check_all_sufficiency(
     guards: list[SinkGuard],
     *,
     buffer_sizes: dict[int, int] | None = None,
+    size_signedness: dict[int, str] | None = None,
 ) -> list[list[SmtSufficiencyResult]]:
     """Check sufficiency for all guards.
 
     Args:
         guards: List of SinkGuard instances.
         buffer_sizes: Map of sink_line → known buffer size.
+        size_signedness: Map of sink_line → proven declared signedness
+            ("signed"/"unsigned") of the sink's size argument.
 
     Returns:
         List of results per guard (one inner list per SinkGuard).
@@ -2795,11 +2844,14 @@ def check_all_sufficiency(
 
     if buffer_sizes is None:
         buffer_sizes = {}
+    if size_signedness is None:
+        size_signedness = {}
 
     return [
         check_guard_sufficiency(
             sg,
             buffer_size=buffer_sizes.get(sg.sink_line),
+            size_signedness=size_signedness.get(sg.sink_line),
         )
         for sg in guards
     ]

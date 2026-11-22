@@ -13550,6 +13550,7 @@ def _run_mechanical_detectors(
     _check_pf = None
     _check_sm = None
     _cpg_verify = None
+    _sink_extents = None
 
     try:
         from .condition_adequacy import assess_file_guards as _assess_guards  # type: ignore[assignment]
@@ -13570,6 +13571,11 @@ def _run_mechanical_detectors(
         )
     except Exception:
         logger.debug("mechanical: condition_smt import failed", exc_info=True)
+
+    try:
+        from .sink_extents import sink_copy_facts as _sink_extents  # type: ignore[assignment]
+    except Exception:
+        logger.debug("mechanical: sink_extents import failed", exc_info=True)
 
     if joern_server is not None:
         try:
@@ -13672,7 +13678,26 @@ def _run_mechanical_detectors(
         _smt_cleared: set[int] = set()
         if _check_sufficiency is not None:
             try:
-                smt_per_guard = _check_sufficiency(guards)
+                sink_sizes: dict[int, int] = {}
+                sink_signs: dict[int, str] = {}
+                if _sink_extents is not None:
+                    try:
+                        facts = _sink_extents(
+                            src, guards, file_path=fp,
+                            integer_abi=getattr(config, "integer_abi", None),
+                        )
+                        sink_sizes = {line: f.capacity for line, f in facts.items()
+                                      if f.capacity is not None}
+                        sink_signs = {line: f.size_signedness
+                                      for line, f in facts.items()
+                                      if f.size_signedness is not None}
+                    except Exception:
+                        logger.debug(
+                            "sink extent derivation failed for %s", fp, exc_info=True,
+                        )
+                smt_per_guard = _check_sufficiency(
+                    guards, buffer_sizes=sink_sizes, size_signedness=sink_signs,
+                )
                 for idx, (sg, results) in enumerate(zip(guards, smt_per_guard)):
                     has_insufficient = False
                     for sr in results:
@@ -13778,6 +13803,8 @@ def _run_mechanical_detectors(
         str(_check_bindings is not None),
         str(_check_sufficiency is not None),
         str(_check_pf is not None), str(_check_sm is not None),
+        str(_sink_extents is not None),
+        _integer_abi_key(getattr(config, "integer_abi", None)),
         tree_sitter_marker(), z3_marker(),
     ])
     condition_cacheable = det_cache.enabled and joern_server is None
