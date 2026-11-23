@@ -23,7 +23,7 @@ def audit(event, values):
 sys.addaudithook(audit)
 path, class_name, digest = {
     "demotion": ("core/sandbox/tests/test_backend_demotion.py", "_Base", "4b9b51ad700dbac6713bc96e65e07f9922dd69947ec6a8115773b8e2de65cafd"),
-    "landlock": ("core/sandbox/tests/test_ll_private_scratch.py", "TestRestrictedLandlockOnlyScratch", "a8011967af39471dd961fefe464b8082dda5dc38179eb9e268ab3439235b4f4c"),
+    "landlock": ("core/sandbox/tests/test_ll_private_scratch.py", "TestRestrictedLandlockOnlyScratch", "a3f46cec392eea2d8ae823c6028043d5f1347ea045c2d28c1914351d4f899dfc"),
 }[args.site]
 source_path = args.root / path
 source = source_path.read_bytes()

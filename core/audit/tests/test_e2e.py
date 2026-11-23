@@ -495,15 +495,23 @@ void orphan_fn(char *user_input) {
               "--file", "vuln.c", "--function", "safe_fn",
               "--status", "clean", "--body", "looks safe"])
 
-        # /validate says it's actually exploitable
+        # Model a trusted /validate confirmation. A bare ruling or boolean
+        # has no mechanical authority and must not upgrade a clean review.
+        from core.witness.provenance import (
+            stamp_ruling_confirmation,
+            verify_ruling_confirmation,
+        )
+
         validate_report = out_dir / "validate-findings.json"
-        import json as _json
-        validate_report.write_text(_json.dumps([{
+        finding = {
             "file": "vuln.c",
             "function": "safe_fn",
             "ruling": {"status": "exploitable"},
             "is_true_positive": True,
-        }]))
+        }
+        stamp_ruling_confirmation(finding, finding["ruling"], out_dir)
+        assert verify_ruling_confirmation(finding, out_dir)
+        validate_report.write_text(json.dumps([finding]))
 
         ann_dir = out_dir / "annotations"
         r = _run([_AUDIT_CLI, "feedback",
