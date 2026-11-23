@@ -8,7 +8,7 @@ output = Path(sys.argv[3]).resolve()
 assert output.parent.is_dir() and not output.exists()
 source = root / "core/testing/tests/test_pipe_setup_cleanup.py"
 data = source.read_bytes()
-assert hashlib.sha256(data).hexdigest() == "9cd18b9d00b22d96715f4ae969ca015187b75dea23d7819e9d5a2efc97a922a3"
+assert hashlib.sha256(data).hexdigest() == "b87f926fbada8dfb065091e17766da5d6e910ce9449492c7a2f640c913fbe737"
 tree = ast.parse(data)
 owner = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "test_tier_reader_preserves_reused_writer_descriptor")
 node = next(n for n in ast.walk(owner) if isinstance(n, ast.FunctionDef) and n.name == "read")

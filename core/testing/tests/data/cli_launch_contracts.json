@@ -816,7 +816,7 @@
     "core/testing/tests/test_parser_proxy_fixture_state.py": "e0f44e0e3055304f5ea54b80628e2e7fb2177443d354d849a5621e49eceff009",
     "core/testing/tests/test_perlasm_fifo_worker_ownership.py": "402cae0e595f043a7f34315a7ae519bfd8880661373fc1c9da7da796bd7cce5c",
     "core/testing/tests/test_pipe_binding_acquisition_setup_ownership.py": "bb70f5d502c1f8cb3cf799f9ed2f2c11f7f0cbb5497df1da7bdec3e82b8138e9",
-    "core/testing/tests/test_pipe_setup_cleanup.py": "9cd18b9d00b22d96715f4ae969ca015187b75dea23d7819e9d5a2efc97a922a3",
+    "core/testing/tests/test_pipe_setup_cleanup.py": "b87f926fbada8dfb065091e17766da5d6e910ce9449492c7a2f640c913fbe737",
     "core/testing/tests/test_pipe_setup_observer_metadata_ownership.py": "2f05d8cb6b49b3c4ac1900736fbdd9294f5053299ac0918b8d0a5641dc500359",
     "core/testing/tests/test_pipe_unwind_observer_setup_ownership.py": "a3c6d2d26adf48d25eec204aa84723bbf57f407e73d09086d4a65c74903d6ddd",
     "core/testing/tests/test_poc_security_fixture_scope.py": "cd3694a40b1a704468285d149c2b9d3af513911b713a704ed6f4bbd1ee24a2f5",

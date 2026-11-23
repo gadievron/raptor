@@ -202,12 +202,24 @@ def test_ready_pipe_success_transfers_child_ownership(tmp_path, monkeypatch, blo
     from packages.joern.tests import test_netns_forwarder_boot as module
 
     children = []
-    code = r"import os,signal,sys,time; signal.signal(signal.SIGTERM,lambda *args:sys.exit(143)); signal.pthread_sigmask(signal.SIG_UNBLOCK,{signal.SIGTERM}); os.write(int(sys.argv[1]),b'supervision_tier=group\n'); time.sleep(60)"
+    # This companion checks pipe/child ownership, not Python handler dispatch.
+    # Block before publishing readiness: an early SIGTERM stays pending until
+    # sigwait consumes it. The real forwarder boot tests retain handler coverage.
+    code = (
+        "import os,signal,sys; "
+        "signal.alarm(60); "
+        "signal.pthread_sigmask(signal.SIG_BLOCK,{signal.SIGTERM}); "
+        "signal.signal(signal.SIGTERM,signal.SIG_DFL); "
+        "os.write(int(sys.argv[1]),b'supervision_tier=group\\n'); "
+        "received=signal.sigwait({signal.SIGTERM}); "
+        "assert received == signal.SIGTERM; sys.exit(143)"
+    )
 
     def spawn(directory, marker, *, ready_fd):
         # Exercise inherited masks without changing the caller's baseline.
         previous = signal.pthread_sigmask(
-            signal.SIG_BLOCK, {signal.SIGTERM} if blocked_sigterm else (),
+            signal.SIG_BLOCK if blocked_sigterm else signal.SIG_UNBLOCK,
+            {signal.SIGTERM},
         )
         try:
             process = subprocess.Popen(
