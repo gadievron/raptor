@@ -1937,6 +1937,24 @@
     "count": 13,
     "kind": "literal"
   },
+  "core/orchestration/joern_binary_scan.py::artifact": {
+    "count": 14,
+    "kind": "literal",
+    "note": "joern-binary-scan artifact field manifest (persistence schema KEYS of the run's binary-CPG record, consumed by the run summary and downstream readers; evidence_tier stays hint by design), not a learned name vocabulary.",
+    "reviewed": "2026-11-23"
+  },
+  "core/orchestration/joern_scan.py::_AUTO_ENABLE_LANGUAGES": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Evidence-earned admission roster for unforced Joern auto-enable: a detect_language() name joins only after a live end-to-end run on this toolchain (sandboxed CPG build, tiered sweep, code-flowed SARIF finding on a vulnerable fixture AND silence on its clean control). Operator-curated capability gate over external language names, not a learned API vocabulary; crossed the 9-name seed threshold at 10 entries.",
+    "reviewed": "2026-11-23"
+  },
+  "core/orchestration/joern_scan.py::_CODEQL_LANGUAGE_FOR": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Fixed detect_language-name to CodeQL-extractor-language alias map (Kotlin under java, TypeScript under javascript) used to decide whether a detected language already has covering CodeQL analysis. Both sides are external tool taxonomies (detect_language names, CodeQL pack names), not a learned API vocabulary; crossed the 9-name seed threshold at 10 entries.",
+    "reviewed": "2026-11-23"
+  },
   "core/orchestration/joern_scan.py::_TAINT_CATEGORIES": {
     "count": 10,
     "kind": "literal",
