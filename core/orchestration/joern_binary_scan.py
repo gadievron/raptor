@@ -258,7 +258,7 @@ def run_joern_binary_scan(
     except Exception:  # noqa: BLE001 — tuning read must not cost the phase
         logger.debug("joern tunables from_tuning failed", exc_info=True)
         tunables = JoernTunables()
-    timeout = int(query_timeout_s or getattr(tunables, "query_timeout_s", 300))
+    timeout = int(query_timeout_s or tunables.query_timeout_s)
 
     build = build_fn or build_ghidra_cpg
     cpg_path = build(
