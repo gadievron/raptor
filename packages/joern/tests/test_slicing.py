@@ -284,8 +284,9 @@ class TestFailurePaths:
         assert any("unreadable" in e for e in errors)
 
     def test_hostile_deeply_nested_document_contained(self, cpg, out_dir):
-        # A pathologically nested document blows the parser's recursion
-        # limit; the tri-state contract (record + None) must hold.
+        # Recursive decoders may reject this during parsing; iterative
+        # decoders can parse it and reach the top-level shape check.
+        # Both paths must preserve the tri-state contract (record + None).
         depth = 100_000
         nested = ("[" * depth) + ("]" * depth)
         errors = []
@@ -293,7 +294,27 @@ class TestFailurePaths:
             cpg, out_dir,
             subprocess_runner=_writer_runner(out_dir, doc=nested),
             errors_out=errors) is None
-        assert any("unreadable" in e for e in errors)
+        assert len(errors) == 1
+        assert (errors[0].startswith("slice document unreadable:")
+                or errors[0] == "slice document has an unexpected shape")
+
+    def test_parser_recursion_error_contained(self, cpg, out_dir, monkeypatch):
+        import core.json
+
+        calls = []
+
+        def refuse_nested(path, *, strict, max_bytes):
+            calls.append((path, strict, max_bytes))
+            raise RecursionError("nested document")
+
+        monkeypatch.setattr(core.json, "load_json", refuse_nested)
+        errors = []
+        assert slicing.run_data_flow_slice(
+            cpg, out_dir, subprocess_runner=_writer_runner(out_dir),
+            errors_out=errors) is None
+        assert calls == [(out_dir / "dataflow-slice.json", True,
+                          slicing.MAX_SLICE_BYTES)]
+        assert errors == ["slice document unreadable: nested document"]
 
     def test_symlinked_document_refused(self, cpg, out_dir, tmp_path):
         # A symlink where the slicer writes a regular file is planted —
