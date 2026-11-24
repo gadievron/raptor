@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-11-17T15:08:41Z",
+    "fetched_at": "2026-11-24T16:41:52Z",
     "license": "Derived signal: presence + public URL only. Source URLs are public observable facts; the PoC code itself is NOT fetched or stored.",
     "name": "GitHub PoC URLs (derived from Exploit-DB index)",
     "provenance": "Parses the Exploit-Database files_exploits.csv ``source_url`` / ``application_url`` columns for github.com URLs. Same network fetch as the EDB build.",
@@ -489,6 +489,12 @@
       ],
       "has_github_poc": true
     },
+    "CVE-2014-9390": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/1d617ae3894222cfbbf6951fcd68fd2d1c1b15c6/modules/exploits/multi/http/git_client_command_exec.rb"
+      ],
+      "has_github_poc": true
+    },
     "CVE-2015-0313": {
       "github_poc_urls": [
         "https://github.com/SecurityObscurity/cve-2015-0313"
@@ -787,11 +793,18 @@
     "CVE-2016-10033": {
       "github_poc_urls": [
         "https://github.com/opsxcq/exploit-CVE-2016-10033/commit/1f6642cf116ecb6b6b96b5ec966915d5100adfe3",
-        "https://github.com/rapid7/metasploit-framework/blob/1f4ff30adb09c836dc9cb5f2c2024a244cebd08d/modules/exploits/unix/webapp/wp_phpmailer_host_header.rb"
+        "https://github.com/rapid7/metasploit-framework/blob/1f4ff30adb09c836dc9cb5f2c2024a244cebd08d/modules/exploits/unix/webapp/wp_phpmailer_host_header.rb",
+        "https://github.com/rapid7/metasploit-framework/blob/3155af679a7a6fb63d38d7049b4a53e6c0303c3f/modules/exploits/multi/http/phpmailer_arg_injection.rb"
       ],
       "has_github_poc": true
     },
     "CVE-2016-1004": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/3155af679a7a6fb63d38d7049b4a53e6c0303c3f/modules/exploits/multi/http/phpmailer_arg_injection.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-10045": {
       "github_poc_urls": [
         "https://github.com/rapid7/metasploit-framework/blob/3155af679a7a6fb63d38d7049b4a53e6c0303c3f/modules/exploits/multi/http/phpmailer_arg_injection.rb"
       ],
@@ -885,6 +898,12 @@
     "CVE-2016-1910": {
       "github_poc_urls": [
         "https://github.com/vah13/SAP_exploit/tree/bd4a9decb9a7fde64b58c3f1bbee23ba74e7622d"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-20016": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/236606838a0910235aa056e2ac1282298bc3a038/modules/exploits/linux/http/mvpower_dvr_shell_exec.rb"
       ],
       "has_github_poc": true
     },
@@ -1350,9 +1369,15 @@
       ],
       "has_github_poc": true
     },
-    "CVE-2017-18344.": {
+    "CVE-2017-18344": {
       "github_poc_urls": [
         "https://github.com/xairy/kernel-exploits/blob/dd408533bfdf018b7391a408657391e993da186c/CVE-2017-18344/poc.c"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-18345": {
+      "github_poc_urls": [
+        "https://github.com/Luth1er/COM_JOOMANAGER-ARBITRARY-FILE-DOWNLOAD/tree/a98880d718fa92aab334d6f938f894de58834ee5"
       ],
       "has_github_poc": true
     },
@@ -1787,6 +1812,18 @@
       ],
       "has_github_poc": true
     },
+    "CVE-2018-25115": {
+      "github_poc_urls": [
+        "https://github.com/Cr0n1c/dlink_shell_poc/blob/b4c87a4be5ff3b4adb758d81f63694aa6f7a3acc/dlink_auth_rce"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-25118": {
+      "github_poc_urls": [
+        "https://github.com/mcw0/PoC/blob/65f7f29ef395d2b6faad91b2a3d62078539a98de/Geovision%20IP%20Camera%20Multiple%20Remote%20Command%20Execution%20-%20Multiple%20Stack%20Overflow%20-%20Double%20free%20-%20Unauthorized%20Access.txt"
+      ],
+      "has_github_poc": true
+    },
     "CVE-2018-2628": {
       "github_poc_urls": [
         "https://github.com/brianwrf/CVE-2018-2628/blob/7ddf44ecac0c679ccf0a05c21f36991f448bb2a2/exploit.py"
@@ -2078,6 +2115,12 @@
       ],
       "has_github_poc": true
     },
+    "CVE-2019-5678": {
+      "github_poc_urls": [
+        "https://github.com/RhinoSecurityLabs/CVEs/blob/0e318a283b00cf42ceb8b898e756deb62082c3aa/CVE-2019-5678/CVE%E2%80%912019%E2%80%915678.html"
+      ],
+      "has_github_poc": true
+    },
     "CVE-2019-5736": {
       "github_poc_urls": [
         "https://github.com/feexd/pocs/tree/a5aac58e0935a505c034b5f9e6cf35c1fc67471d/CVE-2019-5736"
@@ -2112,12 +2155,6 @@
     "CVE-2019-9810": {
       "github_poc_urls": [
         "https://github.com/0vercl0k/CVE-2019-11708/tree/1cdf26140f17de8a620e90f4f6ea3865e18e49ad"
-      ],
-      "has_github_poc": true
-    },
-    "CVE-2019‑5678": {
-      "github_poc_urls": [
-        "https://github.com/RhinoSecurityLabs/CVEs/blob/0e318a283b00cf42ceb8b898e756deb62082c3aa/CVE-2019-5678/CVE%E2%80%912019%E2%80%915678.html"
       ],
       "has_github_poc": true
     },
@@ -2278,6 +2315,42 @@
     "CVE-2025-27007": {
       "github_poc_urls": [
         "https://github.com/absholi7ly/CVE-2025-27007-OttoKit-exploit/"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2025-34099": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/12198a088132f047e0a86724bc5ebba92a73ac66/modules/exploits/unix/webapp/vicidial_user_authorization_unauth_cmd_exec.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2025-34101": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/77a9676efba003c589cbe6a78a7227ff91f72542/modules/exploits/windows/http/serviio_checkstreamurl_cmd_exec.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2025-34102": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/05bf16e91ec22d94695da5ed643b5cd96f7f4924/modules/exploits/linux/http/crypttech_cryptolog_login_exec.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2025-34103": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/1d86905fca981654ae447a51dcff7099872a8c1a/modules/exploits/linux/http/wipg1000_cmd_injection.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2025-34106": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metabuffer-framework"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2025-34117": {
+      "github_poc_urls": [
+        "https://github.com/nixawk/labs/tree/1ffc01bdbfd0f7a8aec1047e40714d19746553a1/NETCORE_NETDIS_UDP-53413-BACKDOOR"
       ],
       "has_github_poc": true
     },
