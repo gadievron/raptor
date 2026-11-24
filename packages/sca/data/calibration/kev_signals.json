@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-11-17T15:08:40Z",
+    "fetched_at": "2026-11-24T16:41:51Z",
     "license": "Public Domain (US Government work)",
     "name": "CISA KEV",
     "provenance": "CISA Known Exploited Vulnerabilities Catalog. Public Domain; embedded verbatim.",
@@ -7761,7 +7761,7 @@
       "kev": true,
       "product": "AG/vxAG ArrayOS",
       "ransomware_use": true,
-      "vendor": "Array Networks "
+      "vendor": "Array Networks"
     },
     "CVE-2023-2868": {
       "date_added": "2023-05-26",
@@ -8553,6 +8553,13 @@
       "product": "DIR-859 Router",
       "ransomware_use": false,
       "vendor": "D-Link"
+    },
+    "CVE-2024-10441": {
+      "date_added": "2026-11-18",
+      "kev": true,
+      "product": "DiskStation Manager (DSM)",
+      "ransomware_use": true,
+      "vendor": "Synology"
     },
     "CVE-2024-1086": {
       "date_added": "2024-05-30",
@@ -9504,21 +9511,21 @@
       "kev": true,
       "product": "SimpleHelp",
       "ransomware_use": true,
-      "vendor": "SimpleHelp "
+      "vendor": "SimpleHelp"
     },
     "CVE-2024-57727": {
       "date_added": "2025-02-13",
       "kev": true,
       "product": "SimpleHelp",
       "ransomware_use": true,
-      "vendor": "SimpleHelp "
+      "vendor": "SimpleHelp"
     },
     "CVE-2024-57728": {
       "date_added": "2026-04-24",
       "kev": true,
       "product": "SimpleHelp",
       "ransomware_use": true,
-      "vendor": "SimpleHelp "
+      "vendor": "SimpleHelp"
     },
     "CVE-2024-57968": {
       "date_added": "2025-03-10",
@@ -10458,6 +10465,13 @@
       "ransomware_use": false,
       "vendor": "Qualitia"
     },
+    "CVE-2025-42884": {
+      "date_added": "2026-11-20",
+      "kev": true,
+      "product": "NetWeaver",
+      "ransomware_use": false,
+      "vendor": "SAP"
+    },
     "CVE-2025-42999": {
       "date_added": "2025-05-15",
       "kev": true,
@@ -10925,7 +10939,7 @@
       "kev": true,
       "product": "ArrayOS AG",
       "ransomware_use": false,
-      "vendor": "Array Networks "
+      "vendor": "Array Networks"
     },
     "CVE-2025-67038": {
       "date_added": "2026-06-23",
@@ -11179,6 +11193,13 @@
       "ransomware_use": false,
       "vendor": "UnrealIRCd"
     },
+    "CVE-2026-115731": {
+      "date_added": "2026-11-17",
+      "kev": true,
+      "product": "Puppet Enterprise",
+      "ransomware_use": false,
+      "vendor": "Perforce"
+    },
     "CVE-2026-11645": {
       "date_added": "2026-06-09",
       "kev": true,
@@ -11235,6 +11256,13 @@
       "ransomware_use": false,
       "vendor": "IBM"
     },
+    "CVE-2026-123890": {
+      "date_added": "2026-11-20",
+      "kev": true,
+      "product": "VMware vCenter",
+      "ransomware_use": false,
+      "vendor": "Broadcom"
+    },
     "CVE-2026-124194": {
       "date_added": "2026-11-10",
       "kev": true,
@@ -11263,12 +11291,33 @@
       "ransomware_use": false,
       "vendor": "Ivanti"
     },
+    "CVE-2026-129448": {
+      "date_added": "2026-11-20",
+      "kev": true,
+      "product": "Roller",
+      "ransomware_use": false,
+      "vendor": "Apache"
+    },
+    "CVE-2026-133968": {
+      "date_added": "2026-11-23",
+      "kev": true,
+      "product": "MONAI Label",
+      "ransomware_use": false,
+      "vendor": "Project MONAI"
+    },
     "CVE-2026-1340": {
       "date_added": "2026-04-08",
       "kev": true,
       "product": "Endpoint Manager Mobile (EPMM)",
       "ransomware_use": false,
       "vendor": "Ivanti"
+    },
+    "CVE-2026-134624": {
+      "date_added": "2026-11-23",
+      "kev": true,
+      "product": "MailAssure",
+      "ransomware_use": false,
+      "vendor": "N-able"
     },
     "CVE-2026-15409": {
       "date_added": "2026-07-14",
@@ -11767,6 +11816,13 @@
       "ransomware_use": false,
       "vendor": "Marimo"
     },
+    "CVE-2026-40217": {
+      "date_added": "2026-11-18",
+      "kev": true,
+      "product": "LiteLLM",
+      "ransomware_use": false,
+      "vendor": "BerriAI"
+    },
     "CVE-2026-41091": {
       "date_added": "2026-05-20",
       "kev": true,
@@ -11898,7 +11954,7 @@
       "kev": true,
       "product": "SimpleHelp",
       "ransomware_use": false,
-      "vendor": "SimpleHelp "
+      "vendor": "SimpleHelp"
     },
     "CVE-2026-48710": {
       "date_added": "2026-09-02",
@@ -12215,6 +12271,13 @@
       "ransomware_use": false,
       "vendor": "Cisco"
     },
+    "CVE-2026-76466": {
+      "date_added": "2026-11-20",
+      "kev": true,
+      "product": "Expressway Series",
+      "ransomware_use": false,
+      "vendor": "Cisco"
+    },
     "CVE-2026-76504": {
       "date_added": "2026-09-30",
       "kev": true,
@@ -12389,6 +12452,20 @@
       "product": "NetScaler",
       "ransomware_use": false,
       "vendor": "Citrix"
+    },
+    "CVE-2026-90436": {
+      "date_added": "2026-11-18",
+      "kev": true,
+      "product": "Axis",
+      "ransomware_use": false,
+      "vendor": "Apache"
+    },
+    "CVE-2026-90817": {
+      "date_added": "2026-11-18",
+      "kev": true,
+      "product": "Research Electronic Data Capture (REDCap)",
+      "ransomware_use": false,
+      "vendor": "Vanderbilt University"
     },
     "CVE-2026-9082": {
       "date_added": "2026-05-22",

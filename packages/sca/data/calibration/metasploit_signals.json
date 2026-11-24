@@ -1,8 +1,8 @@
 {
   "_source": {
-    "fetched_at": "2026-11-17T15:08:41Z",
+    "fetched_at": "2026-11-24T16:41:51Z",
     "license": "Metasploit Framework is BSD-3-Clause. We embed only module-path references + booleans (a public fact about the framework's contents); no MSF code is stored.",
-    "modules_scanned": 7267,
+    "modules_scanned": 7274,
     "name": "Metasploit Framework module metadata",
     "provenance": "rapid7/metasploit-framework modules_metadata_base.json. We extract the CVE→module-path mapping; framework code itself is not redistributed.",
     "url": "https://raw.githubusercontent.com/rapid7/metasploit-framework/HEAD/db/modules_metadata_base.json"
@@ -16220,6 +16220,12 @@
         "exploit_linux/http/zimbra_cpio_cve_2022_41352"
       ]
     },
+    "CVE-2022-4140": {
+      "has_msf_module": true,
+      "module_paths": [
+        "auxiliary_gather/wp_welcart_fileread_cve_2022_4140"
+      ]
+    },
     "CVE-2022-41622": {
       "has_msf_module": true,
       "module_paths": [
@@ -17563,6 +17569,12 @@
       "has_msf_module": true,
       "module_paths": [
         "exploit_multi/http/apache_ofbiz_forgot_password_directory_traversal"
+      ]
+    },
+    "CVE-2024-32651": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_linux/http/changedetection_rce_cve_2024_32651"
       ]
     },
     "CVE-2024-3400": {
@@ -19031,6 +19043,18 @@
         "exploit_multi/http/langflow_unauth_rce_cve_2026_10134"
       ]
     },
+    "CVE-2026-102764": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_linux/http/beyondtrust_rs_mrs_file_upload"
+      ]
+    },
+    "CVE-2026-10631": {
+      "has_msf_module": true,
+      "module_paths": [
+        "auxiliary_gather/zimbra_ews_mailbox_access"
+      ]
+    },
     "CVE-2026-1281": {
       "has_msf_module": true,
       "module_paths": [
@@ -19109,6 +19133,12 @@
         "auxiliary_server/relay/esc8_kerberos",
         "auxiliary_spoof/dhcp/dhcpv6_dns_takeover",
         "auxiliary_spoof/ipv6/ipv6_ra_dns_takeover"
+      ]
+    },
+    "CVE-2026-21589": {
+      "has_msf_module": true,
+      "module_paths": [
+        "auxiliary_admin/http/atlassian_data_center_cve_2026_21589"
       ]
     },
     "CVE-2026-22200": {

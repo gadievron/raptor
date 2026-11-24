@@ -1,7 +1,7 @@
 {
   "_source": {
     "cves_in_corpus": 24678,
-    "cves_queried": 24275,
+    "cves_queried": 24278,
     "cves_with_any_evidence_ref": 712,
     "cves_with_exploit_host_url": 92,
     "exploit_host_allowlist": [
@@ -13,7 +13,7 @@
       "packetstormsecurity.org",
       "seclists.org"
     ],
-    "fetched_at": "2026-11-17T15:19:02Z",
+    "fetched_at": "2026-11-24T16:55:50Z",
     "license": "Derived signal: presence + URL only. Source URLs are public observable facts; evidence content is NOT fetched or stored.",
     "name": "OSV EVIDENCE references (corpus-scoped)",
     "provenance": "Walks every CVE referenced in project_samples/ findings, queries OSV /vulns/{id}, and extracts references where type=='EVIDENCE'. Corpus-scoped because OSV exposes no CVE-listing endpoint; the universe is bounded by what our scans actually surface.",
