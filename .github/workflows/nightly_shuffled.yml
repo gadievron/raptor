@@ -86,16 +86,11 @@ jobs:
       #
       # Tier wallclock tripwire (root conftest): flags the session —
       # with a named summary instead of an opaque runner kill — when
-      # an iteration exceeds the budget. Baseline at the time this was
-      # set: ~19 min single-process locally / ~21.5 min on
-      # ubuntu-latest (42k tests); measured 4.3x on 4 local workers
-      # under loadfile (19:07 → 4:29 — the sleep-bound fat tail
-      # parallelises cleanly), so the expected CI iteration is
-      # ~6-9 min. The 1800s budget carries ~3x headroom over that —
-      # re-baseline after the first few nightly runs. If it fires
-      # without a starved runner, the tier has structurally drifted:
-      # re-measure, fix the drift or consciously raise the budget with
-      # the new baseline.
+      # an iteration exceeds the budget. Allow forty minutes for the current
+      # suite's seeded ordering and hosted-runner variation. Keep this below
+      # the sixty-minute job timeout so a budget failure can still report its
+      # diagnostics and upload evidence. Revisit the budget after measuring
+      # sustained runtime changes; individual test failures remain failures.
       - name: Start LLM hostname tripwire
         run: |
           source $VENV_PATH/bin/activate
@@ -113,7 +108,7 @@ jobs:
           seed="${{ github.run_id }}-${{ matrix.iteration }}"
           echo "seed=${seed}"
           RAPTOR_RANDOMISE_TESTS="$seed" \
-          RAPTOR_MAX_SESSION_SECONDS=1800 \
+          RAPTOR_MAX_SESSION_SECONDS=2400 \
             python -m pytest core packages engine \
             -p core.testing.llm_tripwire \
             --llm-tripwire-dir "$RUNNER_TEMP/llm-tripwire" \

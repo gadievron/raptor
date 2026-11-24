@@ -122,7 +122,7 @@
     ".github/tests/test_sca_pr_comment.py": "0c2ebbe32732c6f77142752d3508cc7f75076aaa29a3b5fc50a1b3d1448ad7e0",
     ".github/tests/test_sca_self_bump_report.py": "12c19cc5f4ada9f709d3eec25b56d1efef0eeeadd59b5b7b2cf1aa58a5b6cd9b",
     ".github/tests/test_scan_restart_identity.py": "91073d4a33c48713d0453835179214a313c7ff547d12a941b7361f04ad878485",
-    ".github/tests/test_scheduled_ci_provisioning.py": "181ec4eea2a5c8be8bebfa84def7235bda6a020cef9e0590f5e9627e60e32938",
+    ".github/tests/test_scheduled_ci_provisioning.py": "f1279f5669a8ec3676402a32ead7c48e4a0a16760674e554c5a742dfdda7e3fe",
     ".github/tests/test_setup_venv_cache.py": "b8a2aeb88d93dda48b7c32db9cc178e23082f8759611ed14654a970e4fefd94d",
     ".github/tests/test_static_boundary_contracts.py": "c85fa61c51f66c2bd85e8d85b43f5c73eb7096b4577cc877ee8a579023d3882c",
     ".github/tests/test_symlink_hop_bound.py": "f031725cd5dfeb073b6885a1d53e079022c069571aeab4f4006f5df1fd6a99ff",

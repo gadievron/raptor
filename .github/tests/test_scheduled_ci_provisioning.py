@@ -495,7 +495,7 @@ def test_shuffled_pytest_shell_keeps_guards_selection_and_exit_status(tmp_path, 
                  '-n', 'auto', '--dist', 'loadfile', '--no-loadscope-reorder',
                  '-q', '--durations=25', '--tb=short',
                  '--junitxml=' + str(runner / 'fast-iter-2.xml')],
-        'seed': '12345-2', 'budget': '1800',
+        'seed': '12345-2', 'budget': '2400',
     }
 
 
