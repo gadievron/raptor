@@ -115,6 +115,12 @@
       "api_path": "/v1"
     },
     {
+      "name": "teamorouter",
+      "auth_scheme": "Bearer",
+      "upstream_base_url": "https://api.teamorouter.com",
+      "api_path": "/v1"
+    },
+    {
       "name": "together",
       "auth_scheme": "Bearer",
       "upstream_base_url": "https://api.together.xyz",
