@@ -1085,7 +1085,7 @@ def _cvss_v4_base_score(vector: str) -> float | None:
     tries the database-provided severity label).
     """
     try:
-        from cvss import CVSS4  # type: ignore[import-not-found]
+        from cvss import CVSS4  # type: ignore[import-not-found,import-untyped]
     except ImportError:
         return None
     try:
