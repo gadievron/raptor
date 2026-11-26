@@ -99,6 +99,15 @@ def discover_witness_stores(
             entries = []
 
         for run_dir in sorted(entries):
+            # Dot/underscore-prefixed children are project
+            # infrastructure, not run dirs (the same filter
+            # ``Project._list_run_dirs`` applies). In particular
+            # ``_imported-quarantine/`` holds archive-shipped
+            # privileged artifacts that import deliberately withheld
+            # from consumers — a witness store under it must never be
+            # surfaced as evidence.
+            if run_dir.name.startswith((".", "_")):
+                continue
             if not run_dir.is_dir():
                 continue
             for sub in _RUN_LOCAL_SUBPATHS:

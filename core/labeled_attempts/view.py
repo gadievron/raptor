@@ -632,13 +632,21 @@ def _verified_outcome_dirs(
     project_root: Path | None,
 ) -> list[Path]:
     """Candidate directories for run-local verified-outcome files: the
-    run itself plus (cross-run view) the project's sibling run dirs."""
+    run itself plus (cross-run view) the project's sibling run dirs.
+
+    Dot/underscore-prefixed children are infrastructure, not run dirs
+    (``Project._list_run_dirs`` applies the same filter): in particular
+    ``_imported-quarantine/`` holds archive-shipped privileged
+    artifacts that import deliberately withheld from consumers, so a
+    trail file under it must never feed the verified-outcomes view."""
     dirs: list[Path] = []
     if output_dir is not None:
         dirs.append(Path(output_dir))
     if project_root is not None:
         try:
             for child in sorted(Path(project_root).iterdir()):
+                if child.name.startswith((".", "_")):
+                    continue
                 if child.is_dir() and child not in dirs:
                     dirs.append(child)
         except OSError:

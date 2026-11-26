@@ -134,9 +134,13 @@ class TestImportQuarantinesPrivilegedArtifacts(unittest.TestCase):
                 root / "scan_20260101-000000", project_root=root)
             self.assertEqual(stores, [])
 
-    def test_reimport_of_reexport_is_idempotent(self):
-        """Re-exporting an imported project and importing it again
-        must not re-nest the quarantine."""
+    def test_reimport_of_reexport_drops_quarantine_members(self):
+        """Re-exporting an imported project ships its quarantine dir
+        inside the archive; importing that archive must DROP those
+        members rather than restore them verbatim — quarantine names
+        belong to the importer, and a verbatim restore would launder
+        archive-authored content past the quarantine pass (which skips
+        the existing dir for idempotency)."""
         with TemporaryDirectory() as td:
             d = Path(td)
             src = d / "src" / "myproj"
@@ -148,10 +152,38 @@ class TestImportQuarantinesPrivilegedArtifacts(unittest.TestCase):
             (d2 / "projects").mkdir()
             root2 = _import(d2, root, name="myproj")
             q2 = root2 / _QUARANTINE
-            self.assertTrue((q2 / "coverage.json").is_file())
+            self.assertFalse((q2 / "coverage.json").exists(),
+                             "archive-shipped quarantine member restored")
             self.assertFalse((q2 / _QUARANTINE).exists(),
                              "quarantine must not nest on re-import")
             self.assertFalse((root2 / "coverage.json").exists())
+
+    def test_archive_shipped_quarantine_members_dropped(self):
+        """An archive can ship ``_imported-quarantine/`` content
+        directly (the exporter never wrote it — the zip is attacker-
+        authored). Restoring it verbatim would plant stores at paths
+        readers may inspect as withheld-but-trusted artifacts; import
+        must drop such members entirely."""
+        with TemporaryDirectory() as td:
+            d = Path(td)
+            src = d / "src" / "myproj"
+            run = src / "scan_20260101-000000"
+            run.mkdir(parents=True)
+            (run / "findings.json").write_text('{"findings": []}')
+            planted = src / _QUARANTINE / "witnesses" / "manifests"
+            planted.mkdir(parents=True)
+            (planted / "w.json").write_text('{"forged": "witness"}')
+            (src / _QUARANTINE / "verified-outcomes.jsonl").write_text(
+                '{"forged": "outcome"}\n')
+            root = _import(d, src)
+            q = root / _QUARANTINE
+            self.assertFalse((q / "witnesses").exists(),
+                             "archive-shipped quarantine store restored")
+            self.assertFalse((q / "verified-outcomes.jsonl").exists(),
+                             "archive-shipped quarantine trail restored")
+            # Benign content imported fine.
+            self.assertTrue((root / "scan_20260101-000000"
+                             / "findings.json").is_file())
 
 
 class TestImportQuarantinesCoverageRecords(unittest.TestCase):

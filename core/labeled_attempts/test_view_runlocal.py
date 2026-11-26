@@ -65,6 +65,27 @@ def test_project_root_sweeps_sibling_runs(tmp_path, monkeypatch):
     assert ids == ["CVE-2024-1", "CVE-2024-2"]
 
 
+def test_underscore_and_dot_siblings_not_swept(tmp_path, monkeypatch):
+    """Dot/underscore-prefixed project children are infrastructure,
+    never run dirs — in particular ``_imported-quarantine/``, where
+    import withholds archive-shipped trust artifacts from consumers.
+    A trail file under such a child must not feed the view."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    project = tmp_path / "project"
+    _write(project / "_imported-quarantine", _record("CVE-2024-FORGED"))
+    _write(project / ".cache", _record("CVE-2024-HIDDEN"))
+    # Two-direction guard: a real sibling run still contributes.
+    _write(project / "cve-diff-run-1", _record("CVE-2024-REAL"))
+
+    outcomes = collect_outcomes(
+        project / "cve-diff-run-1", project_root=project,
+    )
+    ids = sorted(
+        o.finding_id for o in outcomes if o.oracle is Oracle.CONSENSUS
+    )
+    assert ids == ["CVE-2024-REAL"]
+
+
 def test_malformed_lines_are_skipped_not_fatal(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
     run = tmp_path / "run"

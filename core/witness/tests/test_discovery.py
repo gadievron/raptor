@@ -145,6 +145,23 @@ def test_dedup_by_resolved_path(tmp_path):
     assert len(stores) == 1
 
 
+def test_underscore_and_dot_siblings_are_not_run_dirs(tmp_path):
+    """Dot/underscore-prefixed project children are infrastructure,
+    never run dirs — in particular ``_imported-quarantine/``, where
+    import withholds archive-shipped stores from consumers. A store
+    under such a child must not be surfaced as evidence."""
+    project = tmp_path / "project"
+    project.mkdir()
+    _put_one(project / "_imported-quarantine" / "witnesses", b"planted")
+    _put_one(project / ".cache" / "witnesses", b"hidden")
+    # Two-direction guard: a real sibling run is still discovered.
+    _put_one(project / "fuzz_001" / "witnesses", b"real")
+
+    stores = discover_witness_stores(None, project_root=project)
+    assert len(stores) == 1
+    assert "fuzz_001" in str(stores[0])
+
+
 def test_project_root_unreadable_returns_empty_silently(tmp_path):
     """Cannot list project root → empty list, no exception.
     The end-of-run summary should never crash because of a

@@ -1059,6 +1059,21 @@ def _import_project(zip_path: Path, projects_dir: Path, force: bool,
                         continue
                 else:
                     arcrel = info.filename
+                # Never restore archive-shipped quarantine content.
+                # The quarantine dir name belongs to THIS importer's
+                # `_quarantine_imported_privileged_artifacts` pass —
+                # an archive member already under it would be restored
+                # verbatim (the quarantine walk skips the existing
+                # quarantine dir for idempotency), laundering
+                # attacker-authored privileged artifacts into a path
+                # readers may treat as local. Drop such members.
+                if (arcrel.split("/", 1)[0]
+                        == _QUARANTINE_DIR_NAME):
+                    logger.warning(
+                        "import: dropping archive-shipped quarantine "
+                        "member %r", info.filename,
+                    )
+                    continue
                 # Refuse if the per-entry declared size alone
                 # would exceed remaining budget — saves opening
                 # a stream we'd immediately cancel.
