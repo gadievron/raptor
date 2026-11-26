@@ -329,3 +329,17 @@ def test_fd_exclusion_still_visits_nested_reads(tmp_path):
         "os.open(Path('findings.json').read_text(), flags)\n"
     )})
     assert [(f["artifact"], f["primitive"]) for f in raw] == [("findings.json", "read_text")]
+
+
+def test_raw_read_as_direct_hardened_argument_fires(tmp_path):
+    # The read happened BEFORE the loader — passing its result into a
+    # hardened call does not harden it. The direct-argument position
+    # used to be the one AST level the census skipped.
+    raw, _hardened = run_census(_plant(tmp_path, {"core/reader.py": (
+        "from core.json import load_jsonl\n"
+        "def load(p):\n"
+        "    return load_jsonl(Path('findings.json').read_text())\n"
+    )}))
+    assert [(f["artifact"], f["primitive"]) for f in raw] == [
+        ("findings.json", "read_text"),
+    ]

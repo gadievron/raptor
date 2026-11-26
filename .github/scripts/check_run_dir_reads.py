@@ -293,11 +293,13 @@ class _Visitor(ast.NodeVisitor):
             if target in HARDENED_CALLS:
                 for art in sorted(self._artifacts_for_call(node)):
                     self.hardened.append((node.lineno, art, target))
-                # Do not descend into a hardened call's arguments
-                # looking for raw reads — the loader owns the read.
+                # The hardened call itself is recorded once; its
+                # arguments are still scanned in full — a raw read
+                # PASSED INTO a loader happened before the loader and
+                # is still a raw read.
                 for arg in list(node.args) + [
                         kw.value for kw in node.keywords]:
-                    self.generic_visit(arg)
+                    self.visit(arg)
                 return
             prim: str | None = None
             if target == "open":
