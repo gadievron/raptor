@@ -171,6 +171,45 @@ class TestServerDied:
         with pytest.raises(server_mod.GhidraServerDied, match="restart"):
             srv._request({"op": "ping"})
 
+    @pytest.mark.parametrize(
+        "line", [b"[1, 2]\n", b'"pong"\n', b"null\n", b"42\n"],
+    )
+    def test_non_object_response_is_server_error(
+        self, tmp_path, monkeypatch, line,
+    ):
+        # A mis-framed worker reply holding valid non-object JSON must
+        # surface as GhidraServerError like malformed JSON does — never
+        # AttributeError from resp.get.
+        import packages.ghidra.server as server_mod
+        srv = self._server(tmp_path, monkeypatch)
+        self._wire(srv, line)
+        with pytest.raises(
+            server_mod.GhidraServerError, match="not a JSON object",
+        ):
+            srv._request({"op": "ping"})
+
+    def test_non_object_boot_response_is_server_error(
+        self, tmp_path, monkeypatch,
+    ):
+        # Same guard on the boot handshake read.
+        import socket
+        import time as _time
+
+        import packages.ghidra.server as server_mod
+        srv = self._server(tmp_path, monkeypatch)
+        parent, child = socket.socketpair()
+        try:
+            child.sendall(b"[]\n")
+            with pytest.raises(
+                server_mod.GhidraServerError, match="not a JSON object",
+            ):
+                srv._boot_wait_socketpair(
+                    parent, _time.monotonic() + 5.0,
+                )
+        finally:
+            parent.close()
+            child.close()
+
     def test_plain_error_stays_server_error(self, tmp_path, monkeypatch):
         import json as _json
 

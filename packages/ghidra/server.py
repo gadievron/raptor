@@ -506,6 +506,12 @@ class GhidraServer:
                 raise GhidraServerError(
                     f"malformed worker boot response: {e}"
                 ) from e
+            if not isinstance(resp, dict):
+                # Valid-but-non-object JSON is as mis-framed as
+                # malformed JSON — same error class, not AttributeError.
+                raise GhidraServerError(
+                    "malformed worker boot response: not a JSON object"
+                )
             if rest or resp.get("id") != ping_id or not resp.get("pong"):
                 raise GhidraServerError(
                     "unexpected worker boot response — "
@@ -724,6 +730,12 @@ class GhidraServer:
             raise GhidraServerError(
                 f"malformed worker response: {e}"
             ) from e
+        if not isinstance(resp, dict):
+            # Valid-but-non-object JSON is as mis-framed as malformed
+            # JSON — same error class, not AttributeError.
+            raise GhidraServerError(
+                "malformed worker response: not a JSON object"
+            )
         if resp.get("id") != payload["id"]:
             raise GhidraServerError(
                 "worker response id mismatch — desynchronized stream"
