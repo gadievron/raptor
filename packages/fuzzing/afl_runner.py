@@ -78,6 +78,23 @@ _MAX_SHOWMAP_MAP_BYTES = 16 * 1024 * 1024
 _MAX_STATS_BYTES = 1024 * 1024
 _SHOWMAP_CONSOLE_TAIL_BYTES = 64 * 1024
 
+# Aggregate campaign-scratch ceiling (MiB). The sandbox's RLIMIT_FSIZE
+# bounds each FILE the fuzzed target writes, not the TREE: AFL queue
+# entries, crash/corpus files and tool temp files are many separate
+# files, so a hostile or pathological target can fill the backing
+# filesystem while every individual file stays under the per-file cap.
+# The campaign monitor loop polls the output tree and stops the
+# campaign (crashes found so far are preserved) once it exceeds this
+# bound. RAPTOR_FUZZ_SCRATCH_MAX_MB overrides per run; 0 disables the
+# check (for dedicated scratch filesystems whose mount provides the
+# bound). Both directions on the value: LOWER cuts runaway growth
+# sooner but can stop legitimately corpus-heavy campaigns early;
+# HIGHER tolerates bigger corpora at the cost of later detection —
+# 50 GiB is several times any corpus a bounded-duration campaign
+# legitimately accumulates, while still well under typical host
+# filesystem headroom.
+_DEFAULT_SCRATCH_MAX_MB = 50 * 1024
+
 
 # Re-exported for callers/tests; implementation shared with the
 # libFuzzer runner and the capability probes.
@@ -1123,6 +1140,8 @@ class AFLRunner:
         # got re-emitted in its place.
         seen_crash_paths: set[Path] = set()
         last_status_time = 0
+        scratch_cap_mb = self._scratch_cap_mb()
+        last_scratch_check = 0.0
 
         try:
             while time.time() - start_time < duration:
@@ -1145,6 +1164,16 @@ class AFLRunner:
                 if max_crashes is not None and num_crashes >= max_crashes:
                     logger.info("✓ Reached %s crashes, stopping early", max_crashes)
                     break
+
+                # Aggregate-scratch ceiling: RLIMIT_FSIZE is per FILE,
+                # so many-file growth (AFL queue, hostile-target-driven
+                # corpus, tool temp files) is only bounded here. Checked
+                # on the one-minute status cadence — a full tree walk
+                # every 10s would be heavy on large corpora.
+                if current_time - last_scratch_check >= 60:
+                    last_scratch_check = current_time
+                    if self._scratch_cap_breached(scratch_cap_mb):
+                        break
 
                 # Periodic status update (every 60 seconds)
                 if current_time - last_status_time >= 60:
@@ -1329,6 +1358,76 @@ class AFLRunner:
                     logger.info("  %s: %s", key, value)
 
         return total_crashes, crashes_dir
+
+    @staticmethod
+    def _scratch_cap_mb() -> int:
+        """Resolve the aggregate scratch ceiling (MiB; 0 = disabled)."""
+        raw = os.environ.get("RAPTOR_FUZZ_SCRATCH_MAX_MB", "").strip()
+        if not raw:
+            return _DEFAULT_SCRATCH_MAX_MB
+        try:
+            value = int(raw)
+        except ValueError:
+            logger.warning(
+                "RAPTOR_FUZZ_SCRATCH_MAX_MB: ignoring %r (not an "
+                "integer); using the default %d MiB",
+                raw, _DEFAULT_SCRATCH_MAX_MB,
+            )
+            return _DEFAULT_SCRATCH_MAX_MB
+        if value < 0:
+            logger.warning(
+                "RAPTOR_FUZZ_SCRATCH_MAX_MB: ignoring %r (negative); "
+                "using the default %d MiB",
+                raw, _DEFAULT_SCRATCH_MAX_MB,
+            )
+            return _DEFAULT_SCRATCH_MAX_MB
+        return value
+
+    @staticmethod
+    def _tree_size_bytes(root: Path) -> int:
+        """Aggregate apparent size of the tree under ``root``.
+
+        lstat-based: symlinks count as themselves and are never
+        followed (the tree is writable by the attacker-built target,
+        which could plant a symlink to a huge file outside it);
+        vanishing or unreadable entries are skipped (AFL rotates queue
+        files while the walk runs).
+        """
+        total = 0
+        for dirpath, _dirnames, filenames in os.walk(
+            root, onerror=lambda _e: None, followlinks=False,
+        ):
+            for name in filenames:
+                try:
+                    total += os.lstat(os.path.join(dirpath, name)).st_size
+                except OSError:
+                    continue
+        return total
+
+    def _scratch_cap_breached(self, cap_mb: int) -> bool:
+        """True when the campaign output tree exceeds ``cap_mb`` MiB.
+
+        Logs the breach loudly (path, usage, cap, the override knob)
+        so the stop is attributable; the caller ends the campaign and
+        keeps the crashes found so far.
+        """
+        if cap_mb <= 0:
+            return False
+        used_mb = self._tree_size_bytes(self.output_dir) // (1024 * 1024)
+        if used_mb < cap_mb:
+            return False
+        logger.error(
+            "Campaign scratch %s has grown to %d MiB, over the %d MiB "
+            "aggregate ceiling (RAPTOR_FUZZ_SCRATCH_MAX_MB; per-file "
+            "RLIMIT_FSIZE does not bound many-file growth) — stopping "
+            "the campaign; crashes found so far are preserved",
+            self.output_dir, used_mb, cap_mb,
+        )
+        if self.telemetry:
+            self.telemetry.record_error(
+                f"aggregate scratch cap: {used_mb} MiB >= {cap_mb} MiB"
+            )
+        return True
 
     def _collect_all_crash_files(self) -> list[Path]:
         """Collect crash files from main and all secondary instance directories.

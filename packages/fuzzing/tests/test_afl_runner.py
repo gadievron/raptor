@@ -1611,3 +1611,65 @@ class TestMemoryCap:
                 binary_in_rootfs="/src/app",
                 mem_limit_mb=-1,
             )
+
+
+class TestAggregateScratchCeiling:
+    """RLIMIT_FSIZE is per FILE: the aggregate ceiling is the only
+    bound on many-file growth of the campaign output tree."""
+
+    def _runner(self, output_dir: Path) -> AFLRunner:
+        runner = AFLRunner.__new__(AFLRunner)
+        runner.output_dir = output_dir
+        runner.telemetry = None
+        return runner
+
+    def test_tree_size_sums_many_files(self, tmp_path):
+        (tmp_path / "queue").mkdir()
+        for i in range(4):
+            (tmp_path / "queue" / f"id{i}").write_bytes(b"x" * 1024)
+        (tmp_path / "fuzzer_stats").write_bytes(b"y" * 512)
+        assert AFLRunner._tree_size_bytes(tmp_path) == 4 * 1024 + 512
+
+    def test_tree_size_never_follows_symlinks(self, tmp_path):
+        """The tree is writable by the attacker-built target: a planted
+        symlink to a huge file outside it must not count (or recurse)."""
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        big = outside / "big"
+        big.write_bytes(b"z" * (256 * 1024))
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        (scratch / "small").write_bytes(b"a" * 10)
+        (scratch / "link").symlink_to(big)
+        (scratch / "dirlink").symlink_to(outside)
+        measured = AFLRunner._tree_size_bytes(scratch)
+        # The symlink counts as itself (its target-path bytes), never
+        # as the 256 KiB target.
+        assert measured < 10 + 4096
+
+    def test_breach_verdict_at_and_below_the_cap(self, tmp_path):
+        runner = self._runner(tmp_path)
+        (tmp_path / "queue").mkdir()
+        for i in range(2):
+            (tmp_path / "queue" / f"id{i}").write_bytes(b"x" * (1024 * 1024))
+        assert runner._scratch_cap_breached(1) is True
+        assert runner._scratch_cap_breached(1024) is False
+
+    def test_zero_cap_disables_the_check(self, tmp_path):
+        runner = self._runner(tmp_path)
+        (tmp_path / "f").write_bytes(b"x" * (2 * 1024 * 1024))
+        assert runner._scratch_cap_breached(0) is False
+
+    def test_cap_resolution_env_override(self, monkeypatch):
+        from packages.fuzzing import afl_runner as afl_module
+        monkeypatch.setenv("RAPTOR_FUZZ_SCRATCH_MAX_MB", "123")
+        assert AFLRunner._scratch_cap_mb() == 123
+        monkeypatch.setenv("RAPTOR_FUZZ_SCRATCH_MAX_MB", "0")
+        assert AFLRunner._scratch_cap_mb() == 0
+        for bad in ("ten", "-5", ""):
+            monkeypatch.setenv("RAPTOR_FUZZ_SCRATCH_MAX_MB", bad)
+            assert (AFLRunner._scratch_cap_mb()
+                    == afl_module._DEFAULT_SCRATCH_MAX_MB)
+        monkeypatch.delenv("RAPTOR_FUZZ_SCRATCH_MAX_MB")
+        assert (AFLRunner._scratch_cap_mb()
+                == afl_module._DEFAULT_SCRATCH_MAX_MB)

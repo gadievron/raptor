@@ -320,7 +320,11 @@ Threat model — what the sandbox DOES protect against:
   memory through `/proc/sys/kernel/core_pattern` handlers.
 - Per-process CPU time and single-file size (rlimits).
   NOTE: these are per-process limits, not aggregate — a process that
-  writes many separate files within RLIMIT_FSIZE each is not bounded.
+  writes many separate files within RLIMIT_FSIZE each is not bounded
+  at this layer. Long-running fuzz campaigns bound the aggregate at
+  the supervisor layer instead: the AFL monitor loop polls the output
+  tree against a configurable ceiling (RAPTOR_FUZZ_SCRATCH_MAX_MB,
+  packages/fuzzing/afl_runner.py).
   RLIMIT_AS (virtual memory) is disabled by default because ASAN-
   instrumented binaries reserve ~56 TiB of shadow-memory VA on
   x86_64, and any finite limit breaks them. Memory containment
