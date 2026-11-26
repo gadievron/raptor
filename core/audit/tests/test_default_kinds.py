@@ -88,9 +88,9 @@ class TestDefaultKindGaps:
     def test_macros_globals_top_level_are_gaps_by_default(self):
         names = {g["name"] for g in compute_gaps(_checklist(), [])}
         assert {"handler", "UNSAFE_COPY", "g_table", "m.c::top_level"} <= names
-        # Named type layouts are reviewable; anonymous residue stays out.
+        # Non-Rust class shells and anonymous residue stay out by default.
         assert "interstitial:61-70" not in names
-        assert "Widget" in names
+        assert "Widget" not in names
 
     def test_opt_out_via_exclusion(self):
         names = {g["name"]
@@ -196,13 +196,6 @@ class TestWorkflowStepDispatchExclusion:
         })
         gaps = compute_gaps(checklist, [])
         assert "job:handler" in {g["name"] for g in gaps}
-
-
-def test_type_review_is_default_and_still_explicitly_excludable():
-    assert "class" in _resolve_reviewable_kinds(None)
-    assert "class" not in _resolve_reviewable_kinds({"none"})
-    assert "class" not in _resolve_reviewable_kinds({"-class"})
-    assert "Widget" not in {g["name"] for g in compute_gaps(_checklist(), [], include_kinds={"-class"})}
 
 
 def test_named_coverage_projection_intake_ignores_malformed_item_lists():

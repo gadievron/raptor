@@ -5467,12 +5467,14 @@ def _reviewable_item_count(
         _resolve_reviewable_kinds,
         _script_interstitials_enabled,
     )
-    kinds = _resolve_reviewable_kinds(include_kinds)
     interstitials = _script_interstitials_enabled(include_kinds)
     count = 0
     for file_entry in checklist.get("files") or []:
         if not isinstance(file_entry, dict):
             continue
+        kinds = _resolve_reviewable_kinds(
+            include_kinds, language=file_entry.get("language", ""),
+            file_path=file_entry.get("path", ""))
         items = file_entry.get("items", file_entry.get("functions")) or []
         for item in items:
             if not isinstance(item, dict):

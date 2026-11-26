@@ -1701,6 +1701,12 @@
     "count": 16,
     "kind": "literal"
   },
+  "core/inventory/extractors.py::global_types": {
+    "count": 16,
+    "kind": "literal",
+    "note": "Closed supported-language routing table for tree-sitter global declaration node types. Keys are inventory language IDs and values are parser grammar node tags, not target API/function-name vocabulary. Covers the same parser families as _FUNC_TYPES/_CLASS_TYPES; issue #1077 regressions exercise declaration extraction and scope boundaries.",
+    "reviewed": "2026-11-26"
+  },
   "core/inventory/extractors.py::is_class_decl": {
     "count": 10,
     "kind": "literal"

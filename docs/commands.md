@@ -555,7 +555,7 @@ code as vulnerable -- tool output is the verdict.
 | `--max-workers <N>` | Concurrent review workers (1-32; values above the cap are clamped). Overrides the transport-derived default — the operator owns the rate-limit consequences (the adaptive throttle still backs off on 429s). Also accepted by `resume` for a single segment |
 | `--subsystem-depth <N>` | Directory grouping depth for subsystem-ordered review (default: 0) |
 | `--max-propagation-depth <N>` | Override adaptive constraint propagation depth (default: auto-calibrated) |
-| `--include-kinds <list>` | Item kinds beyond functions/methods (default: `top_level`, `macro`, `global`, `class` — already on).  A positive list overrides the defaults, `-kind` opts one out, `none` restricts to functions/methods |
+| `--include-kinds <list>` | Item kinds beyond functions/methods (default: `top_level`, `macro`, `global`, plus `class` for Rust — already on).  A positive list overrides the defaults, `-kind` opts one out, `none` restricts to functions/methods |
 | `--batch-sloc-threshold <N>` | Batch small functions per file into combined reviews (default 15; 0 disables) |
 | `--no-verdict-reuse` | Disable cross-run verdict reuse for unchanged functions |
 | `--schedule {cost,priority}` | Parallel review ordering |

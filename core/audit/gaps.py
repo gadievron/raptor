@@ -28,6 +28,7 @@ from core.inventory.languages import SCRIPT_PER_FILE_LANGUAGES
 from core.inventory.review_policy import (
     DEFAULT_EXTRA_KINDS as _DEFAULT_EXTRA_KINDS,
     FUNCTION_KINDS as _REVIEWABLE_KINDS,
+    default_extra_kinds,
 )
 from core.inventory.script_handler import (
     interstitial_is_handler,
@@ -59,7 +60,8 @@ _RAW_END_UNKNOWN: Any = object()
 # Included by DEFAULT: import-time module code (module-level yaml.load,
 # eval on env, subprocess at import), C/C++ macros (an unsafe macro
 # replicates its bug at every expansion site), globals, and named types.
-# Layouts/aliases can encode security invariants without executable bodies. The
+# Rust layouts/aliases can encode security invariants without executable bodies.
+# Other languages retain explicit class opt-in. The
 # extractor builds these as reviewable units; dropping them silently
 # was a pure recall hole. Opt out via --include-kinds exclusion syntax
 # ("-macro"), or override the extras entirely with a positive list.
@@ -101,12 +103,14 @@ def _script_interstitials_enabled(include_kinds: set | None) -> bool:
 # ``_site_script_handler``).
 
 
-def _resolve_reviewable_kinds(include_kinds: set | None) -> frozenset:
+def _resolve_reviewable_kinds(
+    include_kinds: set | None, *, language: str = "", file_path: str = "",
+) -> frozenset:
     """Resolve the reviewable-kind set from the operator's
     ``--include-kinds`` value.
 
     * ``None`` / empty → functions/methods plus the default extras
-      (``top_level``, ``macro``, ``global``, ``class``).
+      (``top_level``, ``macro``, ``global``; ``class`` additionally for Rust).
     * Positive entries (``{"top_level"}``) OVERRIDE the default
       extras — only the named kinds are added.
     * ``-kind`` entries opt out of a default extra
@@ -117,14 +121,15 @@ def _resolve_reviewable_kinds(include_kinds: set | None) -> frozenset:
     ``constant_macro`` are excluded by default (in neither base set);
     a positive ``--include-kinds`` entry naming them opts back in.
     """
+    extras = default_extra_kinds(language, file_path)
     if not include_kinds:
-        return _REVIEWABLE_KINDS | _DEFAULT_EXTRA_KINDS
+        return _REVIEWABLE_KINDS | extras
     if include_kinds == {"none"}:
         return _REVIEWABLE_KINDS
     included = {k for k in include_kinds
                 if k and not k.startswith("-") and k != "none"}
     excluded = {k.lstrip("-") for k in include_kinds if k.startswith("-")}
-    base = _REVIEWABLE_KINDS | (included or _DEFAULT_EXTRA_KINDS)
+    base = _REVIEWABLE_KINDS | (included or extras)
     return frozenset(base - excluded)
 
 # Bounds for detector source hydration. These exist so a large or
@@ -659,7 +664,6 @@ def compute_gaps(
         )
 
     gaps: list[dict[str, Any]] = []
-    reviewable_kinds = _resolve_reviewable_kinds(include_kinds)
     script_interstitials = _script_interstitials_enabled(include_kinds)
     consumed_covered: dict[str, int] = {}
     # One warning per run when the checklist predates the
@@ -725,6 +729,8 @@ def compute_gaps(
 
         file_coverage = file_tool_coverage.get(file_path, set())
         file_language = (file_info.get("language") or "").lower()
+        reviewable_kinds = _resolve_reviewable_kinds(
+            include_kinds, language=file_language, file_path=file_path)
 
         for item in items:
             name = item.get("name", "")
@@ -2015,7 +2021,8 @@ def gap_for_site(
             # stays refused.
             and (
                 it.get("kind", "") in (
-                    _REVIEWABLE_KINDS | _DEFAULT_EXTRA_KINDS)
+                    _resolve_reviewable_kinds(None, language=file_info.get("language", ""),
+                                               file_path=file_path))
                 or (
                     it.get("kind", "") == "interstitial"
                     and _site_script_handler(it, file_info, target_path)

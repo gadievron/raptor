@@ -21,7 +21,7 @@ from typing import Any, TYPE_CHECKING
 from core.json import loads
 
 from core.inventory.script_handler import script_handler_stamp
-from core.inventory.review_policy import DEFAULT_REVIEWABLE_KINDS
+from core.inventory.review_policy import DEFAULT_REVIEWABLE_KINDS, FUNCTION_KINDS, DEFAULT_EXTRA_KINDS, default_extra_kinds
 
 from .registry import DEPTH_SCANNED, category_of, depth_of
 from .schema import iter_file_entries
@@ -44,10 +44,10 @@ _MAX_PROGRESS_BYTES = 64 * 1024 * 1024
 _REVIEWABLE_KINDS = DEFAULT_REVIEWABLE_KINDS
 
 
-def _is_reviewable(kind: str, item: dict[str, Any]) -> bool:
+def _is_reviewable(kind: str, item: dict[str, Any], *, language: str = "", file_path: str = "") -> bool:
     """Unit-by-unit LLM-reviewable: the fixed kinds, plus stamped
     script-handler interstitials (see _REVIEWABLE_KINDS)."""
-    if kind in _REVIEWABLE_KINDS:
+    if kind in FUNCTION_KINDS | default_extra_kinds(language, file_path):
         return True
     return kind == "interstitial" and script_handler_stamp(item) is True
 
@@ -81,9 +81,15 @@ def _bind_named_reviews(store, checklist, run_dirs, project_dir):
         return
     records = [record for directory in run_dirs for record in load_records(directory)]
     gaps = compute_gaps(checklist, records, out_dir=run_dirs[0] if run_dirs else None,
-                        project_dir=project_dir, _journal_dirs=run_dirs if run_dirs else None)
+                        project_dir=project_dir, _journal_dirs=run_dirs if run_dirs else None,
+                        include_kinds=set(DEFAULT_EXTRA_KINDS | {"class"}))
     unresolved = {(gap["file"], gap["name"], gap["line_start"], gap.get("line_end")) for gap in gaps}
     store._named_reviewed_items = named - unresolved
+
+
+def _file_languages(checklist):
+    return {file["path"]: file.get("language", "") for file in iter_file_entries(checklist)
+            if isinstance(file.get("path"), str)}
 
 
 def _str_members(value: Any) -> list[str]:
@@ -412,6 +418,7 @@ def file_breakdown(store: CoverageStore, checklist: dict[str, Any]) -> list[dict
     reviewable units, examined items, findings, and file coverage %. Sorted
     worst-first by LLM-review ratio so files needing attention surface first."""
     files: dict[str, dict[str, Any]] = {}
+    languages = _file_languages(checklist)
     for f, name, lo, hi, kind, item in iter_inventory_items(checklist):
         high = hi if hi is not None else lo
         row = files.setdefault(f, {
@@ -420,7 +427,7 @@ def file_breakdown(store: CoverageStore, checklist: dict[str, Any]) -> list[dict
         cov = store.tool_coverage_of_range(f, lo, high)
         if store.function_verdict(f, lo, high) != "unexamined":
             row["examined"] += 1
-        if _is_reviewable(kind, item):
+        if _is_reviewable(kind, item, language=languages.get(f, ""), file_path=f):
             row["reviewable"] += 1
             # reviewed = deep llm review (depth >= analysed), not a whole-file read.
             if _item_reviewed(store, f, name, lo, hi, kind, cov):
@@ -588,6 +595,7 @@ def store_view(store: CoverageStore, checklist: dict[str, Any]) -> dict[str, Any
     review_gap: list[dict[str, Any]] = []
     workflow_files = _workflow_step_files(checklist)
     workflow_excluded = 0
+    languages = _file_languages(checklist)
 
     for file, name, lo, hi, kind, item in iter_inventory_items(checklist):
         total += 1
@@ -615,7 +623,7 @@ def store_view(store: CoverageStore, checklist: dict[str, Any]) -> dict[str, Any
         for c in _CATEGORIES:
             if c in cats:
                 by_category[c] += 1
-        reviewable = _is_reviewable(kind, item)
+        reviewable = _is_reviewable(kind, item, language=languages.get(file, ""), file_path=file)
         # Use the same default kinds as audit scheduling so named constants
         # and layouts cannot disappear from the displayed review debt.
         if reviewable:
