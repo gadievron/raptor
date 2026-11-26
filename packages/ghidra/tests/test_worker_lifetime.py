@@ -8,6 +8,7 @@ import threading
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
 from core.testing.standalone_cli import run_standalone_cli
 from packages.ghidra import server_worker
 
@@ -194,6 +195,44 @@ def test_handler_close_waits_for_owned_session_cleanup(monkeypatch):
     assert not closer.is_alive()
     assert not handler._thread.is_alive()
     assert finished.is_set()
+
+
+def test_handler_close_bounds_hung_session_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Cleanup wedged in native JVM code cannot be interrupted from
+    # Python: past the grace, close() must take the hung-op exit
+    # instead of parking the worker forever behind a thread that will
+    # never join (its socket is already gone — nothing else ends it).
+    session = server_worker._Session()
+    release = threading.Event()
+    exits: list[int] = []
+
+    def hang() -> None:
+        release.wait()
+
+    monkeypatch.setattr(session, 'close', hang)
+    monkeypatch.setattr(server_worker, '_CLOSE_GRACE_S', 0.2, raising=False)
+    patch_module_attribute(monkeypatch, server_worker, 'os', '_exit', exits.append)
+    handler = server_worker._HandlerThread(session)
+    finished = threading.Event()
+
+    def stop() -> None:
+        handler.close()
+        finished.set()
+
+    closer = threading.Thread(target=stop, daemon=True)
+    try:
+        closer.start()
+        assert finished.wait(5), (
+            'close() parked forever behind hung shutdown cleanup'
+        )
+        assert exits == [server_worker._WATCHDOG_EXIT_CODE]
+    finally:
+        release.set()
+        closer.join(timeout=5)
+        handler._thread.join(timeout=5)
+    assert not handler._thread.is_alive()
 
 
 def test_main_preserves_a_stream_failure_over_session_cleanup():

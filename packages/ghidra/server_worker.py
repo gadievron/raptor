@@ -57,6 +57,14 @@ _OP_DEADLINE_S = {
 }
 _WATCHDOG_EXIT_CODE = 70
 
+#: Hard cap on shutdown cleanup (session close + JNI detach) running on
+#: the handler thread. Cleanup wedged inside native JVM code cannot be
+#: interrupted from Python, and at close time the socket is already
+#: gone — nothing else would ever end the process — so the cap gets the
+#: cheap-op budget: ample for a cooperative close, bounded for a hung
+#: one.
+_CLOSE_GRACE_S = 45
+
 
 def _log(msg: str) -> None:
     print(f"[ghidra-worker] {msg}", file=sys.stderr, flush=True)
@@ -369,9 +377,21 @@ class _HandlerThread:
         if not self._closing:
             self._closing = True
             self._requests.put(None)
-        # The parent sandbox's existing worker lifetime bounds native cleanup.
-        # Do not detach a still-running Java owner or remove its working copy.
-        self._thread.join()
+        # Wait for the handler to close Java objects on their owning
+        # thread — never detach a still-running Java owner or remove
+        # its working copy from here. But the wait must be bounded:
+        # cleanup wedged in native JVM code keeps the handler thread
+        # alive forever, and an unbounded join would park this worker
+        # with it long after its socket is gone. Past the grace the
+        # answer is the same as for a hung op — exit hard; the parent
+        # detects the death and may boot a fresh worker.
+        self._thread.join(timeout=_CLOSE_GRACE_S)
+        if self._thread.is_alive():
+            _log(
+                f"watchdog: shutdown cleanup exceeded {_CLOSE_GRACE_S}s "
+                "hard deadline — exiting"
+            )
+            os._exit(_WATCHDOG_EXIT_CODE)
         if self._close_error is not None and not preserve_error:
             raise self._close_error
 
