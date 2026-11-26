@@ -721,6 +721,11 @@ def _parse_findings(
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
+        parsed = None
+    if not isinstance(parsed, dict):
+        # Valid-but-non-object JSON (top-level list/str/number/null) is
+        # the same failure as malformed JSON: this response is lost, the
+        # phase continues.
         logger.warning(
             "discovery: failed to parse LLM response for %s → %s",
             bundle.caller_fid, bundle.callee_fid,
@@ -1131,6 +1136,9 @@ def _parse_sm_findings(
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
+        parsed = None
+    if not isinstance(parsed, dict):
+        # Non-object top-level JSON fails this response, not the phase.
         logger.warning(
             "discovery: failed to parse SM response for field %s",
             bundle.field_name,
@@ -1504,6 +1512,9 @@ def _parse_discovery_findings(
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
+        parsed = None
+    if not isinstance(parsed, dict):
+        # Non-object top-level JSON fails this response, not the phase.
         logger.warning(
             "discovery: failed to parse response for %s",
             target.fid,
@@ -1634,6 +1645,9 @@ def _parse_assumptions(raw: str) -> list[dict[str, Any]]:
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
+        parsed = None
+    if not isinstance(parsed, dict):
+        # Non-object top-level JSON fails this response, not the phase.
         return []
 
     assumptions = parsed.get("assumptions", [])

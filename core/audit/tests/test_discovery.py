@@ -412,6 +412,20 @@ class TestParseFindings:
         result = _parse_findings("not json", self._bundle())
         assert result.weaknesses == []
 
+    @pytest.mark.parametrize("raw", [
+        '[{"findings": []}]',
+        '"no findings"',
+        "null",
+        "42",
+    ])
+    def test_non_object_json_is_response_failure(self, raw: str):
+        # Valid JSON with a non-object top level must be treated as this
+        # response's parse failure, never an exception that escapes to
+        # the phase-wide handler and discards accumulated results.
+        result = _parse_findings(raw, self._bundle())
+        assert result.weaknesses == []
+        assert result.hypotheses == []
+
     def test_markdown_fenced_json(self):
         raw = '```json\n{"findings": [{"guard_type": "bounds", "assumed_property": "x", "mechanism": "y", "cwe_class": null, "standalone": false}]}\n```'
         result = _parse_findings(raw, self._bundle())
@@ -1399,6 +1413,26 @@ class TestParseSmFindings:
         assert len(result.weaknesses) == 1
         assert result.weaknesses[0]["cwe_class"] is None
 
+    @pytest.mark.parametrize("raw", [
+        '[{"findings": []}]',
+        '"no findings"',
+        "null",
+        "42",
+    ])
+    def test_non_object_json_is_response_failure(self, raw: str):
+        # Non-object top-level JSON is this response's parse failure —
+        # it must not raise out of the parser.
+        bundle = StateMachineBundle(
+            field_name="x",
+            handler_sites=[],
+            annotation="test",
+            priority_score=0.0,
+            priority_reason="test",
+        )
+        result = _parse_sm_findings(raw, bundle)
+        assert result.weaknesses == []
+        assert result.hypotheses == []
+
 
 class TestRunStateMachineDiscovery:
     def test_mock_llm(self):
@@ -1796,6 +1830,23 @@ class TestParseDiscoveryFindings:
         )
         assert len(result.weaknesses) == 0
 
+    @pytest.mark.parametrize("raw", [
+        '[{"findings": []}]',
+        '"no findings"',
+        "null",
+        "42",
+    ])
+    def test_non_object_json_is_response_failure(self, raw: str):
+        # Non-object top-level JSON is this response's parse failure —
+        # it must not raise out of the parser.
+        target = SweepTarget(
+            fid="a.c:foo", source="", callers_source="",
+            annotation="", priority_score=1.0, priority_reason="test",
+        )
+        result = _parse_discovery_findings(raw, target, "assumption_mining")
+        assert result.weaknesses == []
+        assert result.hypotheses == []
+
 
 # ── assumption mining ──────────────────────────────────────────────
 
@@ -1824,6 +1875,17 @@ class TestParseAssumptions:
 
     def test_invalid_json(self):
         assert _parse_assumptions("not json") == []
+
+    @pytest.mark.parametrize("raw", [
+        '["x"]',
+        '"no assumptions"',
+        "null",
+        "42",
+    ])
+    def test_non_object_json_is_response_failure(self, raw: str):
+        # Non-object top-level JSON is this response's parse failure —
+        # it must not raise out of the parser.
+        assert _parse_assumptions(raw) == []
 
     def test_fenced_json(self):
         inner = json.dumps({"assumptions": [
