@@ -10,6 +10,7 @@ nothing attributed in-session when no candidate validates.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import subprocess
@@ -507,6 +508,29 @@ class BashHookRegistrySeamTest(_RegistrySeamCase):
         manifest = run / ".reads-manifest"
         self.assertTrue(manifest.exists(),
                         "override-registry bookmark got no attribution")
+
+
+class PythonTwinHostileStdinTest(_LedgerCase):
+    """main() returns quietly on hostile stdin shapes — never a traceback."""
+
+    def _run_main(self, payload: str, run: Path) -> None:
+        with patch.object(track_read, "_find_active_run",
+                          return_value=(str(run), "")), \
+             patch.object(sys, "stdin", io.StringIO(payload)):
+            track_read.main()
+
+    def test_non_object_stdin_json_returns_quietly(self):
+        # Valid JSON whose top level is not an object must be rejected
+        # like malformed JSON: silent return, no manifest write.
+        run = self._mk_run("scan_hostile")
+        for payload in ("[]", "null", '"x"', "42",
+                        '[{"tool_input": {"file_path": "/etc/hosts"}}]'):
+            with self.subTest(payload=payload):
+                self._run_main(payload, run)
+                self.assertFalse(
+                    (run / ".reads-manifest").exists(),
+                    f"manifest written for payload {payload!r}",
+                )
 
 
 if __name__ == "__main__":

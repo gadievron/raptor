@@ -288,6 +288,11 @@ def main() -> None:
         payload = json.loads(_stdin_text or "{}")
     except (json.JSONDecodeError, ValueError):
         return
+    if not isinstance(payload, dict):
+        # Valid-but-non-object JSON (a list, scalar, null) is as
+        # hostile/buggy as malformed JSON — return quietly rather
+        # than traceback out of the hook.
+        return
 
     file_path = (payload.get("tool_input") or {}).get("file_path", "")
     if not file_path:
