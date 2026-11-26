@@ -184,3 +184,34 @@ class TestRunParserValidatesMaxCost:
         )
         assert cp.returncode == 2, cp.stderr
         assert "--max-cost must be a finite value >= 0" in cp.stderr
+
+
+class TestZeroCapSemantics:
+    """``0`` means "remove the cap" on BOTH paths, and says so.
+
+    An operator typing a zero cap may mean "spend nothing" — no cap
+    value expresses that, so the run path must warn loudly instead of
+    silently reinterpreting. A legacy run config that persisted 0.0
+    reads back as None: the original run was uncapped, and a literal
+    0.0 would instead hit remaining_budget_usd's exhausted clamp.
+    """
+
+    def test_legacy_persisted_zero_reads_back_uncapped(self, audit_cli):
+        assert audit_cli._resume_cost_cap(
+            None, {"max_cost_usd": 0.0}) == (None, False)
+
+    @pytest.mark.slow
+    def test_run_zero_cap_warns_uncapped(self, tmp_path: Path):
+        # Parse accepts 0 and cmd_run then refuses the missing target
+        # (exit 1) — but only after the uncapped warning has printed.
+        env = dict(os.environ, _RAPTOR_TRUSTED="1")
+        cp = run_standalone_cli(
+            [sys.executable, str(_SCRIPT), "run",
+             str(tmp_path / "missing-target"),
+             "--max-cost", "0"],
+            capture_output=True, text=True, env=env, timeout=120,
+            check=False,
+        )
+        assert cp.returncode == 1, cp.stderr
+        assert "UNCAPPED" in cp.stderr
+        assert "--max-cost 0 removes the cap" in cp.stderr

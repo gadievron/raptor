@@ -1783,6 +1783,22 @@ def cmd_run(args: argparse.Namespace) -> int:
     """Run the full audit orchestrator with LLM review."""
     import subprocess
 
+    # --max-cost 0 REMOVES the cap. Normalised to None, the canonical
+    # "no cap" representation: a literal 0.0 reads as uncapped to the
+    # orchestrator's truthiness rail but as an exhausted budget once
+    # persisted and resumed — two contradictory meanings for the same
+    # recorded value (see _resume_cost_cap). Said loudly because an
+    # operator typing 0 may mean "spend nothing", which no cap value
+    # expresses — raptor.py's --max-cost-usd warns the same way.
+    if args.max_cost == 0:
+        print(
+            "WARNING: --max-cost 0 removes the cap — LLM spend is "
+            "UNCAPPED for this run (no cap value means 'spend "
+            "nothing'; use --forecast for a $0-spend estimate)",
+            file=sys.stderr,
+        )
+        args.max_cost = None
+
     target_path = Path(args.target).resolve()
     if not target_path.is_dir():
         # Binary targets (ELF/PE/Mach-O or a Ghidra project) audit the
@@ -3844,7 +3860,11 @@ def _resume_cost_cap(
             f"value >= 0 ({persisted!r}) — pass --max-cost to set this "
             f"segment's cap explicitly"
         )
-    return cap, False
+    # A persisted 0 is a legacy "--max-cost 0" run recorded before the
+    # run path normalised 0 to None: the original run was uncapped, so
+    # its resume segments are too — a literal 0.0 would instead hit
+    # remaining_budget_usd's exhausted-budget clamp.
+    return (None if cap == 0 else cap), False
 
 
 def _study_job_call_limit_arg(value: str) -> int:
@@ -4877,7 +4897,12 @@ def main() -> int:
                             "per-function dispatch routes by the "
                             "file's language")
     p_run.add_argument("--max-cost", type=_max_cost_arg, default=None,
-                       help="Maximum cost in USD before stopping")
+                       metavar="USD",
+                       help="Maximum cost in USD before stopping. 0 "
+                            "REMOVES the cap (uncapped spend, stated "
+                            "loudly at start — no cap value means "
+                            "'spend nothing'; --forecast prints the "
+                            "estimate at $0 spend)")
     p_run.add_argument("--forecast", action="store_true",
                        help="Print the deepen-aware pre-spend cost "
                             "forecast band (gap-queue census + journal "
