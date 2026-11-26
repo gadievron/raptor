@@ -14,7 +14,9 @@ pinned on a planted synthetic tree AND on the real checkout:
 
 from __future__ import annotations
 
+import ast
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -27,6 +29,7 @@ with (_path_patch.object(sys, "path", sys.path.copy())
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
     from runtime_universe import (  # noqa: E402
+        EXCLUDED_PARTS,
         RUNTIME_ROOTS,
         is_runtime_python_file,
         repo_root,
@@ -142,6 +145,102 @@ class TestSyntheticTree:
         assert data not in set(
             runtime_file_universe(tmp_path, extra_excluded_parts=("data",))
         )
+
+
+#: Quick text prescreen before parsing: a file can only import
+#: excluded-dir code if an excluded name appears in its source.
+_EXCLUDED_TOKEN_RE = re.compile(
+    r"\b(?:" + "|".join(sorted(EXCLUDED_PARTS)) + r")\b")
+
+
+def _excluded_import_offenders(repo: Path, universe: list[Path]) -> list[str]:
+    """Universe members whose imports resolve to a repo module living
+    under an EXCLUDED_PARTS directory.
+
+    The universe's name-based exclusion assumes those directories hold
+    no runtime-imported code; this cross-check turns the assumption
+    into a verified invariant — runtime logic hosted in e.g.
+    ``core/pkg/fixtures/helper.py`` would execute in production while
+    every universe-derived gate ignored it.
+    """
+    offenders: list[str] = []
+    for path in universe:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if not _EXCLUDED_TOKEN_RE.search(text):
+            continue
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            continue
+        rel = path.relative_to(repo)
+        package = list(rel.parts[:-1])
+        for node in ast.walk(tree):
+            modules: list[str] = []
+            if isinstance(node, ast.Import):
+                modules.extend(item.name for item in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                if node.level == 0:
+                    base = node.module or ""
+                else:
+                    prefix = package[:len(package) - node.level + 1]
+                    base = ".".join(
+                        prefix + ([node.module] if node.module else []))
+                if base:
+                    modules.append(base)
+                modules.extend(
+                    f"{base}.{item.name}" if base else item.name
+                    for item in node.names)
+            for module in modules:
+                parts = tuple(module.split("."))
+                if not EXCLUDED_PARTS.intersection(parts):
+                    continue
+                if any((repo / candidate).is_file() for candidate in (
+                    Path(*parts).with_suffix(".py"),
+                    Path(*parts, "__init__.py"),
+                )):
+                    # One report per import statement.
+                    offenders.append(f"{rel}: import {module}")
+                    break
+    return offenders
+
+
+class TestExcludedDirsHostNoRuntimeImportedCode:
+    def test_planted_import_of_excluded_code_is_detected(self, tmp_path):
+        _plant(tmp_path, "core/pkg/mod.py",
+               "from core.pkg.fixtures.helper import run\n")
+        _plant(tmp_path, "core/pkg/fixtures/__init__.py")
+        _plant(tmp_path, "core/pkg/fixtures/helper.py",
+               "def run():\n    return 1\n")
+        offenders = _excluded_import_offenders(
+            tmp_path, runtime_file_universe(tmp_path))
+        assert offenders == [
+            "core/pkg/mod.py: import core.pkg.fixtures.helper",
+        ]
+
+    def test_planted_relative_import_of_excluded_code_is_detected(self, tmp_path):
+        _plant(tmp_path, "core/pkg/mod.py",
+               "from .fixtures import helper\n")
+        _plant(tmp_path, "core/pkg/fixtures/__init__.py")
+        _plant(tmp_path, "core/pkg/fixtures/helper.py")
+        offenders = _excluded_import_offenders(
+            tmp_path, runtime_file_universe(tmp_path))
+        assert offenders == [
+            "core/pkg/mod.py: import core.pkg.fixtures",
+        ]
+
+    def test_unresolvable_excluded_names_do_not_fire(self, tmp_path):
+        # Mentioning an excluded token (prose, a third-party module,
+        # a nonexistent path) is not an offence — only imports that
+        # RESOLVE to a repo file under an excluded dir count.
+        _plant(tmp_path, "core/pkg/mod.py",
+               "import pytest  # used by the test fixtures\n")
+        offenders = _excluded_import_offenders(
+            tmp_path, runtime_file_universe(tmp_path))
+        assert offenders == []
+
+    def test_live_tree_runtime_code_never_imports_excluded_dirs(self):
+        offenders = _excluded_import_offenders(REPO, runtime_file_universe())
+        assert not offenders, offenders
 
 
 class TestRealTree:
