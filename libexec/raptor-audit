@@ -3510,7 +3510,12 @@ def cmd_resume(args: argparse.Namespace) -> int:
     # chain, not just the immediately-prior segment's ledger.
     prior_breakdown = load_prior_cost_breakdown(out_dir)
     booked, ledger_note = resolve_prior_spend(out_dir)
-    original_cap, cap_overridden = _resume_cost_cap(args.max_cost, run_cfg)
+    try:
+        original_cap, cap_overridden = _resume_cost_cap(args.max_cost, run_cfg)
+    except ValueError as e:
+        print(f"error: {sanitise_for_terminal(str(e), max_len=500)}",
+              file=sys.stderr)
+        return 1
     from core.audit.resume import (
         EXHAUSTED_BUDGET_EPSILON_USD,
         remaining_budget_usd,
@@ -3518,7 +3523,10 @@ def cmd_resume(args: argparse.Namespace) -> int:
     remaining = remaining_budget_usd(original_cap, booked)
     if cap_overridden:
         _orig = run_cfg.get("max_cost_usd")
-        _orig_s = f"${float(_orig):.2f}" if _orig is not None else "none"
+        try:
+            _orig_s = f"${float(_orig):.2f}" if _orig is not None else "none"
+        except (TypeError, ValueError):
+            _orig_s = "invalid"
         _new_s = (
             f"${float(original_cap):.2f}" if original_cap is not None
             else "removed (uncapped)"
@@ -3816,7 +3824,27 @@ def _resume_cost_cap(
     """
     if cli_value is not None:
         return (None if cli_value == 0 else cli_value), True
-    return run_cfg.get("max_cost_usd"), False
+    persisted = run_cfg.get("max_cost_usd")
+    if persisted is None:
+        return None, False
+    # Re-validate the persisted cap: the run config is a plain JSON
+    # file, and a non-finite value (a legacy run recorded before the
+    # parse-time guard, or a hand-edited config) would silently pass
+    # every remaining-budget comparison as an uncapped segment behind
+    # a "$nan" banner. A poisoned cap is refused loudly instead — an
+    # explicit --max-cost on the resume invocation overrides it.
+    import math
+    try:
+        cap = float(persisted)
+    except (TypeError, ValueError):
+        cap = math.nan
+    if not math.isfinite(cap) or cap < 0:
+        raise ValueError(
+            f"persisted max_cost_usd in the run config is not a finite "
+            f"value >= 0 ({persisted!r}) — pass --max-cost to set this "
+            f"segment's cap explicitly"
+        )
+    return cap, False
 
 
 def _study_job_call_limit_arg(value: str) -> int:
@@ -3830,16 +3858,17 @@ def _study_job_call_limit_arg(value: str) -> int:
     return limit
 
 
-def _max_cost_resume_arg(value: str) -> float:
-    """Parse resume ``--max-cost``: a FINITE float >= 0 (0 removes
-    the cap).
+def _max_cost_arg(value: str) -> float:
+    """Parse ``--max-cost`` (run and resume): a FINITE float >= 0
+    (0 removes the cap).
 
     Negatives are refused at parse time — downstream they would read
     as an instantly-exhausted budget, which no operator means. Non-
-    finite values are refused too: nan would flow through every
-    remaining-budget comparison as an effectively-uncapped segment
-    behind a "$nan" banner, and inf is just --max-cost 0 spelled
-    dishonestly.
+    finite values are refused too: nan is truthy, so it would present
+    as an active cap while every budget comparison against it is
+    False (an effectively-uncapped run behind a "$nan" banner — and,
+    persisted into the run config, it poisons every later resume
+    segment too); inf is just --max-cost 0 spelled dishonestly.
     """
     import math
     try:
@@ -4847,7 +4876,7 @@ def main() -> int:
                             "language for multi-language targets; "
                             "per-function dispatch routes by the "
                             "file's language")
-    p_run.add_argument("--max-cost", type=float, default=None,
+    p_run.add_argument("--max-cost", type=_max_cost_arg, default=None,
                        help="Maximum cost in USD before stopping")
     p_run.add_argument("--forecast", action="store_true",
                        help="Print the deepen-aware pre-spend cost "
@@ -5089,7 +5118,7 @@ def main() -> int:
              "run's --max-time)",
     )
     p_resume.add_argument(
-        "--max-cost", type=_max_cost_resume_arg, default=None,
+        "--max-cost", type=_max_cost_arg, default=None,
         metavar="USD",
         help="Whole-run cost cap for THIS segment (default: the "
              "original run's --max-cost); booked spend from prior "

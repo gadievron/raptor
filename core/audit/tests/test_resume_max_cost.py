@@ -84,20 +84,20 @@ class TestResumeCostCap:
         assert remaining_budget_usd(cap, 30.0) is None
 
 
-class TestMaxCostResumeArg:
+class TestMaxCostArg:
     def test_accepts_positive(self, audit_cli):
-        assert audit_cli._max_cost_resume_arg("12.5") == 12.5
+        assert audit_cli._max_cost_arg("12.5") == 12.5
 
     def test_accepts_zero(self, audit_cli):
-        assert audit_cli._max_cost_resume_arg("0") == 0.0
+        assert audit_cli._max_cost_arg("0") == 0.0
 
     def test_rejects_negative(self, audit_cli):
         with pytest.raises(argparse.ArgumentTypeError):
-            audit_cli._max_cost_resume_arg("-1")
+            audit_cli._max_cost_arg("-1")
 
     def test_rejects_non_float(self, audit_cli):
         with pytest.raises(argparse.ArgumentTypeError):
-            audit_cli._max_cost_resume_arg("uncap")
+            audit_cli._max_cost_arg("uncap")
 
     @pytest.mark.parametrize("spelling", ["nan", "inf", "-inf", "Infinity"])
     def test_rejects_non_finite(self, audit_cli, spelling):
@@ -106,7 +106,7 @@ class TestMaxCostResumeArg:
         # "$nan" banner) and inf is 0-spelled-dishonestly — both are
         # refused at parse time.
         with pytest.raises(argparse.ArgumentTypeError):
-            audit_cli._max_cost_resume_arg(spelling)
+            audit_cli._max_cost_arg(spelling)
 
 
 @pytest.mark.slow
@@ -135,4 +135,52 @@ class TestResumeParserAcceptsMaxCost:
             check=False,
         )
         assert cp.returncode == 2
+        assert "--max-cost must be a finite value >= 0" in cp.stderr
+
+
+class TestPersistedCapReadBack:
+    """The persisted run-config cap is re-validated on read-back.
+
+    The run config is a plain JSON file: a non-finite cap recorded by
+    an older install (the run parser used a bare ``type=float``) or a
+    hand edit must not silently resume as an uncapped segment — nan is
+    truthy, so it presents as an active cap while every remaining-
+    budget comparison against it is False.
+    """
+
+    @pytest.mark.parametrize(
+        "poisoned", [float("nan"), float("inf"), float("-inf"), -5.0, "uncap"],
+    )
+    def test_poisoned_persisted_cap_is_refused(self, audit_cli, poisoned):
+        with pytest.raises(ValueError, match="persisted max_cost_usd"):
+            audit_cli._resume_cost_cap(None, {"max_cost_usd": poisoned})
+
+    def test_explicit_override_bypasses_a_poisoned_config(self, audit_cli):
+        # The documented escape hatch: --max-cost on the resume
+        # invocation never consults the persisted value.
+        assert audit_cli._resume_cost_cap(
+            12.0, {"max_cost_usd": float("nan")}) == (12.0, True)
+
+    def test_valid_persisted_cap_still_reads_back(self, audit_cli):
+        assert audit_cli._resume_cost_cap(
+            None, {"max_cost_usd": 25}) == (25.0, False)
+
+
+@pytest.mark.slow
+class TestRunParserValidatesMaxCost:
+    @pytest.mark.parametrize("spelling", ["nan", "inf", "-3"])
+    def test_non_finite_or_negative_cap_refused_at_parse_time(
+            self, tmp_path: Path, spelling: str):
+        # Parse-time refusal is exit 2; on an unvalidated parser the
+        # value would reach cmd_run, which refuses the missing target
+        # with exit 1 — by then a nan cap has already been accepted.
+        env = dict(os.environ, _RAPTOR_TRUSTED="1")
+        cp = run_standalone_cli(
+            [sys.executable, str(_SCRIPT), "run",
+             str(tmp_path / "missing-target"),
+             "--max-cost", spelling],
+            capture_output=True, text=True, env=env, timeout=120,
+            check=False,
+        )
+        assert cp.returncode == 2, cp.stderr
         assert "--max-cost must be a finite value >= 0" in cp.stderr
