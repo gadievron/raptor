@@ -1800,7 +1800,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     # recorded value (see _resume_cost_cap). Said loudly because an
     # operator typing 0 may mean "spend nothing", which no cap value
     # expresses — raptor.py's --max-cost-usd warns the same way.
-    if args.max_cost == 0:
+    if getattr(args, "max_cost", None) == 0:
         print(
             "WARNING: --max-cost 0 removes the cap — LLM spend is "
             "UNCAPPED for this run (no cap value means 'spend "
