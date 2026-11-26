@@ -237,6 +237,22 @@ _PARENT_CODE = (
     "time.sleep(300)\n"
 )
 
+# Like _PARENT_CODE, plus an innocent same-group process standing in
+# for whatever else the group/session holds. The supervisor spawned
+# here does NOT lead the group (the parent does), so a group kill
+# issued from it would take the sibling out too.
+_PARENT_WITH_SIBLING_CODE = (
+    "import os, subprocess, sys, time\n"
+    "sibling = subprocess.Popen(\n"
+    "    [sys.executable, '-c', 'import time; time.sleep(300)'])\n"
+    "path = os.environ['SIBLING_FILE']\n"
+    "with open(path + '.pending', 'w') as f:\n"
+    "    f.write(str(sibling.pid))\n"
+    "os.replace(path + '.pending', path)\n"
+    "subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2]])\n"
+    "time.sleep(300)\n"
+)
+
 _COOPERATIVE_CHILD = "import time; time.sleep(300)"
 _SIGTERM_IGNORING_CHILD = (
     "import signal, time\n"
@@ -346,6 +362,44 @@ class TestOrphanReap:
                       "orphaned idle supervisor to exit")
             _wait_for(lambda: not _pid_alive(wrapped_pid), 20.0,
                       "orphaned idle wrapped child to exit")
+        finally:
+            self._reap_all(parent)
+
+    def test_non_leader_escalation_spares_group_siblings(self, tmp_path):
+        # The escalation's killpg(0) is only this supervisor's to issue
+        # while it LEADS its group. Here it does not — the parent does,
+        # and an unrelated sibling shares the group — so the watchdog
+        # must re-verify leadership at kill time, fall back to
+        # SIGKILLing only its tracked child, and leave the sibling
+        # untouched.
+        ready = tmp_path / "ready"
+        sibling_file = tmp_path / "sibling"
+        env = dict(os.environ)
+        env["RAPTOR_DIR"] = str(_REPO_ROOT)
+        env["READY_FILE"] = str(ready)
+        env["SIBLING_FILE"] = str(sibling_file)
+        parent = subprocess.Popen(
+            [sys.executable, "-c", _PARENT_WITH_SIBLING_CODE,
+             _SUPERVISOR_CODE, _SIGTERM_IGNORING_CHILD],
+            env=env, start_new_session=True,
+        )
+        try:
+            _wait_for(ready.exists, 30.0, "supervised tree to come up")
+            sup_pid, wrapped_pid = (
+                int(x) for x in ready.read_text().split()
+            )
+            sibling_pid = int(sibling_file.read_text())
+            os.kill(parent.pid, signal.SIGKILL)
+            parent.wait(timeout=10)
+            # TERM-ignoring child forces the SIGKILL escalation rung.
+            _wait_for(lambda: not _pid_alive(sup_pid), 20.0,
+                      "orphaned idle supervisor to exit")
+            _wait_for(lambda: not _pid_alive(wrapped_pid), 20.0,
+                      "orphaned idle wrapped child to exit")
+            assert _pid_alive(sibling_pid), (
+                "non-leader escalation killed an unrelated same-group "
+                "process — killpg(0) fired without group leadership"
+            )
         finally:
             self._reap_all(parent)
 

@@ -747,8 +747,14 @@ def _start_orphan_watchdog(
     connection blocks it outright. To reap, it SIGTERMs the wrapped
     child — the JVM exits, ``main()``'s ``wait`` unblocks, and the
     normal socket/dir cleanup runs — escalating to SIGKILL of the
-    forwarder's own process group (we lead it, so the JVM and any
-    launcher-shell stragglers go too) if the child ignores the grace.
+    forwarder's own process group if the child ignores the grace. The
+    spawner boots us with ``start_new_session=True``, so normally we
+    lead that group and the JVM plus any launcher-shell stragglers go
+    too — but leadership is an assumption about the caller, so it is
+    re-verified at kill time: a forwarder that does NOT lead its group
+    shares it with unrelated processes (up to an entire session), and
+    ``killpg(0, SIGKILL)`` would take them all out. In that case the
+    escalation falls back to SIGKILLing only the tracked child.
 
     Pidns tier: this thread runs in the in-namespace working
     forwarder, whose ``getppid()`` is vacuous — its parent is the
@@ -767,7 +773,13 @@ def _start_orphan_watchdog(
     construction: this branch fires only after the supervisor has
     already reported the real parent gone, total teardown is the
     goal, and the blast radius ends at the group — which the
-    supervisor leads in its own session under a server boot.
+    supervisor leads in its own session under a server boot. That
+    supervisor-led-session construction is also why the kill-time
+    leadership re-check applies only to the poll tier: the working
+    forwarder here never leads the group (and inside the child pid
+    namespace the leader's pid is not even representable, so
+    ``getpgrp()`` reads 0), yet the group kill is exactly the
+    contract this tier was built around.
     """
     parent = os.getppid()
 
@@ -803,8 +815,27 @@ def _start_orphan_watchdog(
                     # main()'s wait() unblocks; normal cleanup runs.
                     return
                 time.sleep(0.2)
-        with contextlib.suppress(OSError):
-            os.killpg(0, signal.SIGKILL)
+        # Group-kill authority is re-verified at the moment of use, the
+        # same way parent_liveness._terminate_group does: on the poll
+        # tier killpg(0) is only safe while we actually LEAD the group
+        # the spawner created for us — a non-leader shares its group
+        # (up to a whole session) with processes that are not ours to
+        # kill. The pidns tier keeps the group kill unconditionally:
+        # its authority comes from the supervisor leading the group in
+        # its own session (see docstring), and in the child namespace
+        # getpgrp() could not name the leader anyway.
+        if parent_gone_fd is not None or os.getpgrp() == os.getpid():
+            with contextlib.suppress(OSError):
+                os.killpg(0, signal.SIGKILL)
+        else:
+            with contextlib.suppress(OSError):
+                os.write(
+                    2,
+                    b"netns_forwarder: not the group leader; refusing "
+                    b"group kill and reaping only the tracked child\n",
+                )
+            if child is not None:
+                _signal_owned_child(child, signal.SIGKILL)
         os._exit(1)  # unreachable when the killpg landed
 
     t = threading.Thread(
