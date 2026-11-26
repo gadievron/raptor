@@ -147,6 +147,44 @@ class TestDetection:
         ))
         assert len(lint.scan_tree(root)) == 1
 
+    @pytest.mark.parametrize("run_line", [
+        '        run: "python3 gate.py | tee gate.log"\n',
+        "        run: 'python3 gate.py | tee gate.log'\n",
+        '        run: "python3 gate.py | tee gate.log"  # quoted\n',
+    ])
+    def test_yaml_quoted_single_line_pipe_flagged(
+        self, lint, tmp_path, run_line,
+    ):
+        # The surrounding quotes are YAML syntax, not shell quoting —
+        # the pipe inside is live shell and must be detected.
+        root = _tree(tmp_path, _wf(
+            "      - name: Run gate\n"
+            + run_line
+        ))
+        assert [f.key for f in lint.scan_tree(root)] == [
+            "wf.yml::build::Run gate",
+        ]
+
+    def test_yaml_quoted_shell_quoted_pipe_not_flagged(
+        self, lint, tmp_path,
+    ):
+        # After unwrapping the YAML quotes, interior SHELL quotes still
+        # neutralise the pipe (a jq filter is not a shell pipe).
+        root = _tree(tmp_path, _wf(
+            "      - name: Query\n"
+            "        run: \"gh api runs --jq '.runs[] | .id'\"\n"
+        ))
+        assert lint.scan_tree(root) == []
+
+    def test_interior_shell_quotes_still_neutralise(self, lint, tmp_path):
+        # An unquoted scalar with interior shell quotes keeps the
+        # existing behaviour: the quoted pipe is not a shell pipe.
+        root = _tree(tmp_path, _wf(
+            "      - name: Echo\n"
+            "        run: echo 'a | b'\n"
+        ))
+        assert lint.scan_tree(root) == []
+
     def test_continuation_line_pipe_detected(self, lint, tmp_path):
         root = _tree(tmp_path, _wf(
             "      - name: Login\n"
@@ -226,6 +264,75 @@ class TestNonPipes:
         ))
         findings = lint.scan_tree(root)
         assert [f.key for f in findings] == ["wf.yml::build::step-0"]
+
+
+class TestFlowStyleRefusal:
+    """Flow-style steps never match the block-form parser (it would
+    see zero steps and every pipe would be invisible), so they must
+    fail loudly instead of passing silently."""
+
+    def test_flow_style_steps_list_refused(self, lint, tmp_path):
+        root = _tree(tmp_path, (
+            "name: Fixture\n"
+            "on: push\n"
+            "jobs:\n"
+            "  build:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps: [{name: x, run: false | tee gate.log}]\n"
+        ))
+        with pytest.raises(lint.UnsupportedFlowStyleError):
+            lint.scan_tree(root)
+
+    def test_flow_style_steps_on_next_line_refused(self, lint, tmp_path):
+        root = _tree(tmp_path, (
+            "name: Fixture\n"
+            "on: push\n"
+            "jobs:\n"
+            "  build:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            "      [{name: x, run: false | tee gate.log}]\n"
+        ))
+        with pytest.raises(lint.UnsupportedFlowStyleError):
+            lint.scan_tree(root)
+
+    def test_flow_style_step_item_refused(self, lint, tmp_path):
+        root = _tree(tmp_path, _wf(
+            "      - {name: x, run: false | tee gate.log}\n"
+        ))
+        with pytest.raises(lint.UnsupportedFlowStyleError):
+            lint.scan_tree(root)
+
+    def test_flow_style_action_steps_refused(self, lint, tmp_path):
+        root = _action_tree(tmp_path, (
+            "name: Fixture action\n"
+            "description: fixture\n"
+            "runs:\n"
+            "  using: composite\n"
+            "  steps: [{name: x, run: false | tee gate.log}]\n"
+        ))
+        with pytest.raises(lint.UnsupportedFlowStyleError):
+            lint.scan_tree(root)
+
+    def test_main_reports_flow_style_and_exits_2(
+        self, lint, tmp_path, monkeypatch, capsys,
+    ):
+        root = _tree(tmp_path, (
+            "name: Fixture\n"
+            "on: push\n"
+            "jobs:\n"
+            "  build:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps: [{name: x, run: false | tee gate.log}]\n"
+        ))
+        baseline = tmp_path / "b.json"
+        baseline.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr("sys.argv", [
+            "check_workflow_pipefail.py",
+            "--root", str(root), "--baseline", str(baseline),
+        ])
+        assert lint.main() == 2
+        assert "flow-style" in capsys.readouterr().err
 
 
 class TestBaselineSemantics:

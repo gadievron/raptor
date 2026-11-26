@@ -35,7 +35,12 @@ The detector is line-based, not a full shell parse: quoted spans and
 ``${{ ... }}`` expressions are removed first (jq filters and GHA
 expressions carry ``|``/``||`` that are not shell pipes), full-line
 and trailing unquoted comments are dropped (word-boundary aware —
-``${FILE#./}`` is not a comment), ``||`` is not a pipe. The pipefail
+``${FILE#./}`` is not a comment), ``||`` is not a pipe. A single-line
+``run:`` value that is one YAML-quoted scalar end to end is unwrapped
+before detection (the quotes are YAML syntax, not shell quoting — the
+pipe inside is live shell). Flow-style ``steps: [...]`` lists and
+``- {...}`` step items are refused loudly (exit 2) rather than parsed
+as zero steps. The pipefail
 credit is line-ordered: only a ``set -o pipefail`` still in effect
 when the pipe runs counts. Not covered: YAML anchors/aliases are not
 expanded, so a run body reaching a step through an alias would be
@@ -94,6 +99,50 @@ _PIPEFAIL_OFF_RE = re.compile(
 # (``${FILE#./}`` parameter expansion, URL fragments), and cutting
 # there hid real pipes on the rest of the line.
 _COMMENT_RE = re.compile(r"(?:^|\s)#")
+
+
+class UnsupportedFlowStyleError(ValueError):
+    """A flow-style ``steps: [...]`` list never matches the block-form
+    parser, so every pipe inside it would be invisible — fail loudly
+    instead of silently parsing zero steps."""
+
+
+def _strip_yaml_quotes(value: str) -> str:
+    """Unwrap a single-line scalar that is ONE YAML quote pair end to
+    end, returning the content the shell actually sees.
+
+    ``run: "false | tee log"`` carries YAML quoting, not shell
+    quoting — left intact, :func:`_has_pipe`'s shell-quote removal
+    would erase the live pipe before detection. Interior shell quotes
+    (``echo "a | b"``) are untouched: the opening character must be a
+    quote and its matching close must end the value (a trailing YAML
+    comment after the close is tolerated). YAML escapes are reduced
+    just enough for pipe/quote detection (``\\x`` -> ``x`` inside
+    double quotes, ``''`` -> ``'`` inside single quotes).
+    """
+    if len(value) < 2 or value[0] not in "'\"":
+        return value
+    quote = value[0]
+    body: list[str] = []
+    i = 1
+    while i < len(value):
+        ch = value[i]
+        if quote == '"' and ch == "\\" and i + 1 < len(value):
+            body.append(value[i + 1])
+            i += 2
+            continue
+        if ch == quote:
+            if quote == "'" and value[i + 1:i + 2] == "'":
+                body.append("'")
+                i += 2
+                continue
+            rest = value[i + 1:].strip()
+            if not rest or rest.startswith("#"):
+                return "".join(body)
+            return value  # content after the close — not one scalar
+        body.append(ch)
+        i += 1
+    return value  # unterminated quote — leave as-is
 
 
 class Step:
@@ -175,8 +224,22 @@ def parse_steps(workflow_name: str, text: str) -> list[Step]:
         if stripped == "steps:":
             steps_indent = ind
             continue
+        sm = key_re.match(stripped)
+        if (sm and sm.group(1) == "steps"
+                and stripped[len("steps:"):].lstrip().startswith("[")):
+            raise UnsupportedFlowStyleError(
+                f"{workflow_name}: job {job_id!r} uses a flow-style "
+                f"`steps: [...]` list, which this lint cannot parse "
+                f"(it would see zero steps) — rewrite in block form"
+            )
         if steps_indent is None:
             continue
+        if current is None and stripped.startswith("["):
+            raise UnsupportedFlowStyleError(
+                f"{workflow_name}: job {job_id!r} uses a flow-style "
+                f"`steps:` list, which this lint cannot parse (it "
+                f"would see zero steps) — rewrite in block form"
+            )
 
         # New step item.
         if stripped.startswith("- ") or stripped == "-":
@@ -194,6 +257,13 @@ def parse_steps(workflow_name: str, text: str) -> list[Step]:
                 stripped = stripped[1:].strip()
                 if not stripped:
                     continue
+                if stripped.startswith("{"):
+                    raise UnsupportedFlowStyleError(
+                        f"{workflow_name}: job {job_id!r} has a "
+                        f"flow-style `- {{...}}` step, which this lint "
+                        f"cannot parse (its keys would be invisible) — "
+                        f"rewrite in block form"
+                    )
                 ind = ind + 2  # first-key position for the checks below
 
         if current is None:
@@ -211,7 +281,9 @@ def parse_steps(workflow_name: str, text: str) -> list[Step]:
                 if value in ("|", "|-", "|+", ">", ">-", ">+"):
                     run_indent = ind
                 elif value:
-                    current.run_body.append(value)
+                    # A fully quoted scalar is YAML syntax, not shell
+                    # syntax — unwrap it so _has_pipe sees the pipe.
+                    current.run_body.append(_strip_yaml_quotes(value))
     return steps
 
 
@@ -261,8 +333,22 @@ def parse_action_steps(action_name: str, text: str) -> list[Step]:
         if stripped == "steps:":
             steps_indent = ind
             continue
+        sm = key_re.match(stripped)
+        if (sm and sm.group(1) == "steps"
+                and stripped[len("steps:"):].lstrip().startswith("[")):
+            raise UnsupportedFlowStyleError(
+                f"{action_name}: flow-style `steps: [...]` list, which "
+                f"this lint cannot parse (it would see zero steps) — "
+                f"rewrite in block form"
+            )
         if steps_indent is None:
             continue
+        if current is None and stripped.startswith("["):
+            raise UnsupportedFlowStyleError(
+                f"{action_name}: flow-style `steps:` list, which this "
+                f"lint cannot parse (it would see zero steps) — "
+                f"rewrite in block form"
+            )
 
         # New step item.
         if stripped.startswith("- ") or stripped == "-":
@@ -276,6 +362,12 @@ def parse_action_steps(action_name: str, text: str) -> list[Step]:
                 stripped = stripped[1:].strip()
                 if not stripped:
                     continue
+                if stripped.startswith("{"):
+                    raise UnsupportedFlowStyleError(
+                        f"{action_name}: flow-style `- {{...}}` step, "
+                        f"which this lint cannot parse (its keys would "
+                        f"be invisible) — rewrite in block form"
+                    )
                 ind = ind + 2
 
         if current is None:
@@ -293,7 +385,9 @@ def parse_action_steps(action_name: str, text: str) -> list[Step]:
                 if value in ("|", "|-", "|+", ">", ">-", ">+"):
                     run_indent = ind
                 elif value:
-                    current.run_body.append(value)
+                    # A fully quoted scalar is YAML syntax, not shell
+                    # syntax — unwrap it so _has_pipe sees the pipe.
+                    current.run_body.append(_strip_yaml_quotes(value))
     return steps
 
 
@@ -433,7 +527,11 @@ def main() -> int:
               file=sys.stderr)
         return 2
 
-    findings = scan_tree(args.root)
+    try:
+        findings = scan_tree(args.root)
+    except UnsupportedFlowStyleError as exc:
+        print(f"[pipefail] {exc}", file=sys.stderr)
+        return 2
     by_key = {f.key: f for f in findings}
 
     if args.write_baseline:
