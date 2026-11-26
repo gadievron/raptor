@@ -3838,6 +3838,24 @@ def main() -> int:
                 all_sarif_files.extend(semgrep_sarifs)
         elif rc != -1:  # -1 is timeout, already reported
             print(f"✗ Semgrep scan failed (exit code {rc})", file=sys.stderr)
+            # Durable marker, mirroring .semgrep_timeout above: with
+            # CodeQL also running the pipeline continues and the run
+            # completes, so this one stderr line is the only trace —
+            # and absent semgrep_*.json files look indistinguishable
+            # from "scan was disabled". Record WHY the Semgrep
+            # findings are missing; the completion path surfaces the
+            # marker in the run summary and metadata.
+            try:
+                from core.json import save_json as _save_json
+                _save_json(
+                    out_dir / ".semgrep_failed",
+                    {
+                        "exit_code": rc,
+                        "stage": "semgrep",
+                    },
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("failed to write semgrep failure marker: %s", e)
             if not run_codeql:
                 _fail_run_and_exit(out_dir, f"Semgrep scan failed (exit code {rc})")
 
@@ -5810,7 +5828,7 @@ def main() -> int:
     try:
         from core.run import complete_run
         orch_meta = (orchestration_result or {}).get("orchestration", {})
-        complete_run(out_dir, extra={
+        completion_extra = {
             "findings_count": analysed_count,
             "exploitable_count": exploitable_count,
             "duration_seconds": round(workflow_duration, 1),
@@ -5818,7 +5836,26 @@ def main() -> int:
             "analysis_models": orch_meta.get("analysis_models", []),
             "aggregate_models": orch_meta.get("aggregate_models", []),
             "aggregated": orch_meta.get("aggregated", False),
-        }, manifest=_build_completion_manifest(
+        }
+        semgrep_failed_marker = out_dir / ".semgrep_failed"
+        if semgrep_failed_marker.exists():
+            # A Semgrep crash in a mixed run keeps the pipeline going
+            # on CodeQL alone; the marker written at the failure site
+            # is re-surfaced HERE — next to the completion output the
+            # operator actually reads — and carried into the run
+            # record so cross-run views see the partial coverage.
+            marker = load_json(semgrep_failed_marker)
+            completion_extra["semgrep_failed"] = (
+                marker if isinstance(marker, dict) else True
+            )
+            print(
+                "⚠ Semgrep scan failed during this run — the results "
+                "above exclude Semgrep findings (see .semgrep_failed "
+                "in the run directory)",
+                file=sys.stderr,
+            )
+        complete_run(out_dir, extra=completion_extra,
+                     manifest=_build_completion_manifest(
             orch_meta, import_result, import_sarif_files,
             reanalyze_dir=getattr(args, "reanalyze", None),
         ))
