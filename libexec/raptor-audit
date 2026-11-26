@@ -576,26 +576,36 @@ def cmd_record(args: argparse.Namespace) -> int:
                 )
             if not rid:
                 return True
+            # The sweep log's rule_id is usually ALREADY namespaced
+            # (smt:check-toctou, joern:flow) — re-prefixing minted
+            # smt:smt:* stamps no classifier recognises, so every
+            # detection-grade receipt graded as verification and could
+            # ground --status finding alone. Prefix only bare ids.
+            stamp = (
+                rid if rid.startswith(f"{base_tool}:")
+                else f"{base_tool}:{rid}"
+            )
+            # Role lookup delegates to core's _is_detection_variant,
+            # which consults the channel's own classifier and — when
+            # the channel module is unavailable or the classifier
+            # raises — falls back to the string heuristics that
+            # recognise the KNOWN detection-grade spellings (the
+            # whole sanwit/gadget_oracle namespaces, joern:live,
+            # demoted smt verbs, ...). The previous inline consult
+            # instead graded every receipt as verification whenever
+            # the classifier could not be reached, so on a degraded
+            # install (one channel module broken or missing) a
+            # detection-only receipt could ground --status finding
+            # alone. A receipt this leg cannot grade at all fails
+            # CLOSED out of verification grade: it corroborates, it
+            # does not convict.
             try:
                 from core.audit.evidence_grade import (
-                    _channel_detection_classifier,
+                    _is_detection_variant,
                 )
-                classify = _channel_detection_classifier(base_tool)
-                if classify is not None:
-                    # The sweep log's rule_id is usually ALREADY
-                    # namespaced (smt:check-toctou, joern:flow) —
-                    # re-prefixing minted smt:smt:* stamps no
-                    # classifier recognises, so every detection-grade
-                    # receipt graded as verification and could ground
-                    # --status finding alone. Prefix only bare ids.
-                    stamp = (
-                        rid if rid.startswith(f"{base_tool}:")
-                        else f"{base_tool}:{rid}"
-                    )
-                    return not classify(stamp)
-            except Exception:
-                pass
-            return True
+                return not _is_detection_variant(stamp)
+            except Exception:  # noqa: BLE001 — ungradeable: fail closed
+                return False
         has_receipt = any(_verification_grade(e) for e in matching)
         if not has_receipt and matching:
             print(
