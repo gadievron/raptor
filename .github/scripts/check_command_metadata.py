@@ -14,6 +14,12 @@ Failing modes:
 * missing dispatch target — for executable-form dispatches, the
   first-token path must exist on disk (catches typo'd or renamed
   libexec paths at PR time, not at operator-call time).
+* escaping dispatch target — the target path must stay inside the
+  repository: absolute paths, ``..`` traversal, and symlink escapes
+  are rejected (a dispatch is a repo-relative command line, nothing
+  else).
+* duplicate frontmatter key — a repeated key would silently
+  last-win, so one documented value could mask the effective one.
 * exclusion drift — anything with ``exclude_from_listing: true``
   must also appear in commands.md's hardcoded "Exclude internal/
   duplicate commands" list; and vice-versa. Single source of truth.
@@ -62,26 +68,32 @@ def _excluded_names(sentence: str) -> set[str]:
     return set(_BACKTICKED_NAME_RE.findall(sentence))
 
 
-def _parse_frontmatter(text: str) -> dict[str, str]:
-    """Return the YAML-ish frontmatter as a flat dict. The repo uses
-    a tiny subset (string scalars only, one key per line) so a real
-    YAML parser would be overkill — and would add a CI dependency
-    we don't have today."""
+def _parse_frontmatter(text: str) -> tuple[dict[str, str], list[str]]:
+    """Return the YAML-ish frontmatter as ``(fields, duplicate_keys)``.
+    The repo uses a tiny subset (string scalars only, one key per
+    line) so a real YAML parser would be overkill — and would add a
+    CI dependency we don't have today. Duplicate keys are reported
+    rather than resolved: last-wins would let one documented value
+    silently mask the effective one."""
     if not text.startswith("---\n"):
-        return {}
+        return {}, []
     end = text.find("\n---\n", 4)
     if end == -1:
-        return {}
+        return {}, []
     body = text[4:end]
     out: dict[str, str] = {}
+    duplicates: list[str] = []
     for line in body.split("\n"):
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         if ":" not in line:
             continue
         key, _, val = line.partition(":")
-        out[key.strip()] = val.strip()
-    return out
+        key = key.strip()
+        if key in out:
+            duplicates.append(key)
+        out[key] = val.strip()
+    return out, duplicates
 
 
 def _check_dispatch(name: str, dispatch: str) -> list[str]:
@@ -106,12 +118,30 @@ def _check_dispatch(name: str, dispatch: str) -> list[str]:
         if len(tokens) < 2:
             errs.append(f"/{name}: dispatch {dispatch!r} missing script path")
             return errs
-        target = REPO / tokens[1]
+        rel = tokens[1]
     else:
-        target = REPO / tokens[0]
+        rel = tokens[0]
+    # The target must stay inside the repository. Fail closed on all
+    # escape shapes: an absolute path (``REPO / "/abs"`` would discard
+    # the base entirely), ``..`` traversal, and symlinks resolving
+    # outside the checkout.
+    rel_path = Path(rel)
+    if rel_path.is_absolute() or ".." in rel_path.parts:
+        errs.append(
+            f"/{name}: dispatch target {rel!r} is not a plain "
+            f"repo-relative path (absolute or parent traversal)"
+        )
+        return errs
+    target = (REPO / rel_path).resolve()
+    if not target.is_relative_to(REPO.resolve()):
+        errs.append(
+            f"/{name}: dispatch target {rel!r} resolves outside the "
+            f"repository"
+        )
+        return errs
     if not target.exists():
         errs.append(
-            f"/{name}: dispatch target {target.relative_to(REPO)} "
+            f"/{name}: dispatch target {rel} "
             f"does not exist (renamed or typo'd?)"
         )
     return errs
@@ -130,7 +160,12 @@ def main() -> int:
     excluded_via_frontmatter: set[str] = set()
     for md in md_files:
         name = md.stem
-        fm = _parse_frontmatter(md.read_text(encoding="utf-8"))
+        fm, duplicates = _parse_frontmatter(md.read_text(encoding="utf-8"))
+        errs.extend(
+            f"/{name}: duplicate frontmatter key {key!r} — the second "
+            f"value silently wins over the first; keep exactly one"
+            for key in duplicates
+        )
         dispatch = fm.get("dispatch")
         if not dispatch:
             errs.append(
