@@ -560,35 +560,53 @@ def _strip_rust_crate_hash(name: str) -> str:
 # ``<vector<int>>::method`` from a hypothetical C++ namespace prefix
 # spelling — vanishingly rare) also benefit from the same handling.
 
+# Deepest impl-block nesting the stripper will peel. Real qualified
+# projections nest two or three levels (``<<Foo as Trait>::Bar>::m``);
+# anything deeper is a degenerate or hostile linkage name. Bounding the
+# peel (a) keeps total work linear-ish instead of quadratic on
+# multi-megabyte names and (b) documents the stop condition — past the
+# cap the name is returned as-is, which at worst misaligns ONE lookup
+# form (an enrichment miss, never a crash).
+_MAX_IMPL_BLOCK_DEPTH = 32
+
+
 def _strip_impl_block_brackets(name: str) -> str:
     """Strip the outermost ``<...>`` from a Rust impl-block-qualified
     name. Returns ``name`` unchanged if the input doesn't start with
-    ``<`` or the bracket isn't followed by ``::``."""
-    if not name.startswith("<"):
-        return name
-    depth = 0
-    close_idx = -1
-    for i, ch in enumerate(name):
-        if ch == "<":
-            depth += 1
-        elif ch == ">":
-            depth -= 1
-            if depth == 0:
-                close_idx = i
-                break
-    if close_idx < 1:
-        return name
-    # Must be followed by ``::`` for this to be an impl-block prefix.
-    if not name[close_idx + 1:].startswith("::"):
-        return name
-    inner = name[1:close_idx]
-    rest = name[close_idx + 3:]
-    # Recurse on inner — Rust qualified projection
-    # ``<<Foo as Trait>::Bar>::method`` strips to ``Foo as Trait::Bar::method``
-    # in the outer pass; the inner ``<Foo as Trait>::Bar`` is itself a
-    # well-formed impl-block prefix.
-    inner = _strip_impl_block_brackets(inner)
-    return f"{inner}::{rest}"
+    ``<`` or the bracket isn't followed by ``::``.
+
+    Iterative with a depth cap: the inner prefix of a qualified
+    projection (``<<Foo as Trait>::Bar>::method`` — the inner
+    ``<Foo as Trait>::Bar`` is itself a well-formed impl-block prefix)
+    is peeled in a loop. These names come straight from a possibly
+    hostile binary's DW_AT_linkage_name — a crafted deeply-nested name
+    must cost bounded work and can never overflow the interpreter
+    stack (the resulting ``RecursionError`` escaped the classifier and
+    voided the whole enrichment pass)."""
+    suffixes: list[str] = []
+    for _ in range(_MAX_IMPL_BLOCK_DEPTH):
+        if not name.startswith("<"):
+            break
+        depth = 0
+        close_idx = -1
+        for i, ch in enumerate(name):
+            if ch == "<":
+                depth += 1
+            elif ch == ">":
+                depth -= 1
+                if depth == 0:
+                    close_idx = i
+                    break
+        if close_idx < 1:
+            break
+        # Must be followed by ``::`` for this to be an impl-block prefix.
+        if not name[close_idx + 1:].startswith("::"):
+            break
+        suffixes.append(name[close_idx + 3:])
+        name = name[1:close_idx]
+    for rest in reversed(suffixes):
+        name = f"{name}::{rest}"
+    return name
 
 
 
@@ -1445,6 +1463,7 @@ def enrich_inventory_with_binary_oracle(
     witness_missing = {k for k in _pins if k not in _analysed}
     identity_demoted |= witness_missing
     per_binary: list[tuple[Path, str, dict[str, BinaryOracleWitness]]] = []
+    classify_failed: set[str] = set()
     for bp in binary_paths:
         key = str(bp)
         pin = _pins.get(key)
@@ -1452,7 +1471,27 @@ def enrich_inventory_with_binary_oracle(
         if key in _pins and pin is not None:
             held = _pin_open_verified(bp, pin)
         try:
-            verdicts = classify_binary_evidence(names, bp)
+            # Per-binary isolation: the classifier parses hostile bytes
+            # (DWARF / symbol text from the target's build tree), and a
+            # parse blow-up over ONE binary must not void the sibling
+            # binaries' evidence — pre-isolation the exception escaped
+            # to the inventory builder's catch-all and dropped the
+            # whole enrichment pass. Fail closed on authority: the
+            # failed binary can no longer be evaluated, so the
+            # every-binary quantifier behind ``absent`` suppression no
+            # longer holds (handled via ``classify_failed`` below).
+            try:
+                verdicts = classify_binary_evidence(names, bp)
+            except Exception as exc:  # noqa: BLE001 — isolation boundary, see above
+                classify_failed.add(key)
+                verdicts = {}
+                logger.warning(
+                    "binary_oracle: classification failed for %s "
+                    "(%s: %s) — no verdicts from this binary, and "
+                    "'absent' verdicts from sibling binaries lose "
+                    "suppression authority for this run.",
+                    escape_nonprintable(key), type(exc).__name__,
+                    escape_nonprintable(str(exc)[:200]))
         finally:
             if held is not None and pin is not None:
                 post_failed = False
@@ -1641,6 +1680,11 @@ def enrich_inventory_with_binary_oracle(
     # verdicts) still demoted, and the flag must agree with the
     # ``identity_demoted`` list it summarises.
     any_identity_demoted = bool(identity_demoted)
+    # A classification failure is its own accounting channel (the
+    # summary must say what happened), with floor-drop-like authority
+    # semantics: the failed binary might contain any given function,
+    # so no surviving binary's ``absent`` may quantify "every binary".
+    any_classify_failed = bool(classify_failed)
 
     def _binary_suppression_grade(bp: Path) -> bool:
         """Per-binary authority marker, shared by the per-item records
@@ -1651,6 +1695,10 @@ def enrich_inventory_with_binary_oracle(
         return (str(bp) not in _no_suppress
                 and str(bp) not in identity_demoted
                 and not any_floor_dropped
+                # A sibling whose classification FAILED narrows the
+                # every-binary quantifier the same way a floor drop
+                # does — the failed binary's contents are unknown.
+                and not any_classify_failed
                 # A witnessed sibling MISSING (at load, or deleted
                 # after a verified load and dropped by the usability
                 # filter) narrows the every-binary quantifier for
@@ -1753,7 +1801,8 @@ def enrich_inventory_with_binary_oracle(
         # binary fallback).
         "earns_suppression": (not any_symbol_only and not any_guessed_build
                               and not any_floor_dropped
-                              and not any_identity_demoted),
+                              and not any_identity_demoted
+                              and not any_classify_failed),
         # Surfaced for operator-visible evidence-tier reporting.
         "any_symbol_only": any_symbol_only,
         "any_env_built_guessed": any_guessed_build,
@@ -1767,6 +1816,11 @@ def enrich_inventory_with_binary_oracle(
         # then enrich but never suppress (see suppression_grade above).
         "any_floor_dropped": any_floor_dropped,
         "floor_dropped": list(floor_dropped),
+        # True when classification blew up over a binary (hostile /
+        # malformed DWARF or symbol text) — its siblings still enrich
+        # at hint tier, but nothing suppresses this run.
+        "any_classify_failed": any_classify_failed,
+        "classify_failed": sorted(classify_failed),
     }
     return counts
 

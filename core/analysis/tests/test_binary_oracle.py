@@ -1501,3 +1501,131 @@ class TestTruncatedCaptureIsNotEvidence:
         out, ok = _run_status(["nm", "--defined-only", "/tmp/bin"])
         assert ok
         assert seen.get("max_capture_bytes") == _INSPECT_CAPTURE_BYTES
+
+
+class TestStripImplBlockBrackets:
+    """Rust impl-block bracket stripping over attacker-supplied
+    DW_AT_linkage_name bytes."""
+
+    def test_documented_shapes_strip(self):
+        from core.analysis.binary_oracle import _strip_impl_block_brackets
+
+        assert (_strip_impl_block_brackets("<regex::bytes::Match>::start")
+                == "regex::bytes::Match::start")
+        assert (_strip_impl_block_brackets("<<Foo as Trait>::Bar>::method")
+                == "Foo as Trait::Bar::method")
+        assert _strip_impl_block_brackets("<&str>::len") == "&str::len"
+        # Non-prefix shapes come back unchanged.
+        assert _strip_impl_block_brackets("plain::name") == "plain::name"
+        assert _strip_impl_block_brackets("<unclosed") == "<unclosed"
+        assert _strip_impl_block_brackets("<X>nocolons") == "<X>nocolons"
+
+    def test_hostile_deep_nesting_is_bounded(self):
+        """Linkage names are hostile-binary bytes: a crafted
+        deeply-nested name must cost bounded work and must never
+        overflow the interpreter stack — the resulting RecursionError
+        escaped the classifier and voided the whole enrichment pass."""
+        from core.analysis.binary_oracle import _strip_impl_block_brackets
+
+        name = "x"
+        for _ in range(10000):
+            name = f"<{name}>::m"
+        out = _strip_impl_block_brackets(name)
+        assert isinstance(out, str)
+
+
+class TestPerBinaryClassifyIsolation:
+    """One binary's classification blow-up must not void the sibling
+    binaries' evidence — and must strip suppression authority (the
+    every-binary quantifier behind ``absent`` can no longer be
+    evaluated)."""
+
+    @staticmethod
+    def _inventory() -> dict:
+        return {
+            "files": [{
+                "path": "src/app.c",
+                "language": "c",
+                "items": [
+                    {"kind": "function", "name": n, "metadata": {}}
+                    for n in ("alpha", "beta")
+                ],
+            }],
+        }
+
+    @staticmethod
+    def _setup(monkeypatch, tmp_path, bad_path=None):
+        import core.analysis.binary_oracle as bo_mod
+
+        good = tmp_path / "good-bin"
+        bad = tmp_path / "bad-bin"
+        good.write_bytes(b"\x7fELF good stub")
+        bad.write_bytes(b"\x7fELF bad stub")
+
+        def fake_classify(names, bp):
+            if bad_path is not None and bp == bad_path:
+                raise RecursionError("maximum recursion depth exceeded")
+            return {
+                n: bo_mod.BinaryOracleWitness(
+                    classification="symbol_present",
+                    build_id="bid-" + bp.name,
+                    binary_path=str(bp),
+                )
+                for n in names
+            }
+
+        monkeypatch.setattr(bo_mod, "classify_binary_evidence",
+                            fake_classify)
+        monkeypatch.setattr(bo_mod, "read_build_id", lambda p: "feedbead")
+        return good, bad
+
+    def test_one_binary_blowup_does_not_void_siblings(
+            self, monkeypatch, tmp_path, caplog):
+        import logging
+
+        from core.analysis.binary_oracle import (
+            enrich_inventory_with_binary_oracle,
+        )
+
+        good = tmp_path / "good-bin"
+        bad = tmp_path / "bad-bin"
+        self._setup(monkeypatch, tmp_path, bad_path=bad)
+        inv = self._inventory()
+        with caplog.at_level(logging.WARNING):
+            counts = enrich_inventory_with_binary_oracle(inv, [good, bad])
+
+        # The good binary's evidence survived...
+        assert counts["classified"] == 2
+        meta = inv["files"][0]["items"][0]["metadata"]["binary_oracle"]
+        assert meta["classification"] == "symbol_present"
+        assert [e["path"] for e in meta["binaries"]] == [str(good)]
+        # ...but nothing suppresses this run: the failed binary's
+        # contents are unknown.
+        assert all(e["suppression_grade"] is False for e in meta["binaries"])
+        summary = inv["binary_oracle"]
+        assert summary["any_classify_failed"] is True
+        assert summary["classify_failed"] == [str(bad)]
+        assert summary["earns_suppression"] is False
+        joined = " ".join(r.getMessage() for r in caplog.records)
+        assert "classification failed" in joined
+
+    def test_no_failure_keeps_full_authority(self, monkeypatch, tmp_path):
+        """Two-direction guard: with no blow-up the channel stays
+        quiet and authority is untouched."""
+        from core.analysis.binary_oracle import (
+            enrich_inventory_with_binary_oracle,
+        )
+
+        good = tmp_path / "good-bin"
+        bad = tmp_path / "bad-bin"
+        self._setup(monkeypatch, tmp_path, bad_path=None)
+        inv = self._inventory()
+        counts = enrich_inventory_with_binary_oracle(inv, [good, bad])
+
+        assert counts["classified"] == 2
+        summary = inv["binary_oracle"]
+        assert summary["any_classify_failed"] is False
+        assert summary["classify_failed"] == []
+        assert summary["earns_suppression"] is True
+        meta = inv["files"][0]["items"][0]["metadata"]["binary_oracle"]
+        assert all(e["suppression_grade"] is True for e in meta["binaries"])
