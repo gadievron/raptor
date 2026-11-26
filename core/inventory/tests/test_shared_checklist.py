@@ -233,12 +233,12 @@ class TestSetupChecklistSymlink(unittest.TestCase):
             projects_dir.mkdir(parents=True, exist_ok=True)
             active_link = projects_dir / ".active"
 
-            save_json(projects_dir / "_test_shared.json", {
-                "name": "_test_shared",
+            save_json(projects_dir / "test-shared.json", {
+                "name": "test-shared",
                 "target": "./target",
                 "output_dir": str(project_dir),
             })
-            active_link.symlink_to("_test_shared.json")
+            active_link.symlink_to("test-shared.json")
 
             _setup_checklist_symlink(run_dir)
             self.assertTrue((run_dir / "checklist.json").is_symlink())
