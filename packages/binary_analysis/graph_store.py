@@ -18,6 +18,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Self, TYPE_CHECKING
+from urllib.parse import quote
 
 from core.hash import sha256_file
 
@@ -87,6 +88,49 @@ def open_graph(path: Path) -> sqlite3.Connection:
             pass  # Retain the setup refusal after attempting connection cleanup.
         raise
     return conn
+
+
+def open_graph_readonly(path: Path) -> sqlite3.Connection:
+    """Open an EXISTING store for queries without write ability.
+
+    Query lanes must not be able to mutate the store — or its directory
+    — they are pointed at: the writable open above creates the parent
+    dir, switches the journal mode, and runs (version-stamping)
+    migration, all WRITES. When the queried path comes from discovery
+    over less-trusted trees, those writes would land in a directory an
+    adversary chose. ``mode=ro`` makes sqlite refuse every write at
+    open scope rather than by caller discipline; there is no mkdir, no
+    journal-mode switch and no migration here. The newer-schema refusal
+    is kept (a pure PRAGMA read). Older stores stay readable: the only
+    historical upgrade (v1→v2) rebuilt auxiliary-table constraints and
+    changed none of the queried tables or columns.
+    """
+    path = Path(path)
+    conn = sqlite3.connect(f"file:{quote(str(path))}?mode=ro", uri=True)
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout=5000")
+        current = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        if current > SCHEMA_VERSION:
+            msg = (f"binary graph schema version {current} is newer "
+                   f"than this RAPTOR ({SCHEMA_VERSION})")
+            raise RuntimeError(msg)
+    except BaseException:
+        try:
+            conn.close()
+        except BaseException:
+            pass  # Retain the setup refusal after attempting connection cleanup.
+        raise
+    return conn
+
+
+@contextmanager
+def graph_read_connection(path: Path) -> Iterator[sqlite3.Connection]:
+    conn = open_graph_readonly(path)
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 @contextmanager
@@ -515,7 +559,7 @@ class BinaryGraphStore:
 def graph_summary(path: Path) -> dict[str, Any]:
     if not Path(path).exists():
         return {"exists": False, "path": str(path)}
-    with graph_connection(path) as conn:
+    with graph_read_connection(path) as conn:
         latest = conn.execute("SELECT * FROM snapshots ORDER BY created_at DESC LIMIT 1").fetchone()
         if latest is None:
             return {"exists": True, "path": str(path), "nodes": {}, "edges": {}, "evidence": {}}
@@ -554,7 +598,7 @@ def graph_summary(path: Path) -> dict[str, Any]:
 def query_edges(path: Path, *, kind: str | None = None) -> list[dict[str, Any]]:
     if not Path(path).exists():
         return []
-    with graph_connection(path) as conn:
+    with graph_read_connection(path) as conn:
         latest = conn.execute("SELECT id FROM snapshots ORDER BY created_at DESC LIMIT 1").fetchone()
         if latest is None:
             return []
@@ -591,7 +635,7 @@ def query_edges(path: Path, *, kind: str | None = None) -> list[dict[str, Any]]:
 def query_evidence(path: Path, *, tier: str | None = None) -> list[dict[str, Any]]:
     if not Path(path).exists():
         return []
-    with graph_connection(path) as conn:
+    with graph_read_connection(path) as conn:
         latest = conn.execute("SELECT id FROM snapshots ORDER BY created_at DESC LIMIT 1").fetchone()
         if latest is None:
             return []
@@ -629,8 +673,10 @@ __all__ = [
     "GRAPH_FILENAME",
     "BinaryGraphStore",
     "graph_path_for_run",
+    "graph_read_connection",
     "graph_summary",
     "open_graph",
+    "open_graph_readonly",
     "query_edges",
     "query_evidence",
     "stable_edge_id",

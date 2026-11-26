@@ -512,3 +512,103 @@ def test_add_artifact_digest_matches_streamed_hash(tmp_path: Path):
         conn = store._get_conn()
         row = conn.execute("SELECT sha256 FROM artifacts").fetchone()
     assert row["sha256"] == hashlib.sha256(artifact.read_bytes()).hexdigest()
+
+
+# ── read-only query lanes ─────────────────────────────────────────────
+
+
+def _closed_store_with_edge(db_path: Path, sha: str) -> None:
+    store = BinaryGraphStore(db_path)
+    try:
+        snap_id = store.begin_snapshot(sha, "/bin/test", db_path.parent)
+        n1 = store.add_node(snap_id, sha, "function", "a", name="func_a")
+        n2 = store.add_node(snap_id, sha, "function", "b", name="func_b")
+        store.add_edge(snap_id, sha, "CALLS", n1, n2)
+    finally:
+        store.close()
+
+
+def test_query_lanes_leave_database_untouched(tmp_path: Path):
+    """The query helpers are pure reads: the writable open path's
+    dir-create / journal-mode switch / migration stamp must never run
+    on a queried path, and the database bytes must come back
+    identical. WAL shared-memory sidecars (-shm/-wal) are the one
+    tolerated artifact — sqlite needs them to coordinate even read
+    locks on a WAL store."""
+    db_path = tmp_path / "graph" / "binary-graph.sqlite"
+    _closed_store_with_edge(db_path, "feed5678" * 8)
+
+    before_files = {p.name for p in db_path.parent.iterdir()}
+    before_bytes = db_path.read_bytes()
+
+    assert graph_summary(db_path)["exists"] is True
+    assert len(query_edges(db_path)) == 1
+    assert query_evidence(db_path) == []
+
+    created = {p.name for p in db_path.parent.iterdir()} - before_files
+    assert created <= {db_path.name + "-shm", db_path.name + "-wal"}
+    assert db_path.read_bytes() == before_bytes
+
+
+def test_readonly_connection_refuses_writes(tmp_path: Path):
+    from packages.binary_analysis.graph_store import graph_read_connection
+
+    db = tmp_path / "graph.sqlite"
+    open_graph(db).close()
+    with graph_read_connection(db) as conn:
+        assert int(conn.execute("PRAGMA user_version").fetchone()[0]) \
+            == SCHEMA_VERSION
+        with pytest.raises(sqlite3.OperationalError):
+            conn.execute(
+                "INSERT INTO metadata(key, value) VALUES ('x', 'y')")
+
+
+def test_readonly_open_keeps_newer_schema_refusal(tmp_path: Path):
+    from packages.binary_analysis.graph_store import open_graph_readonly
+
+    db = tmp_path / "graph.sqlite"
+    open_graph(db).close()
+    bump = sqlite3.connect(db)
+    try:
+        bump.execute(f"PRAGMA user_version={SCHEMA_VERSION + 1}")
+        bump.commit()
+    finally:
+        bump.close()
+    with pytest.raises(RuntimeError, match="newer"):
+        open_graph_readonly(db)
+
+
+def test_query_lanes_still_read_v1_stores(tmp_path: Path):
+    """Read-only queries skip migration; the v1→v2 upgrade changed only
+    auxiliary-table constraints, so v1 stores must stay queryable
+    as-is (two-direction guard on dropping migration from reads)."""
+    db = tmp_path / "graph.sqlite"
+    _make_v1_db(db)
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute(
+            "INSERT INTO snapshots(id, binary_sha256, binary_path,"
+            " created_at, producer_run) VALUES"
+            " ('snap1', 'aa', '/bin/t', '2026-01-01T00:00:00+00:00', 'r')")
+        conn.execute(
+            "INSERT INTO nodes(snapshot_id, id, kind, stable_key, name)"
+            " VALUES ('snap1', 'n1', 'function', 'a', 'func_a'),"
+            " ('snap1', 'n2', 'function', 'b', 'func_b')")
+        conn.execute(
+            "INSERT INTO edges(snapshot_id, id, kind, src_id, dst_id)"
+            " VALUES ('snap1', 'e1', 'CALLS', 'n1', 'n2')")
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert graph_summary(db)["edges"] == {"CALLS": 1}
+    edges = query_edges(db, kind="CALLS")
+    assert [(e["source"]["name"], e["target"]["name"]) for e in edges] \
+        == [("func_a", "func_b")]
+
+    # And the queries really did NOT migrate: the store is still v1.
+    check = sqlite3.connect(db)
+    try:
+        assert int(check.execute("PRAGMA user_version").fetchone()[0]) == 1
+    finally:
+        check.close()

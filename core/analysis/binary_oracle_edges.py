@@ -314,7 +314,12 @@ def _try_graph_store(binary_path: Path) -> BinaryEdgeIndex | None:
     if not requested_sha256:
         return None
     raptor_dir_str = os.environ.get("RAPTOR_DIR", "")
-    search_dirs = [binary_path.parent]
+    # Search only RAPTOR-owned trees (out/ and the active project dir —
+    # the only places mapping runs write graph stores). The binary's
+    # OWN directory is the scanned target's build tree: a sqlite file
+    # planted next to the binary would be parsed by this trusted,
+    # unsandboxed process, and nothing legitimate ever lives there.
+    search_dirs: list[Path] = []
     raptor_dir = Path(raptor_dir_str) if raptor_dir_str else None
     if raptor_dir and raptor_dir.is_dir():
         out_dir = raptor_dir / "out"

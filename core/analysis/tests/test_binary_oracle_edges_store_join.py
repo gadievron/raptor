@@ -71,3 +71,28 @@ def test_graph_store_found_under_active_project_dir(tmp_path, monkeypatch):
     reused = _try_graph_store(binary)
     assert reused is not None
     assert [(e.caller, e.callee) for e in reused.edges] == [("main", "leaf")]
+
+
+def test_store_in_binary_tree_is_not_consumed(tmp_path, monkeypatch):
+    """A graph store planted in the BINARY'S OWN directory tree — the
+    scanned target's build dir, attacker-writable by definition — must
+    never be discovered: its sqlite bytes would be parsed by this
+    trusted, unsandboxed process, and its planted edges would steer
+    reachability. Mapping runs only ever write stores under
+    RAPTOR-owned out/ and project dirs."""
+    import core.project.project as project_mod
+
+    raptor_dir = tmp_path / "raptor"
+    (raptor_dir / "out").mkdir(parents=True)
+    monkeypatch.setenv("RAPTOR_DIR", str(raptor_dir))
+    monkeypatch.setattr(project_mod, "PROJECTS_DIR",
+                        tmp_path / "projects")
+
+    build = tmp_path / "target-build"
+    build.mkdir()
+    binary = build / "target"
+    binary.write_bytes(b"\x7fELF target bytes")
+    sha = hashlib.sha256(binary.read_bytes()).hexdigest()
+    _write_store(build / "planted-run", sha, binary, "main", "evil_leaf")
+
+    assert _try_graph_store(binary) is None
