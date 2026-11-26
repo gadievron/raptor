@@ -328,6 +328,51 @@ def test_ipv6_literal_spellings_of_loopback_are_blocked(literal):
         client._resolve_and_validate(literal)
 
 
+# -- NAT64 / IPv4-in-IPv6 embedded-target vetting ------------------------------
+#
+# IPv6 forms that EMBED an IPv4 address classify is_global == True
+# while a NAT64 translator (or legacy IPv4-compatible routing) forwards
+# the connection to the embedded — non-global — IPv4. The gate must
+# extract and re-check every embedded IPv4, exactly like the sandbox
+# egress proxy's gate does.
+
+
+@pytest.mark.parametrize("literal", [
+    "http://[64:ff9b::169.254.169.254]/",  # NAT64 WKP, cloud metadata
+    "http://[64:ff9b::10.0.0.5]/",         # NAT64 WKP, RFC 1918
+    "http://[::10.0.0.1]/",                # deprecated IPv4-compatible
+])
+def test_ipv6_embedded_v4_literals_are_blocked(literal):
+    client = WebClient("http://target.example", block_private_ips=True)
+    with pytest.raises(ValueError, match="non-global"):
+        client._resolve_and_validate(literal)
+
+
+def test_nat64_dns_answer_is_blocked(monkeypatch):
+    """A hostile target zone answering ``AAAA 64:ff9b::169.254.169.254``
+    steers a scanner on a DNS64/NAT64 segment into the metadata service
+    — the post-resolution loop must vet the embedded IPv4, not just the
+    (global-classifying) IPv6 wrapper."""
+    answer = [(socket.AF_INET6, socket.SOCK_STREAM, 6, "",
+               ("64:ff9b::169.254.169.254", 80, 0, 0))]
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: answer)
+    client = WebClient("http://target.example", block_private_ips=True)
+    with pytest.raises(ValueError, match="non-global"):
+        client._resolve_and_validate("http://target.example/")
+
+
+def test_operator_declared_nat64_nsp_prefix_is_honoured(monkeypatch):
+    """RFC 6052 §2.2 network-specific prefixes are deployment config:
+    once declared via RAPTOR_NAT64_PREFIXES, their embedded IPv4 gets
+    the same re-check as the well-known prefix."""
+    monkeypatch.setenv("RAPTOR_NAT64_PREFIXES", "64:ff00::/96")
+    client = WebClient("http://target.example", block_private_ips=True)
+    with pytest.raises(ValueError, match="non-global"):
+        client._resolve_and_validate("http://[64:ff00::169.254.169.254]/")
+    # Global IPv6 outside any declared prefix still validates.
+    assert client._resolve_and_validate("http://[2600::1]/") is None
+
+
 # -- body-read wall-clock deadline (drip-fed responses) ------------------------
 
 

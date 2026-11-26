@@ -11,6 +11,7 @@ Handles HTTP requests with safety features:
 
 import contextlib
 import ipaddress
+import os
 import socket
 import threading
 import time
@@ -111,6 +112,86 @@ def _canonical_pin_host(host: object) -> str:
     "" never appears as a pin key, so the wrapper treats it as a miss.
     """
     return canonical_transport_host(host)
+
+
+# SSRF gate for IPv6 answers that EMBED an IPv4 address. Mirrors the
+# sandbox egress proxy's gate (core/sandbox/proxy.py: _nat64_prefixes /
+# _ip_is_blocked) — keep the two in sync.
+_NAT64_WKP = ipaddress.ip_network("64:ff9b::/96")
+
+
+def _nat64_prefixes() -> list[ipaddress.IPv6Network]:
+    """NAT64 prefixes whose embedded IPv4 must be re-checked.
+
+    Always includes the RFC 6052 well-known prefix. Deployments using a
+    NETWORK-SPECIFIC prefix (RFC 6052 §2.2) declare it via
+    ``RAPTOR_NAT64_PREFIXES`` (comma-separated IPv6 ``/96`` networks).
+    Exactly ``/96`` is accepted: this gate extracts the embedded IPv4
+    from the low 32 bits, and RFC 6052's wider prefix lengths place it
+    at a prefix-length-dependent position — decoding them as
+    low-32-bits would re-check the WRONG address. Malformed entries are
+    dropped loudly. Parsed per call; validation runs once per request,
+    not on a hot loop.
+    """
+    nets: list[ipaddress.IPv6Network] = [_NAT64_WKP]
+    raw = os.environ.get("RAPTOR_NAT64_PREFIXES", "")
+    for tok in raw.split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        try:
+            net = ipaddress.ip_network(tok, strict=False)
+        except ValueError:
+            logger.warning(
+                "RAPTOR_NAT64_PREFIXES: ignoring malformed prefix %r",
+                tok,
+            )
+            continue
+        if not isinstance(net, ipaddress.IPv6Network) or net.prefixlen != 96:
+            logger.warning(
+                "RAPTOR_NAT64_PREFIXES: ignoring %r (exactly an IPv6 "
+                "/96 network is required — this gate extracts the "
+                "embedded IPv4 from the low 32 bits; RFC 6052's wider "
+                "prefixes place it elsewhere)", tok,
+            )
+            continue
+        nets.append(net)
+    return nets
+
+
+def _non_global_answer(
+    ip_obj: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """Return the non-global address that makes ``ip_obj`` unsafe, or None.
+
+    ``is_global == False`` covers the full "not for public routing" set
+    directly. IPv6 forms that EMBED an IPv4 address additionally evade
+    that check for the embedded target: the NAT64 well-known prefix
+    (64:ff9b::/96, RFC 6052 — a NAT64 gateway forwards the connection
+    to the embedded IPv4) and the deprecated IPv4-compatible
+    ``::a.b.c.d`` form both classify as global while smuggling
+    169.254.169.254 / RFC 1918 targets past the gate
+    (``64:ff9b::169.254.169.254`` has ``is_global == True``).
+    ``ipv4_mapped`` (::ffff:) non-global forms are already caught by
+    ``is_global`` itself but are re-checked for completeness. Every
+    embedded IPv4 is extracted and re-vetted; the first non-global one
+    is returned (``ip_obj`` itself when it is directly non-global).
+    """
+    if not ip_obj.is_global:
+        return ip_obj
+    if isinstance(ip_obj, ipaddress.IPv6Address):
+        embedded: list[ipaddress.IPv4Address] = []
+        if any(ip_obj in net for net in _nat64_prefixes()):
+            embedded.append(ipaddress.IPv4Address(int(ip_obj) & 0xFFFFFFFF))
+        # IPv4-compatible ::a.b.c.d (deprecated, ::/96 minus ::/112).
+        if (int(ip_obj) >> 32) == 0 and int(ip_obj) > 1:
+            embedded.append(ipaddress.IPv4Address(int(ip_obj) & 0xFFFFFFFF))
+        if ip_obj.ipv4_mapped is not None:
+            embedded.append(ip_obj.ipv4_mapped)
+        for v4 in embedded:
+            if not v4.is_global:
+                return v4
+    return None
 
 
 def _pinning_getaddrinfo(host, port, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
@@ -262,9 +343,14 @@ class WebClient:
             # error wording.)
             ip_obj = None
         if ip_obj is not None:
-            if not ip_obj.is_global:
+            offender = _non_global_answer(ip_obj)
+            if offender is not None:
+                detail = (
+                    "" if offender is ip_obj
+                    else f" (embeds non-global IPv4 {offender})"
+                )
                 msg = (
-                    f"Blocked request to non-global IP {hostname} — "
+                    f"Blocked request to non-global IP {hostname}{detail} — "
                     f"set block_private_ips=False to scan internal targets"
                 )
                 raise ValueError(msg)
@@ -298,9 +384,16 @@ class WebClient:
                 ip_obj = ipaddress.ip_address(ip_str)
             except ValueError:
                 continue
-            if not ip_obj.is_global:
+            offender = _non_global_answer(ip_obj)
+            if offender is not None:
+                reason = (
+                    f"resolved to non-global IP {ip_str}"
+                    if offender is ip_obj
+                    else f"resolved to {ip_str}, which embeds non-global "
+                         f"IPv4 {offender} (NAT64 / IPv4-in-IPv6)"
+                )
                 msg = (
-                    f"DNS for {hostname} resolved to non-global IP {ip_str} — "
+                    f"DNS for {hostname} {reason} — "
                     f"blocked to prevent SSRF (set block_private_ips=False "
                     f"to scan internal targets)"
                 )
