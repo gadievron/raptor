@@ -117,7 +117,7 @@
     {
       "name": "uberllm",
       "auth_scheme": "Bearer",
-      "upstream_base_url": "https://api.uberllm.dev",
+      "upstream_base_url": "https://api.martllm.com",
       "api_path": "/v1"
     },
     {
