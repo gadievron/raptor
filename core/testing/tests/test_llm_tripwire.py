@@ -155,3 +155,58 @@ def test_terminal_summary_escapes_hostile_rows(tmp_path):
     for raw in ("\x1b", "\x07", "\x9b"):
         assert raw not in joined, "raw control byte reached the terminal"
     assert "\\x1b" in joined  # escaped, not stripped: evidence survives
+
+
+def test_terminal_summary_survives_torn_journal_lines(tmp_path):
+    """Workers append journal/connection rows concurrently; a torn
+    (partial) line or a valid-but-non-object JSON line must not raise
+    during the summary and mask the surviving evidence rows."""
+    from types import SimpleNamespace
+
+    from core.testing import llm_tripwire as tw
+
+    directory = tmp_path / "journal"
+    directory.mkdir()
+    good_row = json.dumps({
+        "time_ns": 0, "worker": "gw0", "active_test": "pkg/t.py::test_x",
+        "previous_test": None, "method": "POST", "path": "/v1/chat",
+        "body_excerpt": "",
+    })
+    (directory / "gw0.jsonl").write_text(
+        '{"time_ns": 0, "worker": "gw1", "acti\n'  # torn mid-write
+        "42\n"                                      # valid non-object JSON
+        + good_row + "\n",
+    )
+    host_dir = tmp_path / "host"
+    host_dir.mkdir()
+    good_conn = json.dumps({
+        "owner_pid": 1234, "worker": "gw0",
+        "origin_test": "pkg/t.py::test_x", "active_test": "pkg/t.py::test_x",
+        "hostname": "example.com",
+    })
+    (host_dir / "connections.jsonl").write_text(
+        '{"owner_pid": 99, "wor\n'  # torn mid-write
+        "[]\n"                       # valid non-object JSON
+        + good_conn + "\n",
+    )
+    listener = SimpleNamespace(count=1, worker_requests=0,
+                               journal_errors=[], host_dir=host_dir)
+
+    lines: list[str] = []
+
+    class _FakeReporter:
+        config = SimpleNamespace(stash={tw._KEY: (listener, directory, {})})
+
+        def section(self, title, **kw):
+            lines.append(title)
+
+        def write_line(self, line, **kw):
+            lines.append(line)
+
+    tw.pytest_terminal_summary(_FakeReporter())
+    joined = "\n".join(lines)
+    assert "LLM tripwire FAILED" in joined
+    assert "pkg/t.py::test_x" in joined        # surviving journal row printed
+    assert "LLM hostname tripwire FAILED" in joined
+    assert "pid=1234" in joined                # surviving connection row printed
+    assert "host=example.com" in joined

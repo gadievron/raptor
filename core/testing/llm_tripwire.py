@@ -235,7 +235,15 @@ def pytest_terminal_summary(terminalreporter):
     listener, directory, _ = terminalreporter.config.stash[_KEY]
     rows = []
     for path in sorted(directory.glob("*.jsonl")):
-        rows.extend(json.loads(line) for line in path.read_text().splitlines())
+        # Workers append concurrently; a torn or otherwise unparsable
+        # line must not raise here and mask the remaining evidence.
+        for line in path.read_text().splitlines():
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict):
+                rows.append(row)
     if rows or listener.count or listener.worker_requests:
         terminalreporter.section("LLM tripwire FAILED", red=True, bold=True)
         for row in rows[:20]:
@@ -255,10 +263,20 @@ def pytest_terminal_summary(terminalreporter):
         if path.exists() and path.stat().st_size:
             terminalreporter.section("LLM hostname tripwire FAILED", red=True, bold=True)
             for line in path.read_text().splitlines()[:20]:
-                row = json.loads(line)
+                # Same torn-line hazard as the journal rows above: a
+                # partial append must not raise and suppress the very
+                # evidence this section exists to print.
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(row, dict):
+                    continue
                 terminalreporter.write_line(
-                    _clean(f"pid={row['owner_pid']} worker={row['worker']} "
-                           f"origin={row['origin_test']} active={row['active_test']} "
+                    _clean(f"pid={row.get('owner_pid', '<unknown>')} "
+                           f"worker={row.get('worker', '<unknown>')} "
+                           f"origin={row.get('origin_test', '<unknown>')} "
+                           f"active={row.get('active_test', '<unknown>')} "
                            f"host={row.get('hostname', '<unknown>')}"), red=True,
                 )
             terminalreporter.write_line(f"Connection evidence: {path}")
