@@ -16,12 +16,13 @@ the current HEAD.
 
 import hashlib
 import logging
-import os
 import platform
 import subprocess
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
+
+from core.security.env_sanitisation import safe_subprocess_env
 
 logger = logging.getLogger(__name__)
 
@@ -66,17 +67,33 @@ def _git(repo_dir: Path, *args: str, untrusted: bool = False) -> str | None:
     overrides that neutralise those vectors. RAPTOR's own checkout is trusted,
     so ``source_control_snapshot`` leaves it False.
     """
-    # get_safe_env strips shell-evaluated vars (EDITOR/PAGER/…) before we spawn
-    # git — cheap hygiene and the house rule for every subprocess. Lazy import
-    # keeps core.config off this module's import path (no cycle at import time).
+    # safe_subprocess_env is the canonical env chokepoint: get_safe_env()'s
+    # allowlist when core.config is importable, else a minimal fail-CLOSED
+    # allowlist — NEVER the inherited parent environment. The previous
+    # fallback here copied os.environ wholesale on config failure, handing
+    # a git child spawned against a SCANNED TARGET the operator's complete
+    # environment (API keys/tokens, GIT_SSH_COMMAND, LD_PRELOAD-class vars).
     try:
-        from core.config import RaptorConfig
-        env = RaptorConfig.get_safe_env()
-    except Exception:  # noqa: BLE001
-        logger.warning("get_safe_env unavailable; using inherited env")
-        env = os.environ.copy()
+        env = safe_subprocess_env()
+    except OSError:
+        # Only reachable where even the minimal fallback cannot resolve a
+        # private TMPDIR (see env_sanitisation.subprocess_tmpdir). Never
+        # raises: degrade to unknowable rather than spawn un-sanitised.
+        return None
     if untrusted:
-        from core.git.clone import safe_git_command
+        # Inside the never-raise envelope: core.git.clone imports
+        # core.config at module top, so the same degraded install the env
+        # chokepoint's fallback survives would otherwise raise out of
+        # _git right here. Without the safe per-invocation overrides a
+        # hostile .git/config must not be probed at all — skip the probe
+        # and record nothing.
+        try:
+            from core.git.clone import safe_git_command
+        except Exception:  # noqa: BLE001 — never-raise contract
+            logger.warning(
+                "safe_git_command unavailable; skipping git probe of "
+                "untrusted repo (provenance degrades to None)")
+            return None
         cmd = safe_git_command("-C", str(repo_dir), *args)
     else:
         cmd = ["git", "-C", str(repo_dir), *args]
