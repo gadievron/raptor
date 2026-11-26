@@ -106,8 +106,14 @@ class SandboxDisableRefusedError(SandboxSetupError):
 
     The disable is a request for tier NONE, honoured only when
     ``core.sandbox.disable_consent.resolve_disable_consent`` finds a
-    consent source (interactive TTY on stdin+stderr, or a validated
-    launcher/CI-minted nonce). Refusal means the run STOPS — the
+    validated consent nonce: ``RAPTOR_NO_SANDBOX_NONCE`` backed by a
+    fresh mode-0600, uid-owned consent file — minted explicitly by the
+    operator/CI mint script, or extended across RAPTOR's own worker
+    spine (``export_disable_consent``) from a process that already
+    holds an accepted consent. There is deliberately NO
+    interactive-TTY consent arm: real TTYs on stdin/stderr are one pty
+    wrapper away for any composed child and carry no authority (see
+    disable_consent.py). Refusal means the run STOPS — the
     request is never silently downgraded to "run sandboxed anyway"
     (which would quietly invert the operator's stated intent) and
     never granted with a warning.
