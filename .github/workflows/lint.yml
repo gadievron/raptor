@@ -266,6 +266,9 @@ jobs:
       - name: Run run-dir read census against baseline
         run: python3 .github/scripts/check_run_dir_reads.py
 
+      - name: Run launch-contract closure gate against the catalogue
+        run: python3 .github/scripts/check_launch_contracts.py
+
       # The ReDoS idiom census rides this job rather than keeping its
       # own single-step job in tests.yml: same whole-repo-invariant
       # shape (its universe is the runtime tree), same checkout, and

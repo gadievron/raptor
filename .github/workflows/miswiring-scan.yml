@@ -152,3 +152,9 @@ jobs:
         timeout-minutes: 10
         run: |
           python3 .github/scripts/check_tracked_file_census.py --require-git
+
+      - name: Run launch-contract closure gate against the catalogue
+        if: ${{ !cancelled() && steps.python.outcome == 'success' }}
+        timeout-minutes: 10
+        run: |
+          python3 .github/scripts/check_launch_contracts.py

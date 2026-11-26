@@ -12,6 +12,7 @@
     ".claude/skills/oss-forensics/github-evidence-kit/tests/test_integration.py": "e3e98a4128fb296ade327e627d5eb0e913521cdbd2db1f0ab43261d70ed958d9",
     ".claude/skills/oss-forensics/github-evidence-kit/tests/test_root_conftest_bridge.py": "a8a0a240e86b0dbce91bbe5bbff1189a0d27200ed37b062459af7a25c5a8df41",
     ".devcontainer/test_devcontainer.py": "00c05a56b81f19a6fe0bd9890c0bee220f3c2954d70dd69e48770c6cc0f2ab62",
+    ".github/scripts/check_launch_contracts.py": "d97bc358cd02d8aaebfd3295a85b1d17abc5bce2ee05c9a27c7cede89343cd03",
     ".github/scripts/check_node_release.py": "4431eeffdf7a7b2e0c123afef40702d8bf57fe81a3546bf42654e1e028a917c9",
     ".github/scripts/check_playwright_source.py": "ddc86e55b2cf2f8f2fce9798aa27a54455085ca5db875910facdd7e84b061864",
     ".github/scripts/check_report_writer_closure.py": "61149d179c6fde56a07f3500cb825a353825adae9fb70eed5ff2232fc2ad2a25",
@@ -30,14 +31,15 @@
     ".github/scripts/test_impact.py": "9e3b7b20a19b6e2d5ab604a11e588751fc77ecba82338d7825713af34913adbe",
     ".github/scripts/tests/test_ast_census.py": "ad139b3ff37e7c8bc692d05b2ca4b2134232383743eaa28f67dbea87b8e25207",
     ".github/scripts/tests/test_check_canonical_json.py": "32063bf1594c28340697542e2cb12db9e6c925ee07354439c5a834f459d43961",
-    ".github/scripts/tests/test_check_command_metadata.py": "a753fa2c2a98d401630418ba4ecf67605f26bd120cde39d43e25624f06e55e69",
+    ".github/scripts/tests/test_check_command_metadata.py": "775521dfda18110cfee93f781bb4e2ebec21d775c49b6b2355aa8687f513fd82",
     ".github/scripts/tests/test_check_env_docs.py": "9848de229fc002ed1116aa8462337e01a0c256de35c38a1eea488d041f1acb5c",
+    ".github/scripts/tests/test_check_launch_contracts.py": "efe6c103aa1dfdb526812ad5a31fe8106ca83e4757e664441278b77462807ec9",
     ".github/scripts/tests/test_check_miswiring_detector.py": "b95169318ed459412ea6ea1a08e12caab5883b7c86c5c4a2671c6a46b19768d7",
-    ".github/scripts/tests/test_check_optional_dep_imports.py": "ad09e62e2723ae60255a227d4ddc3d6bcaa00ebcaead7fca3a7fc555bfcafc1b",
+    ".github/scripts/tests/test_check_optional_dep_imports.py": "e53d146af171e1989b8e86ced74cd30b8186a00f9dcce315ad25362623cc824f",
     ".github/scripts/tests/test_check_skip_budget.py": "3304a40453b55d95ef549246640016a73a28a8da05d6ceaea049aa05b21ae332",
     ".github/scripts/tests/test_check_transcript_seam.py": "97a681a1bc1373209bc7645afc0539b0856af143e05d665d053c65a0cd50bf1a",
     ".github/scripts/tests/test_check_vocab_lists.py": "fa11d04a8a68973e555f814a072013d5dacbb0e2aa2d5ab87182cad9a64a61e7",
-    ".github/scripts/tests/test_check_workflow_pipefail.py": "cc67731c301cc2e65f80e79b8310d38e29541479616f5e4a6c3eac2a008aa06a",
+    ".github/scripts/tests/test_check_workflow_pipefail.py": "07cb38aa157bf1e4105a6fde52f85c269c5541f55c04ee0d189a388e0365e078",
     ".github/scripts/tests/test_ci_cache_key.py": "04bb2148a88b0d407547771e32b8ac812b7cf613edb09167f49bf0e53c70368b",
     ".github/scripts/tests/test_ci_publish_scope.py": "56b701a787ccef8d44bc84cfce05f8f3fe42517fcb1aebc3013901c76b2e0301",
     ".github/scripts/tests/test_ci_push_base.py": "7bb71bca602e7626ae2b0b8f2535a02d73ee508708adfaeb7aba85661c7ad891",
@@ -1720,6 +1722,54 @@
       "purpose": ".devcontainer/test_devcontainer.py:run_all_tests: delegates through reviewed helper(s) check_binary; producer source and this exact caller are pinned."
     },
     {
+      "path": ".github/scripts/check_launch_contracts.py",
+      "scope": "",
+      "signature": "612de6187c097f49a7c6002bfa6b205845dac081e9c3dc6b160fd9a6f584c826",
+      "count": 1,
+      "contract": "non-cli-probe",
+      "purpose": ".github/scripts/check_launch_contracts.py:<module>: delegates through reviewed helper(s) main; producer source and this exact caller are pinned."
+    },
+    {
+      "path": ".github/scripts/check_launch_contracts.py",
+      "scope": "_load_inventory_module",
+      "signature": "17738dab3d6dc14d88776054512de0307b04a94d1b91fc896c1e645cde8bf97b",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": ".github/scripts/check_launch_contracts.py:_load_inventory_module: scoped test loader/library entry; registry fixture now restores authorization and scratch caches together; parser/path assertions remain native."
+    },
+    {
+      "path": ".github/scripts/check_launch_contracts.py",
+      "scope": "closure_failures",
+      "signature": "d171e52ea0927a599c65dc65cc247f77f95ccd3e0fd1d21d81abb9e723f3ea13",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": ".github/scripts/check_launch_contracts.py:closure_failures: delegates through reviewed helper(s) _load_inventory_module; producer source and this exact caller are pinned."
+    },
+    {
+      "path": ".github/scripts/check_launch_contracts.py",
+      "scope": "main",
+      "signature": "27fb9bff698c3d3aaa56c18e4e72c64dffe8b6b0617aec855b6e2b4fa0e2c8e1",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": ".github/scripts/check_launch_contracts.py:main: delegates through reviewed helper(s) closure_failures; producer source and this exact caller are pinned."
+    },
+    {
+      "path": ".github/scripts/check_launch_contracts.py",
+      "scope": "main",
+      "signature": "b501aa61d12a5a6611c6e8410587540375c91047ef2ea6e5eea4be2ef97b58f3",
+      "count": 1,
+      "contract": "non-cli-probe",
+      "purpose": ".github/scripts/check_launch_contracts.py:main: delegates through reviewed helper(s) tracked_paths; producer source and this exact caller are pinned."
+    },
+    {
+      "path": ".github/scripts/check_launch_contracts.py",
+      "scope": "tracked_paths",
+      "signature": "fe4b03d4a4077454f07815dc56a6950fdc27ed19d57c8a79a35913ef93760403",
+      "count": 1,
+      "contract": "non-cli-probe",
+      "purpose": ".github/scripts/check_launch_contracts.py:tracked_paths: external tool or library/OS probe; exact command/environment source is pinned, and this category is not a claim of standalone launch isolation."
+    },
+    {
       "path": ".github/scripts/check_node_release.py",
       "scope": "",
       "signature": "612de6187c097f49a7c6002bfa6b205845dac081e9c3dc6b160fd9a6f584c826",
@@ -2582,6 +2632,14 @@
       "count": 1,
       "contract": "owned-in-process",
       "purpose": ".github/scripts/tests/test_check_env_docs.py:det: scoped test loader/library entry; registry fixture now restores authorization and scratch caches together; parser/path assertions remain native."
+    },
+    {
+      "path": ".github/scripts/tests/test_check_launch_contracts.py",
+      "scope": "gate",
+      "signature": "a6c9739e4e9dd3a0f8c2990e62e208c611ac5bd09ea892f357b3901fd398da2e",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": ".github/scripts/tests/test_check_launch_contracts.py:gate: scoped test loader/library entry; registry fixture now restores authorization and scratch caches together; parser/path assertions remain native."
     },
     {
       "path": ".github/scripts/tests/test_check_miswiring_detector.py",
