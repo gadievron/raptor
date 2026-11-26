@@ -1669,19 +1669,14 @@ class LLMClient:
         # autodetect-empty configs. See core/llm/egress.py for the
         # full rationale (chokepoint, hostname allowlist, corporate
         # proxy chain, subprocess-env separation).
-        from .egress import enable_llm_egress
-        try:
-            if catalog is None:
-                enable_llm_egress(self.config)
-        except Exception as e:                          # noqa: BLE001
-            # Fail open: a proxy bring-up failure must not block LLM
-            # calls entirely. Log and continue with direct egress.
-            # Operator who needs the chokepoint will see the warning.
-            logger.warning(
-                "LLM egress proxy bring-up failed (%s) — falling back "
-                "to direct outbound. Allowlist enforcement disabled "
-                "for this run.", e,
-            )
+        # Bring-up failure policy lives in the wrapper: fail open by
+        # default (a proxy bring-up failure must not block LLM calls
+        # entirely) with the degradation surfaced loudly — stderr +
+        # telemetry, not just a quiet-mode-suppressible warning — and
+        # a fail-closed abort when RAPTOR_LLM_EGRESS_STRICT is set.
+        from .egress import enable_llm_egress_or_degrade
+        if catalog is None:
+            enable_llm_egress_or_degrade(self.config)
 
         # HEALTH CHECK: Warn if no API keys configured. When the
         # claude CLI transport is the resolved primary (the claudecode

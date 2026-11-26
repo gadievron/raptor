@@ -682,6 +682,148 @@ def test_augment_child_no_proxy_deduplicates():
     assert out == "169.254.169.254"
 
 
+class TestBringupFailurePolicy:
+    """Chokepoint bring-up failure policy (``enable_llm_egress_or_degrade``).
+
+    Pre-fix, any bring-up exception was swallowed with one WARNING at
+    the ``LLMClient.__init__`` call site — invisible under raised log
+    floors (quiet CLI modes), unrecorded in run artifacts, and with no
+    way to make the chokepoint mandatory. The policy wrapper fails
+    open LOUDLY by default and aborts under RAPTOR_LLM_EGRESS_STRICT.
+    """
+
+    NOTICE = "LLM egress proxy bring-up failed"
+
+    @pytest.fixture
+    def failing_bringup(self, monkeypatch):
+        """Make proxy bring-up fail the way a bind failure would."""
+        def boom(allowed_hosts, **kwargs):
+            raise OSError("simulated bind failure")
+
+        import core.sandbox.proxy as proxy_mod
+        monkeypatch.setattr(proxy_mod, "get_proxy", boom)
+        monkeypatch.delenv("RAPTOR_LLM_EGRESS_STRICT", raising=False)
+
+    def test_strict_mode_aborts(self, failing_bringup, monkeypatch):
+        monkeypatch.setenv("RAPTOR_LLM_EGRESS_STRICT", "1")
+        cfg = _config(primary=_model(provider="anthropic"))
+        with pytest.raises(egress.LLMEgressBringupError):
+            egress.enable_llm_egress_or_degrade(cfg)
+        # Aborted before any env mutation — no half-enabled state.
+        assert "HTTPS_PROXY" not in os.environ
+
+    def test_strict_falsy_spelling_fails_open(self, failing_bringup,
+                                              monkeypatch):
+        monkeypatch.setenv("RAPTOR_LLM_EGRESS_STRICT", "0")
+        cfg = _config(primary=_model(provider="anthropic"))
+        egress.enable_llm_egress_or_degrade(cfg)  # must not raise
+
+    def test_default_fails_open_with_stderr_notice(self, failing_bringup,
+                                                   capsys):
+        cfg = _config(primary=_model(provider="anthropic"))
+        egress.enable_llm_egress_or_degrade(cfg)  # must not raise
+        err = capsys.readouterr().err
+        assert self.NOTICE in err
+        assert "falling back to direct outbound" in err
+        # The escape hatch is named so the operator can act on it.
+        assert "RAPTOR_LLM_EGRESS_STRICT" in err
+
+    def test_stderr_notice_bypasses_raised_log_floor(self, failing_bringup,
+                                                     capsys):
+        """Quiet CLI modes raise the log floor past WARNING (e.g.
+        raptor-llm-ask without --debug sets CRITICAL). The downgrade
+        notice must still reach the operator surface."""
+        import logging
+        touched = [logging.getLogger(name)
+                   for name in ("", "raptor", "core.llm.egress")]
+        old_levels = [lg.level for lg in touched]
+        try:
+            for lg in touched:
+                lg.setLevel(logging.CRITICAL)
+            cfg = _config(primary=_model(provider="anthropic"))
+            egress.enable_llm_egress_or_degrade(cfg)
+        finally:
+            for lg, level in zip(touched, old_levels):
+                lg.setLevel(level)
+        assert self.NOTICE in capsys.readouterr().err
+
+    def test_stderr_notice_once_per_process(self, failing_bringup, capsys):
+        """Per-client retries repeat the log/telemetry records, not the
+        operator-surface line (every repeat carries the same fact)."""
+        cfg = _config(primary=_model(provider="anthropic"))
+        egress.enable_llm_egress_or_degrade(cfg)
+        egress.enable_llm_egress_or_degrade(cfg)
+        assert capsys.readouterr().err.count(self.NOTICE) == 1
+
+    def test_degradation_recorded_in_telemetry(self, failing_bringup):
+        """The downgrade lands in the run's llm-telemetry.jsonl sink so
+        it is visible in run artifacts, not just scrollback."""
+        from core.llm import telemetry
+
+        records: list[dict] = []
+
+        class _Sink:
+            def record(self, rec: dict) -> None:
+                records.append(rec)
+
+        telemetry.set_sink(_Sink())
+        try:
+            cfg = _config(primary=_model(provider="anthropic"))
+            egress.enable_llm_egress_or_degrade(cfg)
+        finally:
+            telemetry.set_sink(None)
+        degraded = [r for r in records if r.get("event") == "egress_degraded"]
+        assert len(degraded) == 1
+        assert "simulated bind failure" in degraded[0]["error"]
+
+    def test_success_path_unchanged(self, stub_proxy, monkeypatch, capsys):
+        """Healthy bring-up behaves exactly like enable_llm_egress —
+        even under strict mode — with no notice and no telemetry."""
+        monkeypatch.setenv("RAPTOR_LLM_EGRESS_STRICT", "1")
+        cfg = _config(primary=_model(provider="anthropic"))
+        egress.enable_llm_egress_or_degrade(cfg)
+        assert os.environ["HTTPS_PROXY"] == "http://127.0.0.1:51234"
+        assert self.NOTICE not in capsys.readouterr().err
+
+
+class TestClientInitBringupPolicy:
+    """The wrapper is wired into ``LLMClient.__init__`` (the pre-fix
+    blanket handler lived there)."""
+
+    @pytest.fixture
+    def failing_bringup(self, monkeypatch):
+        def boom(config):
+            raise OSError("simulated bind failure")
+
+        monkeypatch.setattr(egress, "enable_llm_egress", boom)
+        monkeypatch.delenv("RAPTOR_LLM_EGRESS_STRICT", raising=False)
+
+    def _llm_config(self) -> LLMConfig:
+        return LLMConfig(
+            primary_model=ModelConfig(
+                provider="anthropic", model_name="test-primary",
+                api_key="test-key",
+            ),
+            fallback_models=[],
+            enable_caching=False,
+        )
+
+    def test_init_strict_aborts(self, failing_bringup, monkeypatch):
+        from core.llm.client import LLMClient
+
+        monkeypatch.setenv("RAPTOR_LLM_EGRESS_STRICT", "1")
+        with pytest.raises(egress.LLMEgressBringupError):
+            LLMClient(self._llm_config())
+
+    def test_init_default_fails_open_loudly(self, failing_bringup, capsys):
+        from core.llm.client import LLMClient
+
+        client = LLMClient(self._llm_config())  # must not raise
+        assert client.config.primary_model is not None
+        err = capsys.readouterr().err
+        assert TestBringupFailurePolicy.NOTICE in err
+
+
 class TestEnableIsThreadSafe:
 
     def test_racing_first_callers_snapshot_operator_env_once(

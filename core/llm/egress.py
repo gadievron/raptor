@@ -83,6 +83,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import threading
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
@@ -162,6 +163,26 @@ _original_proxy_env: dict[str, str] | None = None
 # proxy env — poisoning every trusted-subprocess env later derived
 # from operator_proxy_env().
 _STATE_LOCK = threading.Lock()
+
+# Fail-closed opt-in for chokepoint bring-up (shared toggle spellings
+# via ``core.config.env_flag``). Bring-up deliberately fails OPEN by
+# default — an LLM run must not die because a loopback port could not
+# be bound — but operators who run RAPTOR for the allowlist + audit
+# guarantees can set this so a bring-up failure aborts instead of
+# silently downgrading every in-process SDK call to direct outbound.
+EGRESS_STRICT_ENV = "RAPTOR_LLM_EGRESS_STRICT"
+
+# One stderr notice per process for the fail-open downgrade. The
+# logger and telemetry records repeat per failed bring-up attempt;
+# the operator-surface print carries the same fact every time, so a
+# single line suffices. Guarded by _STATE_LOCK.
+_degraded_notice_printed = False
+
+
+class LLMEgressBringupError(RuntimeError):
+    """Egress chokepoint bring-up failed while ``RAPTOR_LLM_EGRESS_STRICT``
+    is set — the run aborts rather than proceeding with direct,
+    un-allowlisted outbound."""
 
 
 def operator_proxy_env() -> dict[str, str]:
@@ -564,14 +585,74 @@ def _enable_llm_egress_locked(config: LLMConfig) -> None:
     )
 
 
+def enable_llm_egress_or_degrade(config: LLMConfig) -> None:
+    """:func:`enable_llm_egress` with the documented failure policy.
+
+    Success is identical to calling :func:`enable_llm_egress`
+    directly. On ANY bring-up failure (proxy bind, listener thread,
+    allowlist derivation):
+
+    * strict — ``RAPTOR_LLM_EGRESS_STRICT`` truthy — raise
+      :class:`LLMEgressBringupError`: the run aborts rather than
+      proceeding with direct, un-allowlisted outbound.
+    * default — fail open, loudly: a WARNING log, an unconditional
+      stderr notice (once per process) that bypasses any raised log
+      floor (quiet CLI modes raise the floor past WARNING, which
+      made the downgrade invisible exactly where it matters), and an
+      ``egress_degraded`` record on the run's ``llm-telemetry.jsonl``
+      so the downgrade is visible in run artifacts, not just
+      scrollback.
+    """
+    try:
+        enable_llm_egress(config)
+    except Exception as exc:  # noqa: BLE001 — single policy boundary for any bring-up fault
+        _handle_bringup_failure(exc)
+
+
+def _handle_bringup_failure(exc: Exception) -> None:
+    """Apply the strict-abort / loud-fail-open policy for *exc*."""
+    global _degraded_notice_printed
+    from core.config import env_flag
+    from core.security.log_sanitisation import escape_nonprintable
+
+    # Bring-up errors can carry env-derived text (proxy URLs, hostnames
+    # from models config) — render inert and bound before any surface.
+    detail = escape_nonprintable(str(exc))[:200]
+    if env_flag(EGRESS_STRICT_ENV, False):
+        raise LLMEgressBringupError(
+            f"LLM egress proxy bring-up failed ({detail}) and "
+            f"{EGRESS_STRICT_ENV} is set — aborting instead of "
+            "falling back to direct, un-allowlisted outbound"
+        ) from exc
+    message = (
+        f"LLM egress proxy bring-up failed ({detail}) — falling back "
+        "to direct outbound. Allowlist enforcement disabled for this "
+        f"run. Set {EGRESS_STRICT_ENV}=1 to abort instead."
+    )
+    logger.warning("%s", message)
+    with _STATE_LOCK:
+        first_notice = not _degraded_notice_printed
+        _degraded_notice_printed = True
+    if first_notice:
+        # Operator surface, independent of logging configuration.
+        print(f"WARNING: {message}", file=sys.stderr)
+    from . import telemetry
+    telemetry.emit(
+        event="egress_degraded",
+        call_class="egress",
+        error=detail,
+    )
+
+
 def _reset_for_tests() -> None:
     """Test-only helper: reset the module-level idempotency flag.
     Does NOT clear env vars or the singleton proxy — those are
     process-wide concerns the test fixture handles separately."""
-    global _enabled, _original_proxy_env
+    global _enabled, _original_proxy_env, _degraded_notice_printed
     with _STATE_LOCK:
         _enabled = False
         _original_proxy_env = None
+        _degraded_notice_printed = False
 
 
 
@@ -594,9 +675,12 @@ def register_web_target(url: str) -> None:
 
 
 __all__ = [
+    "EGRESS_STRICT_ENV",
+    "LLMEgressBringupError",
     "augment_child_no_proxy",
     "derive_allowlist",
     "enable_llm_egress",
+    "enable_llm_egress_or_degrade",
     "loopback_safe_get",
     "operator_proxy_env",
     "register_web_target",
