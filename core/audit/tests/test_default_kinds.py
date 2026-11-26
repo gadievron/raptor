@@ -10,11 +10,12 @@ opts a single kind out, and ``none`` restores functions/methods only.
 from __future__ import annotations
 
 from core.audit.gaps import (
-    _DEFAULT_EXTRA_KINDS,
     _REVIEWABLE_KINDS,
     _resolve_reviewable_kinds,
     compute_gaps,
 )
+
+from core.inventory.review_policy import DEFAULT_EXTRA_KINDS
 
 
 def _checklist():
@@ -46,7 +47,7 @@ def _checklist():
 class TestResolveReviewableKinds:
     def test_default_adds_extras(self):
         kinds = _resolve_reviewable_kinds(None)
-        assert kinds == _REVIEWABLE_KINDS | _DEFAULT_EXTRA_KINDS
+        assert kinds == _REVIEWABLE_KINDS | DEFAULT_EXTRA_KINDS
 
     def test_positive_list_overrides_extras(self):
         kinds = _resolve_reviewable_kinds({"top_level"})
