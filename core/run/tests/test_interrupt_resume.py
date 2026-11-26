@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from core.json import load_json
+from core.json import load_json, save_json
 from core.run import (
     RUN_METADATA_FILE,
     complete_run,
@@ -130,11 +130,129 @@ class TestResumeRun(unittest.TestCase):
 
     def test_resume_running_run_allowed(self):
         """SIGKILLed runs never got a terminal transition — they sit in
-        'running' and must still be resumable."""
+        'running' and must still be resumable (their worker is dead)."""
         with TemporaryDirectory() as d:
             out = Path(d) / "audit-run"
             start_run(out, "audit")
+            # Model the SIGKILL shape deterministically: the worker died
+            # with the run. Under a live harness session start_run stamps
+            # this test runner's parent shell — alive for the whole test,
+            # which the in-flight guard would (correctly) refuse.
+            meta_path = out / RUN_METADATA_FILE
+            meta = load_json(meta_path)
+            meta.pop("tool_pid", None)
+            meta.pop("tool_pid_start", None)
+            save_json(meta_path, meta)
             self.assertEqual(resume_run(out), 2)
+
+    def test_resume_running_with_live_worker_refused(self):
+        """Two concurrent resumes must not double-drive a run: once the
+        first resume stamps a live worker, a second resume_run on the
+        still-``running`` metadata is refused inside the metadata lock
+        (the advisory eligibility check runs long before the flip and
+        both racers can pass it)."""
+        import subprocess
+        import sys
+
+        from core.project.sessions import proc_starttime
+
+        with TemporaryDirectory() as d:
+            out = Path(d) / "audit-run"
+            start_run(out, "audit")
+            worker = subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+            )
+            try:
+                meta_path = out / RUN_METADATA_FILE
+                meta = load_json(meta_path)
+                meta["tool_pid"] = worker.pid
+                start = proc_starttime(worker.pid)
+                if start is not None:
+                    meta["tool_pid_start"] = start
+                save_json(meta_path, meta)
+                with self.assertRaises(ValueError) as ctx:
+                    resume_run(out)
+                self.assertIn("in flight", str(ctx.exception))
+                # The refused resume must not have mutated the record.
+                meta = load_json(meta_path)
+                self.assertEqual(meta.get("extra", {}).get("resumes"), None)
+            finally:
+                worker.kill()
+                worker.wait(timeout=10)
+
+    def test_resume_running_with_dead_worker_allowed(self):
+        """The SIGKILL-recovery lane survives the live-worker guard: a
+        dead recorded worker is exactly the resumable shape."""
+        import subprocess
+        import sys
+
+        from core.project.sessions import proc_starttime
+
+        with TemporaryDirectory() as d:
+            out = Path(d) / "audit-run"
+            start_run(out, "audit")
+            worker = subprocess.Popen(
+                [sys.executable, "-c", "pass"],
+            )
+            start = proc_starttime(worker.pid)
+            worker.wait(timeout=10)
+            meta_path = out / RUN_METADATA_FILE
+            meta = load_json(meta_path)
+            meta["tool_pid"] = worker.pid
+            if start is not None:
+                meta["tool_pid_start"] = start
+            save_json(meta_path, meta)
+            self.assertEqual(resume_run(out), 2)
+
+    def test_resume_running_own_worker_stamp_allowed(self):
+        """A detached orchestrator records ITSELF as the worker; its own
+        re-entry must not be refused (it would wedge forever — its
+        recorded worker is alive by construction)."""
+        import os
+
+        from core.project.sessions import proc_starttime
+
+        with TemporaryDirectory() as d:
+            out = Path(d) / "audit-run"
+            start_run(out, "audit")
+            meta_path = out / RUN_METADATA_FILE
+            meta = load_json(meta_path)
+            meta["tool_pid"] = os.getpid()
+            start = proc_starttime(os.getpid())
+            if start is not None:
+                meta["tool_pid_start"] = start
+            save_json(meta_path, meta)
+            self.assertEqual(resume_run(out), 2)
+
+    def test_resume_interrupted_ignores_stale_worker_stamp(self):
+        """The live-worker guard applies to ``running`` only: an
+        interrupted run went through a real terminal transition, and its
+        (possibly still-live) stale stamp keeps the existing eligibility
+        semantics."""
+        import subprocess
+        import sys
+
+        from core.project.sessions import proc_starttime
+
+        with TemporaryDirectory() as d:
+            out = Path(d) / "audit-run"
+            start_run(out, "audit")
+            interrupt_run(out, "supervisor stop")
+            worker = subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+            )
+            try:
+                meta_path = out / RUN_METADATA_FILE
+                meta = load_json(meta_path)
+                meta["tool_pid"] = worker.pid
+                start = proc_starttime(worker.pid)
+                if start is not None:
+                    meta["tool_pid_start"] = start
+                save_json(meta_path, meta)
+                self.assertEqual(resume_run(out), 2)
+            finally:
+                worker.kill()
+                worker.wait(timeout=10)
 
     def test_resume_completed_refused(self):
         with TemporaryDirectory() as d:

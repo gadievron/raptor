@@ -2738,6 +2738,29 @@ def resume_run(output_dir: Path, note: str | None = None) -> int:
                 f"(resumable: {', '.join(sorted(RESUMABLE_STATUSES))})"
             )
             raise ValueError(msg)
+        if current == STATUS_RUNNING:
+            # ``running`` is resumable ONLY as SIGKILL recovery — a run
+            # whose recorded worker is dead. The advisory pre-check
+            # (core.run.resume.resume_ineligibility) applies the same
+            # liveness rule, but it runs outside this lock, sometimes
+            # long before the flip (drift verification in between): two
+            # resumers racing the same run both read "worker dead",
+            # then the first flip stamps a LIVE worker — without this
+            # in-lock re-check the second resumer overwrote that stamp
+            # and double-drove the run (two segments appending to one
+            # journal, double spend against one budget). The calling
+            # process's own stamp is exempt: a detached orchestrator
+            # records ITSELF as the worker, and refusing its own
+            # re-entry would wedge self-resume forever (its recorded
+            # worker is alive by construction).
+            alive, detail = worker_liveness_for_meta(metadata)
+            if alive and metadata.get("tool_pid") != os.getpid():
+                msg = (
+                    f"run is still in flight ({detail}) — resuming now "
+                    "would double-drive it. Wait for it to stop, or "
+                    "kill it first."
+                )
+                raise ValueError(msg)
         extra = metadata.get("extra") or {}
         resumes = extra.get("resumes")
         if not isinstance(resumes, list):
