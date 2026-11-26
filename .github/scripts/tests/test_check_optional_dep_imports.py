@@ -260,6 +260,58 @@ def test_submodule_import_maps_to_top_level(det, tmp_path):
     assert "core/llm/tests/test_x.py::tree_sitter_go" in findings
 
 
+@pytest.mark.parametrize("statement", [
+    'importlib.import_module("botocore")',
+    'importlib.import_module("botocore.session")',
+    '__import__("botocore")',
+    "from importlib import import_module\nimport_module('botocore')",
+])
+def test_dynamic_import_with_literal_name_flagged(det, tmp_path, statement):
+    root = _tree(tmp_path, {
+        "core/llm/tests/test_x.py": "import importlib\n" + statement + "\n",
+    })
+    findings, _ = det.scan(root)
+    assert "core/llm/tests/test_x.py::botocore" in findings
+
+
+def test_dynamic_import_in_try_except_is_guarded(det, tmp_path):
+    root = _tree(tmp_path, {
+        "core/llm/tests/test_x.py": (
+            "import importlib\n"
+            "try:\n"
+            '    importlib.import_module("botocore")\n'
+            "except ImportError:\n"
+            "    pass\n"
+        ),
+    })
+    findings, _ = det.scan(root)
+    assert findings == {}
+
+
+def test_dynamic_import_with_computed_name_out_of_scope(det, tmp_path):
+    # A computed module name is undecidable statically; mentioning the
+    # token elsewhere must not conjure a finding by itself.
+    root = _tree(tmp_path, {
+        "core/llm/tests/test_x.py": (
+            "import importlib\n"
+            'name = "boto" + "core"\n'
+            "importlib.import_module(name)\n"
+        ),
+    })
+    findings, _ = det.scan(root)
+    assert findings == {}
+
+
+def test_github_tests_tree_is_scanned(det, tmp_path):
+    root = _tree(tmp_path, {
+        ".github/tests/test_controls.py": "import anthropic\n",
+        ".github/scripts/tests/test_gate.py": "import botocore\n",
+    })
+    findings, _ = det.scan(root)
+    assert ".github/tests/test_controls.py::anthropic" in findings
+    assert ".github/scripts/tests/test_gate.py::botocore" in findings
+
+
 def test_non_test_files_ignored(det, tmp_path):
     root = _tree(tmp_path, {
         "core/llm/providers.py": "import anthropic\n",

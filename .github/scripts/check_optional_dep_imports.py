@@ -14,8 +14,10 @@ the project and recursively included ``dev`` dependencies, then minus
 distributions guaranteed transitively (see ``TRANSITIVE_PRESENT``), mapped
 to import names via ``DIST_TO_MODULES``.
 
-A test file importing an optional module is a finding UNLESS the file
-shows guard evidence for that module:
+A test file importing an optional module — statically, or dynamically
+via ``importlib.import_module("mod")`` / ``__import__("mod")`` with a
+literal name — is a finding UNLESS the file shows guard evidence for
+that module:
 
   * the import sits inside ``try/except ImportError`` (availability
     probe / needs_x-mark pattern);
@@ -65,7 +67,9 @@ BASELINE_PATH = SCRIPT_DIR / "optional_dep_imports_baseline.json"
 # (spatch/semgrep subprocess tests) run on the same CI deps image,
 # which installs requirements-dev only — an unguarded optional
 # import in an engine test fails the tier with this lint green.
-PY_ROOTS = ["core", "packages", "plugins", "engine"]
+# .github/ holds the repo-invariant and gate-script test suites,
+# which run in the same bare environment.
+PY_ROOTS = ["core", "packages", "plugins", "engine", ".github"]
 SKIP_DIR_NAMES = {
     ".git", "__pycache__", "node_modules", "out", ".out", ".tox",
     ".venv", "venv", "build", "dist", "fixtures", "data",
@@ -259,6 +263,21 @@ class _ImportScan(ast.NodeVisitor):
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         if node.level == 0 and node.module:
             self._record(node.module, node.lineno)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        # Dynamic imports execute like static ones:
+        # importlib.import_module("mod") / import_module("mod") /
+        # __import__("mod"). Only literal names are decidable here;
+        # computed names stay out of scope.
+        func = node.func
+        name = (func.attr if isinstance(func, ast.Attribute)
+                else func.id if isinstance(func, ast.Name) else "")
+        if (name in ("import_module", "__import__")
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)):
+            self._record(node.args[0].value, node.lineno)
+        self.generic_visit(node)
 
 
 def _text_evidence(text: str, module: str) -> bool:
