@@ -120,6 +120,22 @@ def _run(argv: list[str], timeout: int = 60,
     return _run_status(argv, timeout=timeout, binary=binary)[0]
 
 
+# Explicit capture bound for inspection-tool stdout. The namespaced
+# native executor already clips at this ceiling; passing it explicitly
+# makes every executor lane (including the plain-subprocess fallback,
+# which only bounds capture when asked) apply the SAME bound instead of
+# accumulating unbounded hostile-ELF tool output in memory.
+_INSPECT_CAPTURE_BYTES = 64 * 1024 * 1024
+
+# The sandbox annotates a clipped capture with one explicit in-band loss
+# marker appended after the retained prefix
+# (``core.sandbox._capture.clipped_output``; the namespaced native lane
+# emits the identical byte shape). Anchored at end-of-output: the marker
+# is always the final thing appended to a clipped stream.
+_TRUNCATED_STDOUT = re.compile(
+    r"\n\[sandbox: stdout capture truncated at \d+ bytes\]\n\Z")
+
+
 def _run_status(argv: list[str], timeout: int = 60,
                 binary: Path | str | None = None) -> tuple[str, bool]:
     """Like :func:`_run` but also reports whether the tool COMPLETED
@@ -142,7 +158,8 @@ def _run_status(argv: list[str], timeout: int = 60,
             proc = _sandbox_run(inspection_command(argv, scratch), **inspection_options(binary, argv[0], scratch),
                                 stdin=subprocess.DEVNULL,
                                 capture_output=True, text=True,
-                                encoding="utf-8", errors="replace", timeout=timeout)
+                                encoding="utf-8", errors="replace", timeout=timeout,
+                                max_capture_bytes=_INSPECT_CAPTURE_BYTES)
     except (OSError, subprocess.TimeoutExpired) as e:
         logger.debug("binary_oracle: %s failed: %s", argv[0], e)
         return "", False
@@ -171,7 +188,20 @@ def _run_status(argv: list[str], timeout: int = 60,
             escape_nonprintable(str(argv[-1])),
             escape_nonprintable((proc.stderr or "")[:200]))
         return "", False
-    return proc.stdout or "", True
+    stdout = proc.stdout or ""
+    if _TRUNCATED_STDOUT.search(stdout):
+        # rc==0 with a clipped capture: the TOOL completed, but the
+        # evidence stream did not. A clipped symbol table / DWARF dump
+        # parses cleanly, so consuming it as complete would mint
+        # verdicts from partial evidence — a function past the cut-off
+        # point looks ``absent``. Same treatment as the non-zero-rc
+        # partial-output path above: no evidence from this tool.
+        logger.warning(
+            "binary_oracle: %s stdout hit the sandbox capture cap on "
+            "%s — discarding partial output",
+            argv[0], escape_nonprintable(str(argv[-1])))
+        return "", False
+    return stdout, True
 
 
 # Bound one decoded record without capping legitimate multi-GB DWARF files.

@@ -1422,3 +1422,82 @@ class TestHostileBytesEscapedInLogs:
         joined = " ".join(r.getMessage() for r in caplog.records)
         assert "\x1b" not in joined
         assert "\\x1b" in joined
+
+
+class TestTruncatedCaptureIsNotEvidence:
+    """The sandbox clips runaway tool stdout at a capture cap and
+    appends one in-band loss marker. The tool still exits 0, and a
+    clipped symbol table parses cleanly — consuming it as complete
+    evidence mints ``absent`` verdicts (and full-tier suppression) for
+    every function past the cut-off point."""
+
+    _MARKER = "\n[sandbox: stdout capture truncated at 67108864 bytes]\n"
+
+    @staticmethod
+    def _patched_run(monkeypatch, proc, seen_kwargs=None):
+        import core.sandbox as _sb
+
+        def fake_run(*args, **kwargs):
+            if seen_kwargs is not None:
+                seen_kwargs.update(kwargs)
+            return proc
+
+        monkeypatch.setattr(_sb, "run", fake_run)
+
+    def test_truncated_stdout_is_discarded_not_trusted(
+            self, monkeypatch, caplog):
+        import logging
+
+        from core.analysis.binary_oracle import _run_status
+
+        class _Proc:
+            returncode = 0
+            stderr = ""
+            stdout = ("0000000000001000 T alpha\n"
+                      "0000000000002000 T beta"
+                      + TestTruncatedCaptureIsNotEvidence._MARKER)
+
+        self._patched_run(monkeypatch, _Proc())
+        with caplog.at_level(logging.WARNING):
+            out, ok = _run_status(["nm", "--defined-only", "/tmp/bin"])
+        assert (out, ok) == ("", False)
+        joined = " ".join(r.getMessage() for r in caplog.records)
+        assert "capture cap" in joined
+
+    def test_complete_stdout_still_accepted(self, monkeypatch):
+        """Two-direction guard: an unclipped capture keeps its evidence
+        (also: marker-shaped text MID-stream is data, not metadata —
+        only the appended end-of-output marker means loss)."""
+        from core.analysis.binary_oracle import _run_status
+
+        body = ("0000000000001000 T alpha"
+                + TestTruncatedCaptureIsNotEvidence._MARKER
+                + "0000000000002000 T beta\n")
+
+        class _Proc:
+            returncode = 0
+            stderr = ""
+            stdout = body
+
+        self._patched_run(monkeypatch, _Proc())
+        out, ok = _run_status(["nm", "--defined-only", "/tmp/bin"])
+        assert (out, ok) == (body, True)
+
+    def test_capture_bound_is_passed_to_sandbox(self, monkeypatch):
+        """Every executor lane must receive the explicit stdout bound —
+        the plain-subprocess fallback only bounds capture when asked."""
+        from core.analysis.binary_oracle import (
+            _INSPECT_CAPTURE_BYTES,
+            _run_status,
+        )
+
+        class _Proc:
+            returncode = 0
+            stderr = ""
+            stdout = "0000000000001000 T alpha\n"
+
+        seen: dict = {}
+        self._patched_run(monkeypatch, _Proc(), seen)
+        out, ok = _run_status(["nm", "--defined-only", "/tmp/bin"])
+        assert ok
+        assert seen.get("max_capture_bytes") == _INSPECT_CAPTURE_BYTES
