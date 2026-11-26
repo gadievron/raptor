@@ -257,6 +257,40 @@ def test_run_cocci_writes_sarif_with_matches(tmp_path, monkeypatch, coverage_wri
     assert run["results"][0]["ruleId"] == "stub"
 
 
+def test_run_cocci_requests_half_cpu_spatch_jobs(tmp_path, monkeypatch):
+    """The default-on cocci stage must hand the tuning-derived
+    half-CPU share to the rule sweep so each whole-tree spatch pass
+    parallelises (parmap in --dir mode) instead of running the full
+    rule set single-lane."""
+    (tmp_path / "x.c").write_text("\n")
+    rules_dir = tmp_path / "rules"
+    rules_dir.mkdir()
+    (rules_dir / "stub.cocci").write_text("@r@\n@@\n@@\n")
+    out = tmp_path / "out"
+    out.mkdir()
+
+    import core.tuning
+    monkeypatch.setattr(
+        core.tuning, "_detect_half_cpu_parallelism", lambda *a, **kw: 6,
+    )
+    captured: dict = {}
+
+    def fake_run_rules(*args, **kwargs):
+        captured.update(kwargs)
+        from packages.coccinelle.models import SpatchResult
+        return [SpatchResult(rule="stub", matches=[])]
+
+    with patch(
+        "packages.coccinelle.runner.is_available", return_value=True,
+    ), patch(
+        "packages.coccinelle.runner.run_rules", side_effect=fake_run_rules,
+    ):
+        sarifs = _scanner.run_cocci(tmp_path, out, rules_dir=rules_dir)
+
+    assert len(sarifs) == 1
+    assert captured.get("jobs") == 6
+
+
 def test_run_cocci_emits_sarif_even_when_no_matches(tmp_path):
     """Clean target (no matches) → still emits a SARIF (with
     rule definitions in the driver, empty results list). Operators

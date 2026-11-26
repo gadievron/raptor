@@ -1005,6 +1005,7 @@ def run_rules(
     allow_scripting: bool = False,
     on_rule=None,
     exclude_rules: frozenset[str] = frozenset(),
+    jobs: int = 0,
 ) -> list[SpatchResult]:
     """Run all .cocci rules in a directory against a target.
 
@@ -1020,6 +1021,14 @@ def run_rules(
     cost a scan.
 
     ``exclude_rules`` omits explicitly unconfigured rule stems.
+
+    ``jobs`` is forwarded to every run_rule invocation: when > 1 and
+    the target is a directory, each spatch parallelises internally via
+    parmap (see run_rule). The rules themselves still run one after
+    another — per-rule SpatchResult isolation, timeout accounting, and
+    result ordering are unchanged; only the wall-clock of each
+    whole-tree pass shrinks.
+
     Returns one SpatchResult per executed rule, in filename order.
     """
     rules_dir = Path(rules_dir)
@@ -1081,6 +1090,7 @@ def run_rules(
             subprocess_runner=subprocess_runner,
             allow_scripting=allow_scripting,
             tree_files=tree_files,
+            jobs=jobs,
             _installed_version=installed_version,
         )
         results.append(result)

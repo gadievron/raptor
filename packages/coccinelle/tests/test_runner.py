@@ -3229,6 +3229,53 @@ class TestJobsLane:
             assert "--jobs" not in captured["cmd"]
             assert "--tmp-dir" not in captured["cmd"]
 
+    def test_run_rules_forwards_jobs_to_every_rule(self, tmp_path):
+        # The multi-rule sweep hands its jobs value to each run_rule
+        # invocation so every whole-tree --dir pass parallelises via
+        # parmap instead of running single-lane.
+        _rule, root = self._setup(tmp_path)
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "a.cocci").write_text(PLAIN_RULE)
+        (rules_dir / "b.cocci").write_text(PLAIN_RULE)
+        cmds: list[list[str]] = []
+
+        def _capture(cmd, **kwargs):
+            cmds.append(list(cmd))
+            return _mock_proc()
+
+        with patch("packages.coccinelle.runner.is_available",
+                   return_value=True):
+            results = run_rules(
+                root, rules_dir, jobs=4, subprocess_runner=_capture,
+            )
+        assert len(results) == 2
+        assert len(cmds) == 2
+        for cmd in cmds:
+            assert "--dir" in cmd
+            assert cmd[cmd.index("--jobs") + 1] == "4"
+            assert "--tmp-dir" in cmd
+
+    def test_run_rules_default_stays_serial(self, tmp_path):
+        # Without an explicit jobs value the sweep keeps the historical
+        # single-lane spatch invocations.
+        _rule, root = self._setup(tmp_path)
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "a.cocci").write_text(PLAIN_RULE)
+        cmds: list[list[str]] = []
+
+        def _capture(cmd, **kwargs):
+            cmds.append(list(cmd))
+            return _mock_proc()
+
+        with patch("packages.coccinelle.runner.is_available",
+                   return_value=True):
+            run_rules(root, rules_dir, subprocess_runner=_capture)
+        assert cmds
+        for cmd in cmds:
+            assert "--jobs" not in cmd
+
 
 class TestDerivedBatchCaps:
     """Two-direction pins for the batching caps. Each bound encodes a

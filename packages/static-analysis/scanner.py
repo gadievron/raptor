@@ -2031,6 +2031,12 @@ def run_cocci(
     logger.info(
         "cocci: running %s against %s (timeout %ss/rule)", effective_rules_dir, repo_path, timeout
     )
+    # Rules run one spatch at a time, so the single active invocation
+    # gets the half-CPU share the tuning autos grant each scanner
+    # stage (the same source the Semgrep worker pool divides among its
+    # concurrent packs). spatch applies it via parmap in --dir mode;
+    # the runner ignores it (jobs <= 1) on single-file targets.
+    from core.tuning import _detect_half_cpu_parallelism
     results = spatch_run_rules(
         target=repo_path,
         rules_dir=effective_rules_dir,
@@ -2039,6 +2045,7 @@ def run_cocci(
         # In-repo shipped engine/coccinelle rules (code trust) — their
         # @script:python reporting blocks are trusted.
         allow_scripting=True,
+        jobs=_detect_half_cpu_parallelism(),
     )
 
     sarif_doc = results_to_sarif(results, repo_path)
