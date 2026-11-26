@@ -22,7 +22,11 @@ shows guard evidence for that module:
   * ``pytest.importorskip("mod")`` anywhere in the file;
   * a ``sys.modules`` stub for the module (hermetic stub-module
     pattern, cf. core/llm/tests/test_cc_adapter.py);
-  * a ``skipif`` whose source mentions the module token.
+  * a ``skipif`` whose CONDITION names the module — and only for
+    imports inside function bodies. A module-level import fails at
+    collection before any skipif mark is evaluated, so skipif can
+    never guard it; and a module name appearing only in a
+    ``reason=`` string guards nothing anywhere.
 
 Evidence is per (file, module): once a file demonstrates it handles
 the module's absence, its other imports of the same module are
@@ -186,8 +190,10 @@ class _ImportScan(ast.NodeVisitor):
         self.mods = mods
         self._visitor_methods = {}
         self._try_guard_depth = 0
+        self._func_depth = 0
         self.guarded: set[str] = set()
-        self.unguarded: dict[str, int] = {}  # module -> first lineno
+        # module -> (first lineno, any unguarded import at module scope)
+        self.unguarded: dict[str, tuple[int, bool]] = {}
 
     def visit(self, node: ast.AST) -> None:
         kind = type(node)
@@ -209,8 +215,26 @@ class _ImportScan(ast.NodeVisitor):
             if _module_matches(imported, opt):
                 if self._try_guard_depth:
                     self.guarded.add(opt)
-                else:
-                    self.unguarded.setdefault(opt, lineno)
+                    continue
+                module_scope = self._func_depth == 0
+                prev = self.unguarded.get(opt)
+                if prev is None:
+                    self.unguarded[opt] = (lineno, module_scope)
+                elif module_scope and not prev[1]:
+                    # Keep the first lineno, but remember that at
+                    # least one unguarded import runs at module scope
+                    # (collection time) — skipif can never guard that.
+                    self.unguarded[opt] = (prev[0], True)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        # Imports inside a function body run at call time, where a
+        # skipif mark can genuinely prevent execution; imports at
+        # module or class scope run at collection.
+        self._func_depth += 1
+        self.generic_visit(node)
+        self._func_depth -= 1
+
+    visit_AsyncFunctionDef = visit_FunctionDef
 
     def visit_Try(self, node: ast.Try) -> None:
         catches = any(
@@ -247,11 +271,43 @@ def _text_evidence(text: str, module: str) -> bool:
         # ...) and sys.modules["module"] = ...
         rf"sys\.modules\s*,\s*['\"]{tok}[.'\"]",
         rf"sys\.modules\[\s*['\"]{tok}[.'\"]",
-        # a skipif whose condition/reason names the module (bounded
-        # window: the condition may wrap across a few lines)
-        rf"skipif[\s\S]{{0,200}}?{tok}",
     )
     return any(re.search(p, text) for p in patterns)
+
+
+def _skipif_condition_sources(tree: ast.AST) -> list[str]:
+    """Source text of every ``skipif(...)`` CONDITION in the module:
+    positional arguments plus keywords other than ``reason``. The
+    reason string is deliberately excluded — a module name mentioned
+    only in prose guards nothing (the import still executes), yet a
+    whole-file text window used to accept it as evidence."""
+    out: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = (func.attr if isinstance(func, ast.Attribute)
+                else func.id if isinstance(func, ast.Name) else "")
+        if name != "skipif":
+            continue
+        out.extend(ast.unparse(arg) for arg in node.args)
+        out.extend(
+            ast.unparse(kw.value) for kw in node.keywords
+            if kw.arg != "reason"
+        )
+    return out
+
+
+def _skipif_condition_evidence(conditions: list[str], module: str) -> bool:
+    """True when a skipif condition names *module* (availability probe
+    such as ``find_spec("module") is None``). Callers must apply this
+    only to function-scope imports: a module-level import fails at
+    collection before any skipif mark runs, so skipif can never
+    guard it."""
+    tok = re.escape(module)
+    return any(
+        re.search(rf"(?<!\w){tok}(?!\w)", cond) for cond in conditions
+    )
 
 
 def scan(root: Path) -> tuple[dict[str, int], set[str]]:
@@ -275,11 +331,17 @@ def scan(root: Path) -> tuple[dict[str, int], set[str]]:
             continue
         visitor = _ImportScan(mods)
         visitor.visit(tree)
-        for module, lineno in sorted(visitor.unguarded.items()):
+        skipif_conditions: list[str] | None = None
+        for module, (lineno, module_scope) in sorted(visitor.unguarded.items()):
             if module in visitor.guarded:
                 continue  # file demonstrated absence handling
             if _text_evidence(text, module):
                 continue
+            if not module_scope:
+                if skipif_conditions is None:
+                    skipif_conditions = _skipif_condition_sources(tree)
+                if _skipif_condition_evidence(skipif_conditions, module):
+                    continue
             rel = path.relative_to(root).as_posix()
             findings[f"{rel}::{module}"] = lineno
     return findings, mods
@@ -347,7 +409,8 @@ def main() -> int:
             print(
                 f"  {path}:{lineno}: imports optional module "
                 f"'{module}' without importorskip / try-except "
-                f"ImportError / sys.modules stub / skipif",
+                f"ImportError / sys.modules stub / skipif condition "
+                f"(skipif guards function-scope imports only)",
                 file=sys.stderr,
             )
         return 1

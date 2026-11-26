@@ -164,6 +164,91 @@ def test_skipif_naming_module_is_guard(det, tmp_path):
     assert findings == {}
 
 
+def test_skipif_reason_mention_is_not_a_guard(det, tmp_path):
+    # The module name appears only in the reason STRING; the condition
+    # is constant False, so the function-scope import still executes on
+    # bare CI. A whole-file text window used to credit this as a guard.
+    root = _tree(tmp_path, {
+        "core/llm/tests/test_x.py": (
+            "import pytest\n"
+            "\n"
+            "@pytest.mark.skipif(\n"
+            "    False,\n"
+            '    reason="tree_sitter not installed",\n'
+            ")\n"
+            "def test_y():\n"
+            "    import tree_sitter\n"
+            "    assert tree_sitter\n"
+        ),
+    })
+    findings, _ = det.scan(root)
+    assert "core/llm/tests/test_x.py::tree_sitter" in findings
+
+
+def test_skipif_cannot_guard_module_level_import(det, tmp_path):
+    # Even a genuine availability-probe condition cannot guard a
+    # MODULE-level import: collection imports the file (and fails)
+    # before any skipif mark is evaluated.
+    root = _tree(tmp_path, {
+        "core/llm/tests/test_x.py": (
+            "import importlib.util\n"
+            "import pytest\n"
+            "import tree_sitter\n"
+            "\n"
+            "@pytest.mark.skipif(\n"
+            '    importlib.util.find_spec("tree_sitter") is None,\n'
+            '    reason="tree_sitter not installed",\n'
+            ")\n"
+            "def test_y():\n"
+            "    assert tree_sitter\n"
+        ),
+    })
+    findings, _ = det.scan(root)
+    assert "core/llm/tests/test_x.py::tree_sitter" in findings
+
+
+def test_skipif_for_sibling_module_is_not_a_guard(det, tmp_path):
+    # A condition probing tree_sitter_go says nothing about
+    # tree_sitter: the token match is whole-word.
+    root = _tree(tmp_path, {
+        "core/llm/tests/test_x.py": (
+            "import importlib.util\n"
+            "import pytest\n"
+            "\n"
+            "@pytest.mark.skipif(\n"
+            '    importlib.util.find_spec("tree_sitter_go") is None,\n'
+            '    reason="grammar not installed",\n'
+            ")\n"
+            "def test_y():\n"
+            "    import tree_sitter\n"
+            "    assert tree_sitter\n"
+        ),
+    })
+    findings, _ = det.scan(root)
+    assert "core/llm/tests/test_x.py::tree_sitter" in findings
+
+
+def test_skipif_condition_keyword_form_is_guard(det, tmp_path):
+    # pytest accepts skipif(condition=...) — the condition keyword is
+    # evidence exactly like a positional condition.
+    root = _tree(tmp_path, {
+        "core/llm/tests/test_x.py": (
+            "import importlib.util\n"
+            "import pytest\n"
+            "\n"
+            "@pytest.mark.skipif(\n"
+            '    condition=importlib.util.find_spec("tree_sitter") is None,\n'
+            '    reason="tree_sitter not installed",\n'
+            ")\n"
+            "def test_y():\n"
+            "    import tree_sitter\n"
+            "    assert tree_sitter\n"
+        ),
+    })
+    findings, _ = det.scan(root)
+    assert findings == {}
+
+
 def test_submodule_import_maps_to_top_level(det, tmp_path):
     root = _tree(tmp_path, {
         "core/llm/tests/test_x.py": (
