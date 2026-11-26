@@ -72,8 +72,15 @@ intend to gate. Audit performed 2026-05-07:
     through the same chokepoint cleanly.
   * ``packages.cve_diff`` — uses its own ``ResilientLLMClient`` that
     calls ``create_provider`` directly, never constructing
-    ``LLMClient``, so this module's ``enable_llm_egress`` never
-    fires for cve-diff. cve-diff retains direct egress.
+    ``LLMClient``. Its provider construction calls
+    :func:`enable_llm_egress_for_model` for the direct-SDK lane, which
+    applies this module's chokepoint and additionally registers
+    cve-diff's own fixed fetch hosts (OSV, NVD, GitHub API, distro
+    security trackers) on the proxy allowlist so the package's
+    proxy-env-honouring ``UrllibClient`` lanes keep working once
+    ``HTTPS_PROXY`` points at the chokepoint. Dispatcher-routed calls
+    (``RAPTOR_LLM_SOCKET``) skip this — the UDS dispatcher is its own
+    chokepoint.
   * ``core.git.clone`` — git runs as a sandboxed subprocess with
     its own sanitised env (``RaptorConfig.get_git_env()``); parent
     HTTPS_PROXY is not inherited.
@@ -85,11 +92,13 @@ import logging
 import os
 import sys
 import threading
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from urllib.parse import urlparse
 
 if TYPE_CHECKING:
-    from .config import LLMConfig
+    from collections.abc import Iterable
+
+    from .config import LLMConfig, ModelConfig
 
 logger = logging.getLogger(__name__)
 
@@ -644,6 +653,63 @@ def _handle_bringup_failure(exc: Exception) -> None:
     )
 
 
+class _SingleModelView:
+    """Duck-typed single-model stand-in for ``LLMConfig`` — exactly the
+    three attributes :func:`derive_allowlist` and
+    :func:`_max_model_timeout` read."""
+
+    __slots__ = ("fallback_models", "primary_model", "specialized_models")
+
+    def __init__(self, model: ModelConfig) -> None:
+        self.primary_model = model
+        self.fallback_models: list[ModelConfig] = []
+        self.specialized_models: dict[str, ModelConfig] = {}
+
+
+def enable_llm_egress_for_model(
+    model: ModelConfig,
+    extra_hosts: Iterable[str] = (),
+) -> None:
+    """Chokepoint entry for consumers that build ONE provider directly
+    via ``create_provider`` instead of constructing ``LLMClient``
+    (cve-diff's ``ResilientLLMClient``). Wraps *model* in a
+    single-model view of ``LLMConfig`` and applies the same bring-up
+    failure policy as :func:`enable_llm_egress_or_degrade` (strict
+    abort / loud fail-open).
+
+    ``extra_hosts`` are hostnames the CALLING PACKAGE's own direct
+    HTTP lanes contact: enabling the chokepoint points ``HTTPS_PROXY``
+    at the in-process proxy, which captures every proxy-env-honouring
+    transport in the process — so the caller's non-LLM fetch hosts
+    must join the proxy allowlist or those lanes fail closed at the
+    chokepoint. They are registered only when the chokepoint has
+    actually captured the proxy env (empty / loopback-only model
+    configs stay mutation-free and need no allowlist widening);
+    loopback entries are dropped, same as the model allowlist.
+    """
+    view = cast("LLMConfig", _SingleModelView(model))
+    try:
+        enable_llm_egress(view)
+        _register_extra_hosts(extra_hosts)
+    except Exception as exc:  # noqa: BLE001 — single policy boundary for any bring-up fault
+        _handle_bringup_failure(exc)
+
+
+def _register_extra_hosts(hosts: Iterable[str]) -> None:
+    """Union non-loopback *hosts* onto the in-process proxy allowlist,
+    but only when the chokepoint has captured the proxy env — without
+    the env capture the caller's lanes still take their operator-default
+    route, and widening the allowlist would grant reach for nothing."""
+    remote = sorted({h for h in hosts if h and not _is_loopback(h)})
+    if not remote:
+        return
+    with _STATE_LOCK:
+        if not _enabled:
+            return
+        from core.sandbox.proxy import get_proxy
+        get_proxy(remote)
+
+
 def _reset_for_tests() -> None:
     """Test-only helper: reset the module-level idempotency flag.
     Does NOT clear env vars or the singleton proxy — those are
@@ -680,6 +746,7 @@ __all__ = [
     "augment_child_no_proxy",
     "derive_allowlist",
     "enable_llm_egress",
+    "enable_llm_egress_for_model",
     "enable_llm_egress_or_degrade",
     "loopback_safe_get",
     "operator_proxy_env",

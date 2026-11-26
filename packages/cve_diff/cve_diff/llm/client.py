@@ -51,6 +51,44 @@ class CostBudgetExceeded(RuntimeError):
     """Raised when cumulative cost on a client instance hits ``max_cost_usd``."""
 
 
+def _egress_extra_hosts() -> frozenset[str]:
+    """Hostnames cve-diff's own direct (proxy-env-honouring) HTTP lanes
+    contact.
+
+    Enabling the LLM egress chokepoint points ``HTTPS_PROXY`` at the
+    in-process proxy, which captures every env-honouring transport in
+    the process — including this package's ``UrllibClient`` lanes (OSV
+    / NVD lookups, GitHub API, distro security trackers, service-health
+    probes). Those lanes fetch a fixed host set, derived here from the
+    same constants the lanes use, so it joins the chokepoint allowlist
+    when the env capture happens. The ``EgressClient`` lanes (forge
+    patch/diff fetches) register their own hosts on construction and
+    need no entry here.
+    """
+    from urllib.parse import urlsplit
+
+    from packages.nvd.client import BASE_URL as _nvd_base
+    from packages.osv.client import OSV_BASE_URL as _osv_base
+
+    from cve_diff.discovery.distro_cache import (
+        _DEBIAN_URL,
+        _REDHAT_URL,
+        _UBUNTU_URL,
+    )
+    from cve_diff.infra.github_client import _GITHUB_HOSTS
+
+    hosts: set[str] = set(_GITHUB_HOSTS)
+    # infra.service_health probes the Anthropic API directly via
+    # UrllibClient (POST /v1/messages) — independent of which provider
+    # the operator's --model resolves to.
+    hosts.add("api.anthropic.com")
+    for url in (_osv_base, _nvd_base, _DEBIAN_URL, _UBUNTU_URL, _REDHAT_URL):
+        host = urlsplit(url).hostname
+        if host:
+            hosts.add(host)
+    return frozenset(hosts)
+
+
 def _provider_for_model(model_id: str, timeout_s: float) -> LLMProvider:
     """Build a provider from a model id string.
 
@@ -69,6 +107,17 @@ def _provider_for_model(model_id: str, timeout_s: float) -> LLMProvider:
         api_key=decision.api_key,
         timeout=int(timeout_s),
     )
+    if not decision.via_dispatcher:
+        # Direct-SDK lane: route the provider's outbound through the
+        # in-process LLM egress chokepoint, same as every LLMClient
+        # consumer. The dispatcher route (RAPTOR_LLM_SOCKET) skips this
+        # — UDS to the credential-isolation dispatcher is its own
+        # chokepoint — and the claudecode fallback resolves to an empty
+        # allowlist (subprocess transport; cc_dispatch proxies it
+        # separately), so it degrades to a no-op naturally.
+        from core.llm.egress import enable_llm_egress_for_model
+
+        enable_llm_egress_for_model(config, extra_hosts=_egress_extra_hosts())
     return create_provider(config)
 
 

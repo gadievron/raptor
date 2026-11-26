@@ -824,6 +824,75 @@ class TestClientInitBringupPolicy:
         assert TestBringupFailurePolicy.NOTICE in err
 
 
+class TestEnableForModel:
+    """``enable_llm_egress_for_model`` — the single-model chokepoint
+    entry for consumers that build providers directly via
+    ``create_provider`` (cve-diff's ResilientLLMClient)."""
+
+    def test_single_model_enables_chokepoint(self, stub_proxy):
+        egress.enable_llm_egress_for_model(_model(provider="anthropic"))
+        assert os.environ["HTTPS_PROXY"] == "http://127.0.0.1:51234"
+        assert ["api.anthropic.com"] in stub_proxy
+
+    def test_extra_hosts_join_allowlist(self, stub_proxy):
+        egress.enable_llm_egress_for_model(
+            _model(provider="anthropic"),
+            extra_hosts=("api.osv.dev", "localhost", ""),
+        )
+        registered = {h for call in stub_proxy for h in call}
+        assert "api.osv.dev" in registered
+        # Loopback / empty entries never reach the proxy allowlist.
+        assert "localhost" not in registered
+        assert "" not in registered
+
+    def test_extra_hosts_skipped_without_env_capture(self, stub_proxy):
+        """A model that resolves to an empty allowlist (claudecode —
+        subprocess transport) brings up nothing, so the caller's fetch
+        hosts must NOT widen the (never-constructed) proxy allowlist."""
+        egress.enable_llm_egress_for_model(
+            _model(provider="claudecode"),
+            extra_hosts=("api.osv.dev",),
+        )
+        assert stub_proxy == []
+        assert "HTTPS_PROXY" not in os.environ
+
+    def test_extra_hosts_union_when_already_enabled(self, stub_proxy):
+        """When an earlier consumer already enabled the chokepoint, the
+        single-model entry still registers the caller's fetch hosts —
+        its UrllibClient lanes are captured by the existing env
+        mutation all the same."""
+        egress.enable_llm_egress(_config(primary=_model(provider="openai")))
+        egress.enable_llm_egress_for_model(
+            _model(provider="anthropic"),
+            extra_hosts=("api.osv.dev",),
+        )
+        registered = {h for call in stub_proxy for h in call}
+        assert {"api.openai.com", "api.anthropic.com",
+                "api.osv.dev"} <= registered
+
+    def test_bringup_failure_policy_applies(self, monkeypatch):
+        def boom(allowed_hosts, **kwargs):
+            raise OSError("simulated bind failure")
+
+        import core.sandbox.proxy as proxy_mod
+        monkeypatch.setattr(proxy_mod, "get_proxy", boom)
+        monkeypatch.setenv("RAPTOR_LLM_EGRESS_STRICT", "1")
+        with pytest.raises(egress.LLMEgressBringupError):
+            egress.enable_llm_egress_for_model(_model(provider="anthropic"))
+
+    def test_default_fails_open_loudly(self, monkeypatch, capsys):
+        def boom(allowed_hosts, **kwargs):
+            raise OSError("simulated bind failure")
+
+        import core.sandbox.proxy as proxy_mod
+        monkeypatch.setattr(proxy_mod, "get_proxy", boom)
+        monkeypatch.delenv("RAPTOR_LLM_EGRESS_STRICT", raising=False)
+        egress.enable_llm_egress_for_model(  # must not raise
+            _model(provider="anthropic"),
+        )
+        assert TestBringupFailurePolicy.NOTICE in capsys.readouterr().err
+
+
 class TestEnableIsThreadSafe:
 
     def test_racing_first_callers_snapshot_operator_env_once(
