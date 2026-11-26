@@ -1115,6 +1115,15 @@ class ProjectManager:
 
     def load(self, name: str) -> Project | None:
         """Load a project by name. Returns None if not found or name invalid."""
+        # Same gate as creation, BEFORE any path derivation: the
+        # containment check below is containment-only — a name like
+        # "ghost/../real" resolves inside the registry, so it passed
+        # and loaded project "real" under a different spelling. No
+        # loadable project can exist whose name creation would refuse.
+        try:
+            self._validate_name(name)
+        except ValueError:
+            return None
         # Reject traversal attempts — load is called with user input
         project_file = (self.projects_dir / f"{name}.json").resolve()
         if not project_file.is_relative_to(self.projects_dir.resolve()):

@@ -321,6 +321,16 @@ class TestProjectManager(unittest.TestCase):
     def test_load_missing(self):
         self.assertIsNone(self.mgr.load("nonexistent"))
 
+    def test_load_rejects_aliasing_traversal_name(self):
+        """A traversal spelling that still resolves INSIDE the registry
+        ("ghost/../real" → <projects>/real.json) must be refused, not
+        silently load the aliased project — load applies the same name
+        gate as creation."""
+        self.mgr.create("real", self.target_code)
+        self.assertIsNone(self.mgr.load("ghost/../real"))
+        # The canonical spelling still loads.
+        self.assertIsNotNone(self.mgr.load("real"))
+
     def test_list_projects(self):
         self.mgr.create("a", self.target_a)
         self.mgr.create("b", self.target_b)
