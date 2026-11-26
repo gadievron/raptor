@@ -247,3 +247,29 @@ class TestWidenDir:
             p.write_text(json.dumps(trace))
             total = widen_dir(Path(td), Path("/fake"))
             assert total == 0
+
+    def test_non_object_trace_skipped_not_fatal(self):
+        # A trace file holding valid-but-non-object JSON (null, list,
+        # scalar) must be skipped per-file; later well-formed traces in
+        # the same directory still get widened.
+        trace = _trace(
+            steps=[
+                {"step": 1, "type": "entry", "definition": "src/app.py:1",
+                 "ast_view": {"name": "handle"}, "transform": "none"},
+                {"step": 2, "type": "call", "definition": "lib.validate()",
+                 "transform": "sanitize input"},
+                {"step": 3, "type": "sink", "definition": "os.exec_cmd()",
+                 "sink_type": "shell", "transform": "none"},
+            ],
+        )
+        trace["widening"] = []
+        with tempfile.TemporaryDirectory() as td:
+            for i, bad in enumerate(("null", "[]", '"x"', "42")):
+                (Path(td) / f"flow-trace-00{i}.json").write_text(bad)
+            good = Path(td) / "flow-trace-900.json"
+            good.write_text(json.dumps(trace))
+            total = widen_dir(Path(td), Path("/fake"))
+            assert total == 0
+            # The well-formed trace was still visited (unchanged: it was
+            # already widened), and the bad files were left untouched.
+            assert json.loads(good.read_text())["widening"] == []

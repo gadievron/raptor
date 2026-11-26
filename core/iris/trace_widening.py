@@ -18,6 +18,9 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from core.json import DEFAULT_JSON_MAX_BYTES
+from core.source.gated import read_text_gated
+
 logger = logging.getLogger(__name__)
 
 
@@ -243,9 +246,18 @@ def widen_dir(
     total = 0
     for trace_path in sorted(run_dir.glob("flow-trace-*.json")):
         try:
-            trace = json.loads(trace_path.read_text())
+            trace = json.loads(
+                read_text_gated(trace_path, max_bytes=DEFAULT_JSON_MAX_BYTES),
+            )
         except Exception:
             logger.debug("trace widening: failed to read %s", trace_path, exc_info=True)
+            continue
+
+        if not isinstance(trace, dict):
+            # Valid-but-non-object JSON (null, list, scalar): skip this
+            # file like any other unreadable trace instead of aborting
+            # the whole directory.
+            logger.debug("trace widening: non-object trace %s", trace_path)
             continue
 
         if trace.get("widening") is not None:
