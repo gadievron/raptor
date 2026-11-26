@@ -117,7 +117,7 @@ def _canonical_pin_host(host: object) -> str:
 # SSRF gate for IPv6 answers that EMBED an IPv4 address. Mirrors the
 # sandbox egress proxy's gate (core/sandbox/proxy.py: _nat64_prefixes /
 # _ip_is_blocked) — keep the two in sync.
-_NAT64_WKP = ipaddress.ip_network("64:ff9b::/96")
+_NAT64_WKP = ipaddress.IPv6Network("64:ff9b::/96")
 
 
 def _nat64_prefixes() -> list[ipaddress.IPv6Network]:
