@@ -855,6 +855,7 @@ def _get_safe_env() -> dict[str, str]:
             from core.security.credential_env import (
                 CREDENTIAL_ENV_FAMILY,
                 is_credential_env_pattern_member,
+                is_credential_shaped,
             )
         except ImportError:
             pass
@@ -864,7 +865,16 @@ def _get_safe_env() -> dict[str, str]:
             # Pattern members (CARGO_TARGET_<triple>_RUNNER-shaped
             # names) have no enumerable spelling — exact-name pops
             # cannot reach them, so sweep the survivors by predicate.
-            for key in [k for k in env if is_credential_env_pattern_member(k)]:
+            # Likewise credential-SHAPED names (*_API_KEY/*_API_TOKEN
+            # and the broader secret-shape vocabulary): the primary
+            # get_safe_env drops them, and the degraded fallback must
+            # not leak what the healthy path withholds.
+            for key in [
+                k for k in env
+                if is_credential_env_pattern_member(k)
+                or is_credential_shaped(k)
+                or k.endswith(("_API_KEY", "_API_TOKEN"))
+            ]:
                 env.pop(key)
     env["ASAN_OPTIONS"] = "detect_leaks=1:abort_on_error=1:handle_segv=0"
     # abort_on_error=1 is load-bearing for the signal-grade sanitizer

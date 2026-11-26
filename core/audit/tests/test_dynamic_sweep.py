@@ -427,3 +427,20 @@ class TestGetSafeEnvDegradedFallback:
         assert env.get("MY_LEGITIMATE_VAR") == "kept"
         # The fallback's own sanitizer knobs still land.
         assert "ASAN_OPTIONS" in env
+
+    def test_fallback_drops_credential_shaped_names(self, monkeypatch):
+        # The primary get_safe_env withholds generic *_API_KEY /
+        # *_API_TOKEN spellings and the broader credential-SHAPED
+        # vocabulary; the degraded fallback must not leak what the
+        # healthy path withholds.
+        monkeypatch.setenv("EXAMPLEVENDOR_API_KEY", "sentinel")
+        monkeypatch.setenv("EXAMPLEVENDOR_API_TOKEN", "sentinel")
+        monkeypatch.setenv("SOME_SERVICE_PASSWORD", "sentinel")
+        # Negative control: a documented settings knob the shape
+        # vocabulary exempts must survive the sweep.
+        monkeypatch.setenv("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "4096")
+        env = self._degraded_env(monkeypatch)
+        assert "EXAMPLEVENDOR_API_KEY" not in env
+        assert "EXAMPLEVENDOR_API_TOKEN" not in env
+        assert "SOME_SERVICE_PASSWORD" not in env
+        assert env.get("CLAUDE_CODE_MAX_OUTPUT_TOKENS") == "4096"
