@@ -122,8 +122,17 @@ def write_consensus_outcome(
             cwe_id=cwe_id,
             produced_by="cve-diff",
         )
+        from core.labeled_attempts.trail_provenance import (
+            stamp_outcome_record,
+        )
+
+        record = outcome.to_dict()
+        # Authorship stamp: the trail reader demotes unstamped records
+        # to inconclusive (the run dir is writable by less-trusted
+        # code, so a bare JSONL line proves nothing).
+        stamp_outcome_record(record)
         path = Path(output_dir) / VERIFIED_OUTCOMES_FILENAME
-        append_jsonl(path, outcome.to_dict())
+        append_jsonl(path, record)
         return True
     except Exception:  # noqa: BLE001 — surfacing must never break the run
         logger.debug(

@@ -5,11 +5,20 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from cve_diff.core.models import CommitSha, DiffBundle, RepoRef
 from cve_diff.report.verified_outcomes import write_consensus_outcome
 
 FIX = "a" * 40
 PARENT = "b" * 40
+
+
+@pytest.fixture(autouse=True)
+def _isolated_trail_key(tmp_path, monkeypatch):
+    """The writer stamps records under the per-purpose outcome-trail
+    MAC key; keep key creation inside the test tmp."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
 
 
 def _bundle(consensus=None, repo_url="https://github.com/example/proj", **kw):
@@ -67,6 +76,17 @@ def test_writes_consensus_record_that_round_trips(tmp_path):
     assert vo.produced_by == "cve-diff"
     assert vo.evidence["fix_commit"] == FIX
     assert vo.evidence["methods"] == ["osv_refs", "nvd_patch_refs"]
+
+
+def test_written_record_is_stamped_and_verifies(tmp_path):
+    """The persisted line must carry this install's authorship token —
+    the trail reader demotes unstamped records to inconclusive."""
+    assert write_consensus_outcome(tmp_path, _bundle(consensus=_consensus()))
+    from core.labeled_attempts.trail_provenance import verify_outcome_record
+    from core.labeled_attempts.view import VERIFIED_OUTCOMES_FILENAME
+
+    line = (tmp_path / VERIFIED_OUTCOMES_FILENAME).read_text().splitlines()[0]
+    assert verify_outcome_record(json.loads(line))
 
 
 def test_single_vote_is_not_verified(tmp_path):

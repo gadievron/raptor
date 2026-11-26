@@ -599,6 +599,7 @@ def collect_outcomes(
     # contract this loop always had: missing/unreadable/symlinked
     # files load as empty, malformed lines are skipped, never fatal.
     from core.json import load_jsonl
+    from core.labeled_attempts.trail_provenance import verify_outcome_record
 
     for run_dir in _verified_outcome_dirs(output_dir, project_root):
         path = run_dir / VERIFIED_OUTCOMES_FILENAME
@@ -622,6 +623,19 @@ def collect_outcomes(
             # is an unauthenticated disk artifact and must not be able
             # to assert it into the threat model's flip gate.
             vo.evidence.pop("provenance_verified", None)
+            # Trail records are stamped by their producers with this
+            # install's per-purpose MAC (trail_provenance). A record
+            # whose token does not verify — unstamped, foreign, or
+            # content-edited — must not be able to assert a decisive
+            # verdict: demote to INCONCLUSIVE (the same demotion shape
+            # ``from_witness`` applies to unverified LLM-emitted
+            # witnesses), keeping it out of the Confirmed view and out
+            # of VERIFIED-ranked retrieval while staying visible.
+            if (vo.status is not OutcomeStatus.INCONCLUSIVE
+                    and not verify_outcome_record(rec)):
+                vo.evidence["trail_verification"] = "unverified"
+                vo.evidence["claimed_status"] = vo.status.value
+                vo.status = OutcomeStatus.INCONCLUSIVE
             outcomes.append(vo)
 
     return outcomes

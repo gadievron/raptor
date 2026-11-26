@@ -28,12 +28,20 @@ def _record(finding_id="CVE-2024-1", oracle=Oracle.CONSENSUS):
     )
 
 
-def _write(run_dir, *records):
+def _write(run_dir, *records, stamp=True):
+    """Append records the way the real producers do: stamped with the
+    per-purpose trail MAC. ``stamp=False`` simulates a planted /
+    legacy / foreign line."""
+    from core.labeled_attempts.trail_provenance import stamp_outcome_record
+
     run_dir.mkdir(parents=True, exist_ok=True)
     with open(run_dir / VERIFIED_OUTCOMES_FILENAME, "a",
               encoding="utf-8") as fh:
         for rec in records:
-            fh.write(json.dumps(rec.to_dict(), default=str) + "\n")
+            line = rec.to_dict()
+            if stamp:
+                stamp_outcome_record(line)
+            fh.write(json.dumps(line, default=str) + "\n")
 
 
 def test_collects_run_local_records(tmp_path, monkeypatch):
@@ -122,6 +130,63 @@ def test_jsonl_lines_cannot_assert_mechanical_provenance(
     # Two-direction guard: the strip only removes the reserved flag,
     # never the record or its other evidence.
     assert consensus[0].evidence.get("fix_commit") == "a" * 40
+
+
+def test_unstamped_record_demotes_to_inconclusive(tmp_path, monkeypatch):
+    """A trail line without this install's authorship token — planted,
+    legacy, or foreign — must not assert a decisive verdict into the
+    Confirmed view."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    run = tmp_path / "run"
+    _write(run, _record("CVE-2024-PLANTED"), stamp=False)
+    # REFUTED is equally decisive (it suppresses findings) and demotes
+    # the same way.
+    refuted = _record("CVE-2024-FP")
+    refuted.status = OutcomeStatus.REFUTED
+    _write(run, refuted, stamp=False)
+
+    outcomes = {o.finding_id: o for o in collect_outcomes(run)
+                if o.oracle is Oracle.CONSENSUS}
+    planted = outcomes["CVE-2024-PLANTED"]
+    assert planted.status is OutcomeStatus.INCONCLUSIVE
+    assert planted.evidence.get("trail_verification") == "unverified"
+    assert planted.evidence.get("claimed_status") == "verified"
+    assert outcomes["CVE-2024-FP"].status is OutcomeStatus.INCONCLUSIVE
+
+
+def test_tampered_stamped_record_demotes(tmp_path, monkeypatch):
+    """The token is a content MAC over the whole record — editing any
+    field under a surviving token fails verification."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    run = tmp_path / "run"
+    _write(run, _record("CVE-2024-GENUINE"))
+    path = run / VERIFIED_OUTCOMES_FILENAME
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "CVE-2024-GENUINE", "CVE-2024-REWRITE"),
+        encoding="utf-8")
+
+    outcomes = [o for o in collect_outcomes(run)
+                if o.oracle is Oracle.CONSENSUS]
+    assert len(outcomes) == 1
+    assert outcomes[0].finding_id == "CVE-2024-REWRITE"
+    assert outcomes[0].status is OutcomeStatus.INCONCLUSIVE
+    assert outcomes[0].evidence.get("trail_verification") == "unverified"
+
+
+def test_stamped_record_keeps_decisive_status(tmp_path, monkeypatch):
+    """Two-direction guard: a record stamped by this install's
+    producers keeps its verdict (also proves the demotion tests above
+    cannot pass vacuously)."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    run = tmp_path / "run"
+    _write(run, _record("CVE-2024-REAL"))
+
+    outcomes = [o for o in collect_outcomes(run)
+                if o.oracle is Oracle.CONSENSUS]
+    assert len(outcomes) == 1
+    assert outcomes[0].status is OutcomeStatus.VERIFIED
+    assert "trail_verification" not in outcomes[0].evidence
 
 
 def test_witness_source_carries_mechanical_provenance(

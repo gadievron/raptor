@@ -2906,9 +2906,18 @@ class WebScanner:
         # .jsonl, this run's oracle-proven confirmations are invisible
         # to the unified confirmed view.
         jsonl_path = self.out_dir / "verified-outcomes.jsonl"
+        from core.labeled_attempts.trail_provenance import (
+            stamp_outcome_record,
+        )
         for outcome_dict in outcome_dicts:
             try:
-                append_jsonl(jsonl_path, outcome_dict)
+                # Stamp a copy: the authorship token covers exactly the
+                # persisted (already redaction-projected) line, and the
+                # report artifact above stays token-free. The trail
+                # reader demotes unstamped records to inconclusive.
+                record = dict(outcome_dict)
+                stamp_outcome_record(record)
+                append_jsonl(jsonl_path, record)
             except OSError:
                 logger.warning(
                     "could not append verified outcome to %s", jsonl_path,

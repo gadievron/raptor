@@ -19,6 +19,13 @@ from cve_env.infra.verified_outcomes import write_build_outcome
 CVE = "CVE-2018-7600"
 
 
+@pytest.fixture(autouse=True)
+def _isolated_trail_key(tmp_path, monkeypatch):
+    """The writer stamps records under the per-purpose outcome-trail
+    MAC key; keep key creation inside the test tmp."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+
+
 def _outcome(status="success", **kw):
     base = {
         "cve_id": CVE,
@@ -106,6 +113,20 @@ class TestVerifiedOutcomes:
         assert vo.produced_by == "cve-env"
         assert vo.evidence["tier"] == "docker"
         assert vo.evidence["method"] == "vulhub-image"
+
+    def test_written_record_is_stamped_and_verifies(self, tmp_path):
+        """The persisted line must carry this install's authorship
+        token — the trail reader demotes unstamped records to
+        inconclusive."""
+        assert write_build_outcome(tmp_path, _outcome())
+        from core.labeled_attempts.trail_provenance import (
+            verify_outcome_record,
+        )
+        from core.labeled_attempts.view import VERIFIED_OUTCOMES_FILENAME
+
+        line = (tmp_path / VERIFIED_OUTCOMES_FILENAME).read_text(
+        ).splitlines()[0]
+        assert verify_outcome_record(json.loads(line))
 
     @pytest.mark.parametrize("status", [
         "verified_partial", "verify_failed", "unresolvable",

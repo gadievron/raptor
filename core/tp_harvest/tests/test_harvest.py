@@ -457,12 +457,19 @@ class TestRobustness:
 class TestOracleVerifiedFlag:
     def test_flag_propagates_to_manifest_and_status(
             self, run_dir: Path, capsys):
+        from core.labeled_attempts.trail_provenance import (
+            stamp_outcome_record,
+        )
+        outcome_line = {
+            "finding_id": "FIND-1", "oracle": "sandbox",
+            "status": "verified", "reproducible": True,
+            "evidence": {"bytes_hash": "ab" * 16},
+        }
+        # Producer-stamped: an unstamped trail line demotes to
+        # inconclusive and never flips oracle_verified.
+        stamp_outcome_record(outcome_line)
         (run_dir / "verified-outcomes.jsonl").write_text(
-            json.dumps({
-                "finding_id": "FIND-1", "oracle": "sandbox",
-                "status": "verified", "reproducible": True,
-                "evidence": {"bytes_hash": "ab" * 16},
-            }) + "\n", encoding="utf-8")
+            json.dumps(outcome_line) + "\n", encoding="utf-8")
         summary = harvest_run(run_dir)
         hid = summary["harvested"][0]
         entry = load_manifest(run_dir)["entries"][hid]
