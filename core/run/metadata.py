@@ -1135,6 +1135,26 @@ def start_run(output_dir: Path, command: str,
     reap_stale_logs()
     reap_stale_runs(output_dir.parent)
 
+    # Seal the provenance manifest NOW, before any analysis runs. The
+    # source-control snapshot in particular must be taken here — the tree
+    # can change mid-run or after, and the only honest record of what
+    # produced this run is the state at its start. complete_run merges in
+    # end-of-run facts (models that fired, engine versions).
+    #
+    # Built BEFORE the contention gate below: the target snapshot walks
+    # the target's git state (seconds-plus on kernel-scale checkouts),
+    # and holding the project op lock + metadata lock across it starved
+    # every mutating /project subcommand — they give up after a short
+    # grace — and queued/refused sibling starts. The seal-at-start
+    # honesty contract is kept by the cheap in-lock re-verify further
+    # down: if the target HEAD moved while this start waited at the gate
+    # (queued starts can wait minutes), the manifest is rebuilt under
+    # the lock.
+    from core.run.provenance import build_start_manifest, target_head_drifted
+
+    manifest = build_start_manifest(target=target,
+                                    target_identity=target_identity)
+
     with contextlib.ExitStack() as _gate:
         # Contention gate BEFORE the run dir is created, so a refused
         # start leaves nothing behind (the raptor.py wrapper pre-creates
@@ -1155,19 +1175,21 @@ def start_run(output_dir: Path, command: str,
         # metadata lock — no path takes them in the other order.
         _gate.enter_context(_metadata_lock(output_dir / RUN_METADATA_FILE))
 
-        # Seal the provenance manifest NOW, before any analysis runs. The
-        # source-control snapshot in particular must be taken here — the tree
-        # can change mid-run or after, and the only honest record of what
-        # produced this run is the state at its start. complete_run merges in
-        # end-of-run facts (models that fired, engine versions).
-        from core.run.provenance import build_start_manifest
+        # Cheap staleness re-verify for the manifest prebuilt above the
+        # gate (one rev-parse — never the full snapshot): a queued start
+        # can wait minutes between the prebuild and this point, and the
+        # sealed record must be the state at the run's actual start. A
+        # caller-supplied target_identity is verbatim by contract and
+        # never re-derived.
+        if target_identity is None and target_head_drifted(manifest, target):
+            manifest = build_start_manifest(target=target)
 
         metadata = {
             "version": 2,
             "command": command,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "status": STATUS_RUNNING,
-            "manifest": build_start_manifest(target=target, target_identity=target_identity),
+            "manifest": manifest,
             "extra": extra or {},
         }
         # Worker identity: recorded per _worker_stamp's lifetime policy

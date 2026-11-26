@@ -449,3 +449,84 @@ class ForeignStampedHolderTest(RunContentionBase):
             p.start()
             self.addCleanup(p.stop)
         self.assertIsNone(self._scan())
+
+
+class StartManifestLockSpanTest(RunContentionBase):
+    """The provenance manifest is built BEFORE the op-lock span.
+
+    The target git snapshot inside it takes seconds-plus on
+    kernel-scale checkouts; holding the project op lock + metadata
+    lock across it starves every mutating /project subcommand (they
+    give up after a short grace) and queued sibling starts. The
+    seal-at-start honesty contract is kept by a cheap in-lock HEAD
+    re-verify that rebuilds the manifest when the target moved while
+    this start waited at the gate.
+    """
+
+    def test_manifest_built_before_gate(self):
+        events: list[str] = []
+        real_gate = metadata._project_run_gate
+
+        @contextmanager
+        def recording_gate(*args, **kwargs):
+            events.append("gate-enter")
+            with real_gate(*args, **kwargs):
+                yield
+
+        def recording_manifest(repo_dir=None, target=None,
+                               target_identity=None):
+            events.append("manifest")
+            return {"schema": 1}
+
+        with patch("core.run.metadata._project_run_gate", recording_gate), \
+             patch("core.run.provenance.build_start_manifest",
+                   recording_manifest):
+            start_run(self.project_out / "agentic_mlock", "agentic")
+        self.assertIn("manifest", events)
+        self.assertIn("gate-enter", events)
+        self.assertLess(
+            events.index("manifest"), events.index("gate-enter"),
+            "manifest build must precede the op-lock span",
+        )
+
+    def test_in_lock_head_reverify_rebuilds_on_drift(self):
+        """Target HEAD moved between the prebuild and the lock (queued
+        starts can wait minutes): the sealed manifest must be rebuilt
+        under the lock, recording the state at the run's actual start."""
+        calls: list[int] = []
+
+        def manifest_factory(repo_dir=None, target=None,
+                             target_identity=None):
+            calls.append(1)
+            sha = "aaa" if len(calls) == 1 else "bbb"
+            return {"schema": 1, "target": {"commit": sha}}
+
+        target = str(Path(self._tmp.name) / "code")
+        out = self.project_out / "agentic_drift"
+        with patch("core.run.provenance.build_start_manifest",
+                   manifest_factory), \
+             patch("core.run.provenance._git", lambda *a, **k: "bbb"):
+            start_run(out, "agentic", target=target)
+        meta = load_json(out / RUN_METADATA_FILE)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(meta["manifest"]["target"]["commit"], "bbb")
+
+    def test_in_lock_head_reverify_keeps_fresh_manifest(self):
+        """No drift: the prebuilt manifest is sealed as-is, with no
+        second (expensive) snapshot."""
+        calls: list[int] = []
+
+        def manifest_factory(repo_dir=None, target=None,
+                             target_identity=None):
+            calls.append(1)
+            return {"schema": 1, "target": {"commit": "aaa"}}
+
+        target = str(Path(self._tmp.name) / "code")
+        out = self.project_out / "agentic_fresh"
+        with patch("core.run.provenance.build_start_manifest",
+                   manifest_factory), \
+             patch("core.run.provenance._git", lambda *a, **k: "aaa"):
+            start_run(out, "agentic", target=target)
+        meta = load_json(out / RUN_METADATA_FILE)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(meta["manifest"]["target"]["commit"], "aaa")

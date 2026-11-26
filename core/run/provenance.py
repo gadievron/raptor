@@ -464,6 +464,27 @@ def build_start_manifest(repo_dir: Path | None = None,
     return manifest
 
 
+def target_head_drifted(manifest: dict[str, Any],
+                        target: Any | None) -> bool:
+    """Whether the target's HEAD moved since ``manifest`` was built.
+
+    Cheap staleness probe for a start manifest built BEFORE the run's
+    lock span (one ``rev-parse``; the expensive worktree-dirt probe is
+    not repeated). Only meaningful for git-checkout targets whose
+    manifest recorded a commit; returns False otherwise. The target is
+    attacker-controlled — same ``untrusted=True`` doctrine as
+    ``target_snapshot``.
+    """
+    if not target:
+        return False
+    tgt = manifest.get("target")
+    recorded = tgt.get("commit") if isinstance(tgt, dict) else None
+    if not recorded:
+        return False
+    return _git(Path(target), "rev-parse", "HEAD",
+                untrusted=True) != recorded
+
+
 # Stamp written into the manifest of a run we cannot characterise — adopted
 # legacy directories, or anything created before manifest capture existed.
 # cite/reporting key off this to degrade honestly ("provenance unavailable")
