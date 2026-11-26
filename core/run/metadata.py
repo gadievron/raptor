@@ -2106,6 +2106,18 @@ def complete_run(output_dir: Path, extra: dict[str, Any] | None = None,
     in the foreign run directory.
     """
     ensure_run_command(output_dir, expected_command)
+    if _already_terminal(output_dir, "complete_run", incoming_extra=extra):
+        # Without this pre-check a duplicate complete fell straight
+        # through _update_status's terminal guard (it only fires when
+        # current != status) and rewrote end_timestamp/duration, and a
+        # stray complete on a failed run — status write refused — still
+        # re-ran every completion side effect, notably merging a failed
+        # run's journal into the project index (a merge the designed
+        # lifecycle reserves for complete/interrupt). The real-over-
+        # heuristic recovery lane is preserved: _already_terminal lets
+        # a marker-less completion through for _update_status's locked
+        # recovery clause to adjudicate.
+        return
     _finalize_sandbox_summary(output_dir)
     _triage_verdict = _finalize_sandbox_triage(output_dir)
     _finalize_egress_summary(output_dir)
@@ -2547,9 +2559,10 @@ def _append_coverage_progress(proj: Path, run_dir: Path, store,
 def _already_terminal(output_dir: Path, caller: str,
                       allow_refail: bool = False,
                       incoming_extra: dict[str, Any] | None = None) -> bool:
-    """Shared pre-check for the non-complete finalisers (fail_run /
-    cancel_run / interrupt_run): True when the run is ALREADY terminal
-    and the finaliser must return before ANY side effect.
+    """Shared pre-check for the terminal finalisers (complete_run /
+    fail_run / cancel_run / interrupt_run): True when the run is
+    ALREADY terminal and the finaliser must return before ANY side
+    effect.
 
     Re-validate the current status BEFORE the side effects: a sweep's
     or supervisor-drain's finaliser racing a just-completed run must

@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from core.json import load_json
+from core.json import load_json, save_json
 
 from core.testing.logging_state import owned_log_handler
 from core.project.sessions import (
@@ -162,6 +162,43 @@ class TestRunLifecycle(unittest.TestCase):
             out = Path(d) / "new" / "nested" / "run"
             start_run(out, "scan")
             self.assertTrue(out.exists())
+
+    def test_duplicate_complete_preserves_terminal_timing(self):
+        """A second complete_run on a completed run is refused outright —
+        it must not rewrite the sealed end_timestamp/duration (which feed
+        cost and reporting views) or re-fire completion side effects."""
+        with TemporaryDirectory() as d:
+            out = Path(d) / "run"
+            start_run(out, "scan")
+            complete_run(out)
+            meta_path = out / RUN_METADATA_FILE
+            meta = load_json(meta_path)
+            sentinel = "1999-01-01T00:00:00"
+            meta["end_timestamp"] = sentinel
+            meta["duration_seconds"] = 1.5
+            save_json(meta_path, meta)
+            complete_run(out)
+            meta = load_json(meta_path)
+            self.assertEqual(meta["end_timestamp"], sentinel)
+            self.assertEqual(meta["duration_seconds"], 1.5)
+
+    def test_stray_complete_on_failed_run_skips_journal_merge(self):
+        """A stray complete_run on a failed run has its status write
+        refused — it must not run the post-status side effects either,
+        notably merging a failed run's journal into the project index
+        (a merge the designed lifecycle reserves for complete and
+        interrupt)."""
+        from unittest import mock
+        with TemporaryDirectory() as d:
+            out = Path(d) / "run"
+            start_run(out, "scan")
+            fail_run(out, error="tool exited with error")
+            with mock.patch("core.run.metadata._merge_run_journal") as merge:
+                complete_run(out)
+            merge.assert_not_called()
+            self.assertEqual(
+                load_json(out / RUN_METADATA_FILE)["status"], "failed",
+            )
 
     def test_load_missing(self):
         with TemporaryDirectory() as d:
