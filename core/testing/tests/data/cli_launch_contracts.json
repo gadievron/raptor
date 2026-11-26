@@ -598,7 +598,7 @@
     "core/sandbox/tests/test_stdin_default_locale.py": "effe682f5d10cc8c825b503263e3e75585a078e45581f15fd7adbc74f9bf5a28",
     "core/sandbox/tests/test_stdin_text_errors.py": "3500d2bb9f495847be241828fcde9781d9cef70f12f0849e7a17b3ee588faafe",
     "core/sandbox/tests/test_stdio_capabilities.py": "b566c710ee4a7f655a1d13b3574f79d8d7d924e13d9aefbc0b92d16558d18c62",
-    "core/sandbox/tests/test_supervised.py": "9d5fd6f1af12714f916e7606619b71b86bb1b3c673d176bcc407ac0ecc5c565b",
+    "core/sandbox/tests/test_supervised.py": "dc1164194cba710c50021fb2dfa4888cd22b2f977c15db14e90e93c37706e9a3",
     "core/sandbox/tests/test_supervised_invariants.py": "38a567343586acd87c4202a520e47105145e0248dac18f703b2eb47eb5218c56",
     "core/sandbox/tests/test_supervised_scan_churn_live.py": "d4811765736563961920663575735895734804470423c9905feb7fa96aa56983",
     "core/sandbox/tests/test_supervised_waiter_contract.py": "7d0ea8cc783ea71ada5df35438d765ab9195fe56035742578a07ce495fb381db",

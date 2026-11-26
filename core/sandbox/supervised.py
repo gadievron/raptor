@@ -1247,7 +1247,7 @@ class SupervisedHandle:
 
     # -- state ------------------------------------------------------------
 
-    def _capture_group_anchor_locked(self) -> None:
+    def _capture_group_anchor_locked(self) -> bool:
         """Capture the group identity anchor while the leader is
         exited-but-unreaped — the only window in which self.pid is
         kernel-guaranteed OURS (an unreaped child's pid cannot be
@@ -1258,28 +1258,30 @@ class SupervisedHandle:
         recycled pid's group and claim a false identity — never
         capture post-reap. Occlusion or an unlistable /proc merely
         shrinks or drops the anchor — the refuse direction later,
-        never a false identity claim."""
+        never a false identity claim. Return False when the leader was
+        observed running: the caller must not reap an exit that arrives
+        after that observation without first capturing its anchor."""
         if (self._popen is None or self._group_verified
                 or self._group_exit_view is not None
                 or self.returncode is not None):
-            return
+            return True
         try:
             res = os.waitid(os.P_PID, self.pid,
                             os.WEXITED | os.WNOHANG | os.WNOWAIT)
         except (ChildProcessError, OSError):
-            return  # the reap path owns the diagnosis
+            return True  # the reap path owns the diagnosis
         if res is None:
-            return  # still running — nothing to anchor yet
+            return False  # still running — do not reap a later exit yet
         self._group_exit_view = _group_sighted_members(self.pid)
+        return True
 
     def _record_exit(self, returncode: int) -> None:
         # Group tier: the identity anchor (_group_exit_view) was
         # captured BEFORE this reap by _capture_group_anchor_locked —
         # by now the leader is reaped and its pid may already be
-        # recycled, so no group scan may run here. An exit that lands
-        # in the microsecond between the anchor check and the reap
-        # leaves the anchor None: the natural-exit corroboration then
-        # refuses (SupervisedTeardownError), never claims a false
+        # recycled, so no group scan may run here. If exit observation
+        # or the group scan failed, the anchor can still be None: the
+        # natural-exit corroboration then refuses, never claims a false
         # identity.
         self.returncode = returncode
         if self.ns_init_pidfd is not None:
@@ -1309,7 +1311,8 @@ class SupervisedHandle:
         if self.returncode is not None:
             return self.returncode
         if self._popen is not None:
-            self._capture_group_anchor_locked()
+            if not self._capture_group_anchor_locked():
+                return None
             rc = self._popen.poll()
             if rc is not None:
                 self._record_exit(rc)

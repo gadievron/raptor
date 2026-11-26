@@ -31,6 +31,8 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux",
     reason="supervised trees are Linux-only (fork/pidfd/procfs)",
@@ -760,6 +762,60 @@ class TestGroupTier:
                     with contextlib.suppress(ChildProcessError, OSError):
                         os.waitpid(z, os.WNOHANG)
                 time.sleep(0.05)
+
+    def test_group_exit_between_observation_and_poll_keeps_anchor(
+            self, tmp_path, monkeypatch):
+        ready, release = tmp_path / "ready", tmp_path / "release"
+        h = spawn_supervised(
+            ["/bin/sh", "-c",
+             'sleep 30 & printf "%s" "$!" > "$1"; '
+             'while [ ! -e "$2" ]; do sleep 0.01; done; exit 0',
+             "owned-leader", str(ready), str(release)],
+            on_parent_death="kill", pid_ns="off", env=_ENV)
+        real_waitid = os.waitid
+        raced = []
+        try:
+            deadline = time.monotonic() + _WAIT_S
+            while True:
+                child_text = ready.read_text() if ready.exists() else ""
+                if child_text:
+                    child = int(child_text)
+                    break
+                assert time.monotonic() < deadline, "member was not published"
+                time.sleep(0.01)
+
+            def observe_then_exit(*args):
+                observed = real_waitid(*args)
+                if args[1] == h.pid and not raced:
+                    assert observed is None  # gated leader is still running
+                    release.touch()
+                    deadline = time.monotonic() + _WAIT_S
+                    while real_waitid(
+                            os.P_PID, h.pid,
+                            os.WEXITED | os.WNOHANG | os.WNOWAIT) is None:
+                        assert time.monotonic() < deadline, "leader did not exit"
+                        time.sleep(0.01)
+                    raced.append(True)
+                # Return the original running snapshot after the real exit.
+                return observed
+
+            with monkeypatch.context() as scope:
+                patch_module_attribute(scope, sup, "os", "waitid", observe_then_exit)
+                assert h.poll() is None
+                assert raced == [True]
+                assert real_waitid(
+                    os.P_PID, h.pid,
+                    os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
+                assert h.wait(timeout=_WAIT_S) == 0
+            assert h._group_exit_view is not None
+            assert child in {member.pid for member in h._group_exit_view.members}
+            assert h.terminate(grace_s=2.0) == 0
+            assert _live_pgrp_members(h.pid) == []
+        finally:
+            release.touch()
+            for pid in _live_pgrp_members(h.pid):
+                _reap_stray(pid)
+            h._popen.wait(timeout=_WAIT_S)
 
     def test_group_natural_exit_zero_sighted_refuses_without_signal(
             self, monkeypatch):
