@@ -526,6 +526,47 @@ def _assert_parent_contained(base_dir: Path, path: Path) -> None:
         raise ValueError(msg)
 
 
+def _pin_parent_dir(base_dir: Path, path: Path) -> int:
+    """Create-and-pin ``path``'s parent with an anchored walk under
+    ``base_dir``; returns an owned directory fd.
+
+    ``annotation_path``'s resolve() containment check is point-in-time:
+    a same-privilege writer who swaps an intermediate directory for a
+    symlink AFTER that check would redirect the subsequent by-name
+    mkdir and lock-file creation outside the base (file litter at an
+    attacker-chosen location, before any under-lock re-check runs).
+    The anchored walk refuses symlinks per component and mkdirs/opens
+    via the previous pinned fd, so the topology that passed the check
+    is the topology that gets used.
+    """
+    from core.source.beneath import open_dir_beneath
+
+    base = Path(base_dir)
+    try:
+        rel = path.parent.relative_to(base)
+    except ValueError as e:
+        msg = f"annotation path escapes base dir: {path} is not under {base}"
+        raise AnnotationFileError(msg) from e
+    # The BASE itself is operator configuration, not derived from the
+    # annotated source path: creating it (as the previous
+    # mkdir(parents=True) did) and resolving a symlinked base both stay
+    # supported. Only components beneath it are reachable through
+    # hostile source-path input and must not follow links.
+    base_resolved = base.resolve()
+    os.makedirs(base_resolved, exist_ok=True)
+    try:
+        # mode 0o777 (umask applies) keeps the previous
+        # mkdir(parents=True) directory permissions.
+        return open_dir_beneath(base_resolved, rel, create=True, mode=0o777)
+    except OSError as e:
+        msg = (
+            f"cannot pin annotation directory {path.parent} under "
+            f"{base} ({e}); a symlinked or non-directory component "
+            "inside the annotation tree is refused"
+        )
+        raise AnnotationFileError(msg) from e
+
+
 def annotation_file_mtime(base_dir: Path, source_file: str) -> float | None:
     """The annotation .md file's mtime for one source file, or None
     when the file (or its path) doesn't resolve.
@@ -542,9 +583,17 @@ def annotation_file_mtime(base_dir: Path, source_file: str) -> float | None:
 
 
 @contextmanager
-def _file_lock(path: Path):
+def _file_lock(path: Path, base_dir: Path | None = None):
     """Cross-process exclusive lock on the annotation file's read-
     modify-write window.
+
+    With ``base_dir`` given (every production caller), the lock file's
+    parent directory is created and pinned by an anchored, symlink-
+    refusing walk under the base, and the lock is opened relative to
+    the pinned fd — a directory component swapped for a symlink after
+    the containment check cannot redirect the creation outside the
+    tree. Without it (direct test callers), the legacy by-name
+    mkdir/open runs with no containment claim.
 
     Two operators (or a scripted pass + operator) writing to the same
     source file's annotations concurrently could otherwise lose data via
@@ -574,7 +623,11 @@ def _file_lock(path: Path):
         return
     from core.source.streams import owned_fd
 
-    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_dir_fd: int | None = None
+    if base_dir is not None:
+        lock_dir_fd = _pin_parent_dir(base_dir, path)
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_suffix(path.suffix + ".lock")
     close_pending = True
 
@@ -602,21 +655,32 @@ def _file_lock(path: Path):
     # FIFO open SUCCEEDS immediately (it does not fail), which is why
     # the regularity refusal after the open is load-bearing, not
     # belt-and-braces.
+    open_flags = (
+        os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW
+        | getattr(os, "O_NONBLOCK", 0)
+    )
     try:
-        fd = os.open(
-            str(lock_path),
-            os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW
-            | getattr(os, "O_NONBLOCK", 0),
-            0o666,
-        )
-    except PermissionError as e:
-        msg = (
-            f"cannot open annotation lock file {lock_path} ({e}); "
-            f"fix its permissions (it only serialises writers and "
-            f"holds no content — safe to delete when no write is in "
-            f"flight), then retry"
-        )
-        raise AnnotationFileError(msg) from e
+        try:
+            if lock_dir_fd is not None:
+                # Anchored creation: relative to the PINNED parent fd,
+                # so no path component is re-traversed by name here.
+                fd = os.open(
+                    lock_path.name, open_flags, 0o666,
+                    dir_fd=lock_dir_fd,
+                )
+            else:
+                fd = os.open(str(lock_path), open_flags, 0o666)
+        except PermissionError as e:
+            msg = (
+                f"cannot open annotation lock file {lock_path} ({e}); "
+                f"fix its permissions (it only serialises writers and "
+                f"holds no content — safe to delete when no write is in "
+                f"flight), then retry"
+            )
+            raise AnnotationFileError(msg) from e
+    finally:
+        if lock_dir_fd is not None:
+            os.close(lock_dir_fd)
     with owned_fd(fd, close_fd=close_owned):
         st = os.fstat(fd)
         if not pystat.S_ISREG(st.st_mode):
@@ -1093,12 +1157,14 @@ def write_annotation(
     _validate_body(ann.body)
 
     path = annotation_path(base_dir, ann.file)
-    path.parent.mkdir(parents=True, exist_ok=True)
 
     # Cross-process lock around the read-modify-write cycle. Without
     # it, two concurrent writers could each load state A, then write
     # A+B1 and A+B2 — one B is dropped. The lock serialises them.
-    with _file_lock(path):
+    # base_dir makes the lock's parent-dir creation an anchored,
+    # symlink-refusing walk (see _pin_parent_dir) — never a by-name
+    # mkdir that a raced-in symlink could redirect outside the base.
+    with _file_lock(path, base_dir):
         _assert_parent_contained(base_dir, path)
         # Strict read: an unreadable/corrupt existing file raises
         # AnnotationFileError here instead of reading as empty — the
@@ -1172,8 +1238,7 @@ def restamp_annotation(
     _validate_function_name(function)
     _validate_metadata(context)
     path = annotation_path(base_dir, source_file)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with _file_lock(path):
+    with _file_lock(path, base_dir):
         _assert_parent_contained(base_dir, path)
         state = _load_file_state(base_dir, source_file, strict=True)
         pre_mtime = annotation_file_mtime(base_dir, source_file)
@@ -1215,7 +1280,7 @@ def remove_annotation(
     which keeps the (section-less, marker-bearing) file alive.
     """
     path = annotation_path(base_dir, source_file)
-    with _file_lock(path):
+    with _file_lock(path, base_dir):
         _assert_parent_contained(base_dir, path)
         # Strict read — same fail-closed contract as write_annotation:
         # a corrupt file must not be re-rendered (or unlinked) from a

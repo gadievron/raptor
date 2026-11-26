@@ -813,8 +813,8 @@ class TestFinalComponentSymlink:
         from contextlib import contextmanager
 
         @contextmanager
-        def swapping_lock(path):
-            with real_lock(path):
+        def swapping_lock(path, base_dir=None):
+            with real_lock(path, base_dir):
                 shutil.rmtree(base / "src")
                 os.symlink(redirect, base / "src")
                 yield
