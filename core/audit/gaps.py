@@ -26,7 +26,6 @@ from core.artifacts.context_map_budget import CONTEXT_MAP_CONSUMER_MAX_BYTES
 from core.coverage.journal import make_function_key
 from core.inventory.languages import SCRIPT_PER_FILE_LANGUAGES
 from core.inventory.review_policy import (
-    DEFAULT_EXTRA_KINDS as _DEFAULT_EXTRA_KINDS,
     FUNCTION_KINDS as _REVIEWABLE_KINDS,
     default_extra_kinds,
 )
