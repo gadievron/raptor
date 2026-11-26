@@ -301,6 +301,11 @@ class WebClient:
                 "proxy env bypassed for this session", _host,
             )
 
+        # Hosts whose local-DNS failure was already announced as
+        # deferred to the configured proxy (one warning per host, not
+        # one per request). See _resolve_and_validate.
+        self._proxy_dns_deferred: set[str] = set()
+
         # Request history — bounded ring buffer. Pre-cap, long scans
         # accumulated full request/response dicts (hundreds of MB on
         # large targets) until process exit.
@@ -376,7 +381,44 @@ class WebClient:
         try:
             addrs = socket.getaddrinfo(pin_key, port, proto=socket.IPPROTO_TCP)
         except socket.gaierror as exc:
-            msg = f"DNS resolution failed for {hostname}: {exc}"
+            # Mandatory-proxy posture: on networks where name
+            # resolution happens only AT the egress proxy, local
+            # getaddrinfo fails for every external hostname even though
+            # the request would succeed via the proxy (the session
+            # keeps trust_env for non-local targets for exactly that
+            # reason — see __init__). When the request will ride a
+            # configured proxy, the proxy resolves the hostname itself
+            # and the connection originates there, so this local
+            # resolve-and-pin never constrained the actual connection
+            # to begin with — defer to the proxy path (unpinned, with a
+            # loud once-per-host warning) instead of hard-failing every
+            # request. Literal non-global IPs stay blocked above, and
+            # without a proxy the failure stays closed.
+            proxy_url = self._request_proxy(url)
+            if proxy_url is not None:
+                if pin_key not in self._proxy_dns_deferred:
+                    self._proxy_dns_deferred.add(pin_key)
+                    _pp = urlparse(proxy_url)
+                    proxy_disp = (_pp.scheme or "http") + "://" + (
+                        _pp.hostname or "?")
+                    if _pp.port:
+                        proxy_disp += f":{_pp.port}"
+                    logger.warning(
+                        "Web client: local DNS cannot resolve %s (%s); "
+                        "deferring to the configured proxy %s, whose "
+                        "resolver is authoritative for this request — "
+                        "local SSRF vetting (block_private_ips) cannot "
+                        "screen this host's addresses",
+                        hostname, exc, proxy_disp,
+                    )
+                return None
+            msg = (
+                f"DNS resolution failed for {hostname}: {exc}. If this "
+                f"host only resolves at a mandatory egress proxy, "
+                f"configure the proxy environment "
+                f"(https_proxy/http_proxy) so requests ride it; set "
+                f"block_private_ips=False only to scan internal targets."
+            )
             raise ValueError(msg) from exc
         for _family, _type, _proto, _canonname, sockaddr in addrs:
             ip_str = sockaddr[0]
@@ -399,6 +441,25 @@ class WebClient:
                 )
                 raise ValueError(msg)
         return (pin_key, port, addrs)
+
+    def _request_proxy(self, url: str) -> str | None:
+        """The proxy URL this session would route ``url`` through, or None.
+
+        Mirrors requests' own per-request resolution: environment
+        proxies (only when ``session.trust_env`` holds, honouring
+        no_proxy) merged with ``session.proxies``, then matched by
+        scheme/host. Fail-closed: any error in proxy detection returns
+        None, which keeps the caller on its original hard-failure path
+        rather than silently skipping SSRF vetting.
+        """
+        try:
+            settings = self.session.merge_environment_settings(
+                url, {}, None, None, None,
+            )
+            proxies = settings.get("proxies") or {}
+            return requests.utils.select_proxy(url, proxies)
+        except Exception:  # noqa: BLE001 — detection must never widen the gate
+            return None
 
     @staticmethod
     @contextlib.contextmanager

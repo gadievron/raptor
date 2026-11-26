@@ -439,6 +439,64 @@ def test_octal_hex_ipv4_forms_are_caught_at_the_resolution_gate(evasion_host):
             client._resolve_and_validate(f"http://{evasion_host}/")
 
 
+# -- mandatory-proxy DNS posture ------------------------------------------------
+#
+# On networks where name resolution happens only AT the egress proxy,
+# local getaddrinfo fails for every external hostname. When a proxy is
+# configured the proxy resolves the name itself and the connection
+# originates there — the local resolve-and-pin never constrained the
+# actual connection — so the guard defers to the proxy path instead of
+# hard-failing every request. Without a proxy it stays fail-closed.
+
+
+def _clear_proxy_env(monkeypatch):
+    for var in ("http_proxy", "https_proxy", "all_proxy", "no_proxy",
+                "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"):
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_local_dns_failure_defers_to_the_configured_proxy(monkeypatch):
+    _clear_proxy_env(monkeypatch)
+    monkeypatch.setenv("http_proxy", "http://egress-proxy.test:3128")
+    with _hostile_resolver(lambda host: None):
+        client = WebClient("http://ext.example", block_private_ips=True)
+        assert client._resolve_and_validate("http://ext.example/") is None
+
+
+def test_local_dns_failure_without_a_proxy_stays_closed(monkeypatch):
+    _clear_proxy_env(monkeypatch)
+    with _hostile_resolver(lambda host: None):
+        client = WebClient("http://ext.example", block_private_ips=True)
+        with pytest.raises(ValueError, match="mandatory egress proxy"):
+            client._resolve_and_validate("http://ext.example/")
+
+
+def test_proxy_deferral_never_admits_non_global_literals(monkeypatch):
+    """The carve-out is for hostname resolution only: literal
+    non-global (and embedded-IPv4) targets stay blocked even when a
+    proxy is configured."""
+    _clear_proxy_env(monkeypatch)
+    monkeypatch.setenv("http_proxy", "http://egress-proxy.test:3128")
+    client = WebClient("http://ext.example", block_private_ips=True)
+    with pytest.raises(ValueError, match="non-global"):
+        client._resolve_and_validate("http://169.254.169.254/")
+    with pytest.raises(ValueError, match="non-global"):
+        client._resolve_and_validate("http://[64:ff9b::169.254.169.254]/")
+
+
+def test_no_proxy_exclusion_keeps_the_hard_failure(monkeypatch):
+    """A host excluded via no_proxy will NOT ride the proxy — its
+    local-DNS failure must stay a hard error, not an unvetted direct
+    connection."""
+    _clear_proxy_env(monkeypatch)
+    monkeypatch.setenv("http_proxy", "http://egress-proxy.test:3128")
+    monkeypatch.setenv("no_proxy", "ext.example")
+    with _hostile_resolver(lambda host: None):
+        client = WebClient("http://ext.example", block_private_ips=True)
+        with pytest.raises(ValueError, match="DNS resolution failed"):
+            client._resolve_and_validate("http://ext.example/")
+
+
 # -- transport-error accounting (degraded-vs-clean distinction) ---------------
 
 
