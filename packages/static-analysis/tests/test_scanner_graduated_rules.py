@@ -62,13 +62,21 @@ def _mk_rules_dir(base: Path, *stems: str) -> Path:
 
 
 def _fake_runner(monkeypatch, results):
-    """results: dict config-path-stem → FakeSemgrepResult or Exception."""
+    """results: dict config-path-stem → FakeSemgrepResult or Exception.
+
+    Configs with no entry raise, so a batched (directory-config)
+    invocation falls back to the per-rule loop unless the test
+    provides an entry keyed on the rules dir's own stem ("rules" for
+    ``_mk_rules_dir`` layouts).
+    """
     calls = []
 
     def run_rule(target, config, *, name="", timeout=0, env=None, **kw):
         stem = Path(config).stem
         calls.append({"config": config, "name": name})
-        res = results.get(stem, FakeSemgrepResult())
+        res = results.get(stem)
+        if res is None:
+            raise RuntimeError(f"no fake semgrep result for {stem!r}")
         if isinstance(res, Exception):
             raise res
         return res
@@ -284,6 +292,180 @@ class TestRunGraduatedRulesStage:
         assert paths == [str(out_dir / "graduated.sarif")]
         assert json.loads(Path(paths[0]).read_text())["runs"][0]["invocations"][0]["executionSuccessful"] is False
         assert "semgrep not installed" in capsys.readouterr().err
+
+
+class TestGraduatedBatchPath:
+    """The stage runs the whole graduated set as ONE Semgrep
+    invocation when batched findings can be attributed to exactly the
+    same per-rule provenance the serial loop produces, and falls back
+    to the per-rule loop otherwise. Semgrep emits check ids of the
+    form ``<dotted config path>.<in-file id>`` in BOTH modes (the rule
+    file stem never appears), so attribution goes through the in-file
+    ids."""
+
+    def _setup(self, tmp_path, *stems):
+        pytest.importorskip("yaml")
+        project = tmp_path / "project"
+        out_dir = project / "run_001"
+        out_dir.mkdir(parents=True)
+        rules_dir = _mk_rules_dir(project, *stems)
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        return out_dir, rules_dir, repo
+
+    def test_batched_single_invocation_with_provenance(
+        self, tmp_path, monkeypatch,
+    ):
+        out_dir, rules_dir, repo = self._setup(tmp_path, "uaf-variant-3")
+        calls = _fake_runner(monkeypatch, {
+            "rules": FakeSemgrepResult(findings=[FakeFinding(
+                line=12, rule_id="semgrep.rules.uaf-variant-3-inner",
+            )]),
+        })
+        sarifs = _scanner.run_graduated_rules_stage(
+            repo, out_dir, rules_dir=rules_dir,
+        )
+        assert [c["config"] for c in calls] == [str(rules_dir)]
+        doc = json.loads(Path(sarifs[0]).read_text())
+        run = doc["runs"][0]
+        assert run["tool"]["driver"]["name"] == "raptor-graduated"
+        result = run["results"][0]
+        assert result["ruleId"] == "synthesized:uaf-variant-3"
+        assert result["properties"]["provenance"] == "synthesized:uaf-variant-3"
+        assert result["properties"]["semgrep_rule_id"] == (
+            "semgrep.rules.uaf-variant-3-inner"
+        )
+
+    def test_batched_output_equals_serial_output(self, tmp_path, monkeypatch):
+        """The equivalence bar: identical findings served through the
+        batched dir config and through the per-rule loop must produce
+        an identical SARIF document (check ids are identical in both
+        Semgrep modes)."""
+        pytest.importorskip("yaml")
+        per_rule = {
+            "rule-a": [FakeFinding(
+                line=3, rule_id="x.rule-a-inner", file="src/a.c",
+            )],
+            "rule-b": [
+                FakeFinding(line=9, rule_id="x.rule-b-inner", file="src/b.c"),
+                FakeFinding(line=11, rule_id="x.rule-b-inner", file="src/b.c"),
+            ],
+        }
+        # Interleaved batch order — grouping must restore the serial
+        # rule-file order.
+        batched = [
+            per_rule["rule-b"][0], per_rule["rule-a"][0], per_rule["rule-b"][1],
+        ]
+        docs = {}
+        for mode in ("batched", "serial"):
+            project = tmp_path / mode
+            out_dir = project / "run"
+            out_dir.mkdir(parents=True)
+            rules_dir = _mk_rules_dir(project, "rule-a", "rule-b")
+            repo = tmp_path / f"repo-{mode}"
+            repo.mkdir()
+            fakes = (
+                {"rules": FakeSemgrepResult(findings=batched)}
+                if mode == "batched" else
+                {stem: FakeSemgrepResult(findings=f)
+                 for stem, f in per_rule.items()}
+            )
+            calls = _fake_runner(monkeypatch, fakes)
+            paths = _scanner.run_graduated_rules_stage(
+                repo, out_dir, rules_dir=rules_dir,
+            )
+            # Serial mode = the dir-config batch attempt (raises in
+            # this fake) followed by the historical per-rule calls.
+            expected = (["rules"] if mode == "batched"
+                        else ["rules", "rule-a", "rule-b"])
+            assert [Path(c["config"]).stem for c in calls] == expected
+            docs[mode] = json.loads(Path(paths[0]).read_text())
+        assert docs["batched"] == docs["serial"]
+
+    def test_batch_falls_back_when_inner_ids_ambiguous(
+        self, tmp_path, monkeypatch,
+    ):
+        """One in-file id is a dot-suffix of another: a batched check
+        id could then match two rules, so the stage must run per-rule
+        rather than risk mis-keyed provenance."""
+        out_dir, rules_dir, repo = self._setup(tmp_path, "alpha")
+        (rules_dir / "beta.yaml").write_text(
+            "rules:\n  - id: evil.alpha-inner\n    pattern: strcpy(...)\n"
+            "    message: x\n    languages: [c]\n    severity: WARNING\n",
+            encoding="utf-8",
+        )
+        calls = _fake_runner(monkeypatch, {
+            "alpha": FakeSemgrepResult(), "beta": FakeSemgrepResult(),
+        })
+        _scanner.run_graduated_rules_stage(repo, out_dir, rules_dir=rules_dir)
+        assert [Path(c["config"]).stem for c in calls] == ["alpha", "beta"]
+
+    def test_batch_falls_back_on_unmappable_finding(
+        self, tmp_path, monkeypatch,
+    ):
+        """A batched finding whose check id matches no graduated rule
+        means attribution failed — rerun per-rule, whose provenance is
+        structural."""
+        out_dir, rules_dir, repo = self._setup(tmp_path, "only-rule")
+        calls = _fake_runner(monkeypatch, {
+            "rules": FakeSemgrepResult(findings=[FakeFinding(
+                line=1, rule_id="something.unrelated",
+            )]),
+            "only-rule": FakeSemgrepResult(findings=[FakeFinding(
+                line=5, rule_id="x.only-rule-inner",
+            )]),
+        })
+        sarifs = _scanner.run_graduated_rules_stage(
+            repo, out_dir, rules_dir=rules_dir,
+        )
+        assert [Path(c["config"]).stem for c in calls] == ["rules", "only-rule"]
+        results = json.loads(Path(sarifs[0]).read_text())["runs"][0]["results"]
+        assert [r["ruleId"] for r in results] == ["synthesized:only-rule"]
+
+    @pytest.mark.parametrize("extra", ["subdir", "yml"])
+    def test_batch_falls_back_when_dir_has_extra_config(
+        self, tmp_path, monkeypatch, extra,
+    ):
+        """A subdirectory or *.yml file would load under a dir config
+        but is never part of the serial *.yaml enumeration — the batch
+        would scan MORE than serial, so it must not run."""
+        out_dir, rules_dir, repo = self._setup(tmp_path, "only-rule")
+        if extra == "subdir":
+            (rules_dir / "nested").mkdir()
+        else:
+            (rules_dir / "stray.yml").write_text("rules: []\n")
+        calls = _fake_runner(monkeypatch, {
+            "only-rule": FakeSemgrepResult(),
+        })
+        _scanner.run_graduated_rules_stage(repo, out_dir, rules_dir=rules_dir)
+        assert [Path(c["config"]).stem for c in calls] == ["only-rule"]
+
+    @pytest.mark.parametrize("damage", [
+        {"errors": ["rule failed to compile"]},
+        {"returncode": 2},
+        {"skipped_rules": ["incompatible"]},
+    ])
+    def test_batch_result_damage_falls_back_to_serial(
+        self, tmp_path, monkeypatch, damage,
+    ):
+        """Errors, a bad exit, or rule-side skips in the batch cannot
+        be attributed to a specific graduated rule — the per-rule loop
+        (which isolates the offender) must run instead."""
+        from packages.semgrep.models import SemgrepResult
+
+        out_dir, rules_dir, repo = self._setup(tmp_path, "only-rule")
+        calls = _fake_runner(monkeypatch, {
+            "rules": SemgrepResult(**damage),
+            "only-rule": FakeSemgrepResult(findings=[FakeFinding(
+                line=5, rule_id="x.only-rule-inner",
+            )]),
+        })
+        sarifs = _scanner.run_graduated_rules_stage(
+            repo, out_dir, rules_dir=rules_dir,
+        )
+        assert [Path(c["config"]).stem for c in calls] == ["rules", "only-rule"]
+        results = json.loads(Path(sarifs[0]).read_text())["runs"][0]["results"]
+        assert [r["ruleId"] for r in results] == ["synthesized:only-rule"]
 
 
 # ---------------------------------------------------------------------

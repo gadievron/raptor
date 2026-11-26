@@ -2539,6 +2539,144 @@ def find_engine_rules_dir(out_dir: Path, repo_path: Path) -> Path | None:
     return None
 
 
+def _graduated_inner_rule_ids(rule_file: Path) -> list[str] | None:
+    """Parse the Semgrep in-file rule ids from one graduated YAML.
+
+    Returns None when yaml is unavailable, the file cannot be read or
+    parsed, or any rule entry lacks a usable string ``id`` — callers
+    treat None as "cannot attribute batched findings, run per-rule".
+    """
+    try:
+        import yaml  # type: ignore[import-untyped]
+    except ImportError:
+        return None
+    try:
+        data = yaml.safe_load(rule_file.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 — any parse problem means "no demux"
+        return None
+    rules = data.get("rules") if isinstance(data, dict) else None
+    if not isinstance(rules, list) or not rules:
+        return None
+    ids: list[str] = []
+    for rule in rules:
+        rule_id = rule.get("id") if isinstance(rule, dict) else None
+        if not isinstance(rule_id, str) or not rule_id:
+            return None
+        ids.append(rule_id)
+    return ids
+
+
+def _graduated_demux_map(rule_files: list[Path]) -> dict[str, str] | None:
+    """Map Semgrep in-file rule id → graduated rule-file stem.
+
+    A directory config makes Semgrep emit check ids of the form
+    ``<dotted config path>.<in-file id>`` — the rule FILE STEM never
+    appears, so attributing batched findings back to their graduated
+    rule (the stem is what ``RuleLibrary.record_match`` keys on)
+    requires the in-file ids. Returns None whenever attribution could
+    be wrong: a file is unparseable, an id repeats across files, or
+    one id is a dot-suffix of another (the suffix match below could
+    then hit two rules).
+    """
+    mapping: dict[str, str] = {}
+    for rule_file in rule_files:
+        ids = _graduated_inner_rule_ids(rule_file)
+        if ids is None:
+            return None
+        for rule_id in ids:
+            if rule_id in mapping:
+                return None
+            mapping[rule_id] = rule_file.stem
+    all_ids = list(mapping)
+    for i, a in enumerate(all_ids):
+        for b in all_ids[i + 1:]:
+            if a.endswith("." + b) or b.endswith("." + a):
+                return None
+    return mapping
+
+
+def _graduated_check_id_stem(
+    check_id: str, mapping: dict[str, str],
+) -> str | None:
+    """Resolve one batched Semgrep check id to its rule-file stem."""
+    for rule_id, stem in mapping.items():
+        if check_id == rule_id or check_id.endswith("." + rule_id):
+            return stem
+    return None
+
+
+def _graduated_batch_attempt(
+    repo_path: Path,
+    rules_dir: Path,
+    rule_files: list[Path],
+    semgrep_run_rule: Callable[..., Any],
+) -> tuple[list[tuple[str, dict]], list[dict]] | None:
+    """Try the whole graduated set as ONE Semgrep invocation.
+
+    Semgrep loads every rule file in a directory config in a single
+    pass (one process, one target walk) instead of one full-repo
+    subprocess per rule. Correctness guard: any condition under which
+    the batch's findings could not be attributed to exactly the same
+    per-rule provenance the serial loop produces — or under which the
+    serial loop's per-rule failure isolation would matter — returns
+    None and the caller runs the historical per-rule loop instead.
+
+    Returns ``(findings, diagnostics)`` on success, findings grouped
+    by rule-file stem in sorted file order (the serial loop's shape).
+    """
+    mapping = _graduated_demux_map(rule_files)
+    if mapping is None:
+        return None
+    try:
+        # The serial loop only loads top-level *.yaml files; a dir
+        # config would additionally load *.yml and subdirectories, so
+        # their presence means the batch scans MORE than serial would.
+        for entry in Path(rules_dir).iterdir():
+            if entry.is_dir() or entry.match("*.yml"):
+                return None
+    except OSError:
+        return None
+    try:
+        res = semgrep_run_rule(
+            Path(repo_path), str(rules_dir),
+            name="graduated",
+            timeout=RaptorConfig.SEMGREP_PACK_TIMEOUT,
+            env=RaptorConfig.get_safe_env(preserve_proxy=True),
+        )
+    except Exception as exc:  # noqa: BLE001 — batch failure falls back, never kills the stage
+        logger.warning("graduated-rules: batched invocation failed: %s", exc)
+        return None
+    # Errors / bad exit: the serial loop isolates the offending rule;
+    # skipped_rules: rule-side partial coverage the batch cannot
+    # attribute to a specific graduated rule. Both demand the per-rule
+    # path. File-side partials (files_failed/skipped_summary) are
+    # target conditions identical across the batch and survive as one
+    # stage diagnostic below.
+    if res.errors or getattr(res, "returncode", 0) not in (0, 1):
+        return None
+    if getattr(res, "skipped_rules", ()):
+        return None
+    findings_by_stem: dict[str, list[dict]] = {
+        rule_file.stem: [] for rule_file in rule_files
+    }
+    for finding in res.findings:
+        stem = _graduated_check_id_stem(finding.rule_id, mapping)
+        if stem is None:
+            logger.warning(
+                "graduated-rules: batched check id %r matched no "
+                "graduated rule; re-running per-rule", finding.rule_id,
+            )
+            return None
+        findings_by_stem[stem].append(finding.to_dict())
+    findings = [
+        (rule_file.stem, finding_dict)
+        for rule_file in rule_files
+        for finding_dict in findings_by_stem[rule_file.stem]
+    ]
+    diagnostic = _semgrep_stage_diagnostic(res, "graduated")
+    return findings, [diagnostic] if diagnostic else []
+
+
 def run_graduated_rules_stage(
     repo_path: Path,
     out_dir: Path,
@@ -2548,8 +2686,10 @@ def run_graduated_rules_stage(
 
     Each graduated rule encodes a confirmed real-bug pattern
     (precision-gated at graduation: >=2 TPs, >=3 matches, >=80%).
-    Runs every ``*.yaml`` under the engine-rules semgrep dir
-    individually (one bad rule never kills the stage), and emits
+    Runs every ``*.yaml`` under the engine-rules semgrep dir — as one
+    batched Semgrep invocation when per-rule provenance can be proven
+    (see ``_graduated_batch_attempt``), otherwise individually (one
+    bad rule never kills the stage) — and emits
     ``graduated.sarif`` under the distinct ``raptor-graduated`` tool
     name with ``properties.provenance = "synthesized:<rule_id>"`` on
     every result — so downstream analysis can key precision feedback
@@ -2607,6 +2747,26 @@ def run_graduated_rules_stage(
         return _write_stage_report(Path(out_dir) / "graduated.sarif",
                                    _graduated_findings_to_sarif([]),
                                    [_stage_diagnostic("Semgrep not installed", failed=True)])
+
+    # Fast path: one Semgrep invocation for the whole graduated set.
+    # Falls back to the historical one-subprocess-per-rule loop whenever
+    # batched findings could not carry identical per-rule provenance
+    # (see _graduated_batch_attempt).
+    batch = _graduated_batch_attempt(
+        repo_path, rules_dir, rule_files, semgrep_run_rule,
+    )
+    if batch is not None:
+        all_findings, diagnostics = batch
+        sarif_path = Path(out_dir) / "graduated.sarif"
+        paths = _write_stage_report(
+            sarif_path, _graduated_findings_to_sarif(all_findings), diagnostics,
+        )
+        logger.info(
+            "graduated-rules: %d rule(s) ran batched, %d finding(s); "
+            "SARIF at %s",
+            len(rule_files), len(all_findings), sarif_path,
+        )
+        return paths
 
     all_findings: list[tuple[str, dict]] = []
     diagnostics = []
