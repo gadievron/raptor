@@ -120,3 +120,26 @@ def test_unresolvable_target_warns_loudly(env, monkeypatch, capsys):
     assert "WARNING" in captured.err
     # The run itself still starts — only the estimate is skipped.
     assert "OUTPUT_DIR=" in captured.out
+
+
+@pytest.mark.parametrize("spelling", ["nan", "inf", "-5"])
+def test_non_finite_or_negative_cap_refused_at_parse_time(
+        env, monkeypatch, tmp_path: Path, capsys, spelling: str):
+    # nan is truthy, so a bare type=float cap presented as active while
+    # the gate's estimate comparison against it was always False (the
+    # gate never refused); a negative cap refused every run. Both are
+    # parse-time refusals (exit 2) before any run state is created.
+    target = tmp_path / "target"
+    target.mkdir()
+    argv = ["raptor-run-lifecycle", "start", "scan",
+            "--target", str(target), "--out", str(env["out"]),
+            "--max-cost-usd", spelling]
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit) as exc:
+        env["mod"].main()
+    assert exc.value.code == 2
+    assert env["calls"] == []
+    captured = capsys.readouterr()
+    assert "--max-cost-usd must be a finite value >= 0" in captured.err
+    assert "OUTPUT_DIR=" not in captured.out
+    assert not (env["out"] / ".raptor-run.json").exists()

@@ -72,6 +72,28 @@ def _pop_flag(rest: list, name: str):
     return None
 
 
+def _max_cost_usd_arg(value: str) -> float:
+    """Parse ``--max-cost-usd``: a FINITE float >= 0.
+
+    A bare ``type=float`` accepted nan/inf/negative spellings: nan is
+    truthy, so it presented as an active cap while the pre-flight
+    estimate comparison against it was always False — the gate never
+    refused — and a negative cap refused every run. Refused at parse
+    time instead (same contract as raptor-audit's ``--max-cost``).
+    """
+    import argparse
+    import math
+    try:
+        cap = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"invalid float value: {value!r}") from exc
+    if not math.isfinite(cap) or cap < 0:
+        raise argparse.ArgumentTypeError(
+            "--max-cost-usd must be a finite value >= 0")
+    return cap
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__.strip(), file=sys.stderr)
@@ -116,7 +138,7 @@ def main():
         parser.add_argument("--parent-run", type=Path, help="Explicit workflow parent run; records provenance without inferring coverage")
         parser.add_argument(
             "--max-cost-usd", dest="max_cost_usd", default=None,
-            type=float,
+            type=_max_cost_usd_arg,
             help="Per-run USD budget cap; pre-flight gate refuses "
                  "to start when scorecard estimate exceeds the cap",
         )
