@@ -1757,3 +1757,27 @@ class AtomicWriteDurabilityTest(unittest.TestCase):
             target.chmod(0o644)
             sessions._atomic_write(target, "v=2\nproject=demo\n")
             self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+
+
+class NameGateParityTest(unittest.TestCase):
+    """The registry's name gate must refuse everything the project
+    layer refuses. A drifted (looser) registry pattern accepted names
+    no project can ever have — the binding wrote fine and then silently
+    resolved projectless, instead of the loud refusal the design
+    intends."""
+
+    def test_project_invalid_names_rejected(self) -> None:
+        for name in ("proj\n", "a..b", "trail."):
+            with self.subTest(name=name):
+                self.assertIsNone(sessions._NAME_RE.match(name))
+
+    def test_valid_names_still_accepted(self) -> None:
+        for name in ("myapp", "a.b-c_d", "x" * 64, "0leading"):
+            with self.subTest(name=name):
+                self.assertIsNotNone(sessions._NAME_RE.match(name))
+
+    def test_none_sentinel_still_rejected(self) -> None:
+        self.assertIsNone(sessions._NAME_RE.match(sessions.NONE_SENTINEL))
+
+    def test_project_layer_shares_the_constant(self) -> None:
+        self.assertIs(ProjectManager._NAME_PATTERN, sessions._NAME_RE)

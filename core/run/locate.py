@@ -25,9 +25,11 @@ _MAX_META_BYTES = 8 * 1024 * 1024
 # (core.project.sessions._NAME_RE — pattern equality pinned by test):
 # a registry lookup keyed by a raw name is a path join, so a name
 # carrying separators would escape PROJECTS_DIR and read an
-# attacker-placed record. fullmatch, so a trailing newline (which
-# ``$`` alone tolerates) is refused too.
-_PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+# attacker-placed record. \A/\Z anchors refuse a trailing newline
+# (which ``$`` alone tolerates); the lookarounds refuse '..'
+# sequences and trailing dots, matching the registry gate.
+_PROJECT_NAME_RE = re.compile(
+    r"\A(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._-]{0,63}(?<!\.)\Z")
 
 
 def project_output_dir(name: str | None = None) -> Path | None:

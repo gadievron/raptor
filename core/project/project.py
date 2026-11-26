@@ -25,6 +25,7 @@ from core.sandbox.tiers import (
 )
 
 from . import registry_home as _registry_home
+from .sessions import _NAME_RE as _session_name_pattern
 
 logger = get_logger()
 
@@ -902,17 +903,19 @@ class ProjectManager:
     # in the path produces an unreadable file (most filesystems accept
     # newlines in names but downstream tools — shell glob, ls,
     # operator's grep — break on them). The `re.fullmatch` semantics
-    # below would also fix this, but anchoring on `\A`/`\Z` keeps the
+    # would also fix this, but anchoring on `\A`/`\Z` keeps the
     # pre-existing `re.match` call site working and makes the strict
     # boundary visible in the pattern itself.
-    # Length cap matches core.project.sessions._NAME_RE — a project
-    # whose name the session registry rejects could never be
-    # session-bound, so refuse it at creation instead. The lookaheads
-    # refuse '..' sequences and trailing dots: both coverage hooks'
-    # symlink validators reject them (path-shaped), so such projects
-    # silently lost legacy-route read attribution.
-    _NAME_PATTERN = re.compile(
-        r'\A(?!.*\.\.)[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}(?<!\.)\Z')
+    # The pattern IS core.project.sessions._NAME_RE — one shared
+    # object, so the session registry (which gates binding writes,
+    # authoritative reads and pin witnesses with it) and this layer can
+    # never drift: a project whose name the registry rejects could
+    # never be session-bound, and a registry that accepted a name this
+    # layer refuses would write bindings that never resolve. The
+    # lookarounds refuse '..' sequences and trailing dots: both
+    # coverage hooks' symlink validators reject them (path-shaped), so
+    # such projects silently lost legacy-route read attribution.
+    _NAME_PATTERN = _session_name_pattern
 
     @classmethod
     def _validate_name(cls, name: str) -> None:

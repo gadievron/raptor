@@ -131,10 +131,19 @@ ENTRY_VERSION = "2"
 ENV_SESSION_PID = "RAPTOR_SESSION_PID"
 ENV_SESSION_TOKEN = "RAPTOR_SESSION_TOKEN"
 
-#: Mirror of ProjectManager._validate_name's character class. Kept
-#: local so this module stays importable without core.project.project
-#: (core.startup consults it at banner time).
-_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+#: THE project-name pattern — ProjectManager._NAME_PATTERN references
+#: this same object, so the session registry and the project layer can
+#: never drift (a registry that accepts a name the project layer
+#: refuses writes a binding that can never resolve — silent
+#: projectless fallback instead of the loud refusal). Defined HERE so
+#: this module stays importable without core.project.project
+#: (core.startup consults it at banner time; project.py imports
+#: sessions, never the reverse). \A/\Z anchors, not ^/$ — `$` with
+#: re.match tolerates a trailing newline, which would then flow into
+#: registry/project filenames. The lookarounds refuse '..' sequences
+#: and trailing dots: the coverage hooks' symlink validators reject
+#: them as path-shaped.
+_NAME_RE = re.compile(r"\A(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._-]{0,63}(?<!\.)\Z")
 
 #: The full v2 key list, shared by both writers (the bash seeder in
 #: bin/raptor mirrors this order). Unknown keys are dropped on rewrite
