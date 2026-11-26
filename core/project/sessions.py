@@ -535,15 +535,15 @@ def _parse_entry(path: Path) -> dict[str, str]:
 
 
 def _atomic_write(path: Path, content: str) -> None:
-    """tmp+rename in the entry's directory (the set_active pattern);
-    pid+tid suffix so concurrent writers get distinct slots."""
-    import threading
-    tmp = path.with_name(
-        f".{path.name}.tmp.{os.getpid()}.{threading.get_ident()}")
-    tmp.write_text(content, encoding="utf-8")
-    with contextlib.suppress(OSError):
-        tmp.chmod(0o600)
-    os.rename(str(tmp), str(path))
+    """Durable tmp+rename in the entry's directory via the shared
+    atomic-write primitive: per-writer tmp slot, fsync of the tmp file
+    before the rename and of the directory after. The durability
+    matters beyond re-seedable session entries — the run ledger written
+    through here carries the pin witnesses privileged project-store
+    writers corroborate run markers against, and a crash shortly after
+    a bare rename can land it with empty content."""
+    from core.atomic_fs import write_text_atomically
+    write_text_atomically(path, content, mode=0o600)
 
 
 def _ensure_dir() -> bool:

@@ -1721,3 +1721,39 @@ class DrainRequestTest(_RegistryCase):
         sessions.ledger_record_drain_request(d, pid=os.getpid())
         (self.sessions_dir / str(os.getpid())).unlink()
         self.assertEqual(sessions.ledger_drain_requests(d), [])
+
+
+class AtomicWriteDurabilityTest(unittest.TestCase):
+    """_atomic_write must fsync the tmp file before the rename and the
+    directory after. A bare tmp+rename can land with empty content on a
+    crash shortly after the rename — session entries are re-seedable,
+    but the run ledger written through this helper carries the pin
+    witnesses privileged project-store writers corroborate against."""
+
+    def test_fsyncs_file_and_directory(self) -> None:
+        real_fsync = os.fsync
+        synced: list[int] = []
+
+        def recording_fsync(fd: int) -> None:
+            synced.append(fd)
+            real_fsync(fd)
+
+        with TemporaryDirectory() as d:
+            target = Path(d) / "12345"
+            with patch("os.fsync", recording_fsync):
+                sessions._atomic_write(target, "v=2\nproject=demo\n")
+            # At least the tmp file pre-rename and the directory after.
+            self.assertGreaterEqual(len(synced), 2)
+            self.assertEqual(target.read_text(encoding="utf-8"),
+                             "v=2\nproject=demo\n")
+            self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+
+    def test_rewrite_keeps_entry_private(self) -> None:
+        """Overwriting an entry re-asserts 0600 even if the file on
+        disk was widened out-of-band."""
+        with TemporaryDirectory() as d:
+            target = Path(d) / "12345"
+            sessions._atomic_write(target, "v=2\n")
+            target.chmod(0o644)
+            sessions._atomic_write(target, "v=2\nproject=demo\n")
+            self.assertEqual(target.stat().st_mode & 0o777, 0o600)
