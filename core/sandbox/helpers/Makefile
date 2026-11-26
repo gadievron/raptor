@@ -100,6 +100,13 @@ $(GIDMAP_BIN): $(GIDMAP_SRC) $(VALIDATE_HDR)
 	@echo "  Grant CAP_SETGID so it can write gid_map without denying setgroups:"
 	@echo "      sudo setcap cap_setgid=ep $$(realpath $@)"
 	@echo
+	@echo "  Residual accepted by this grant: leaving setgroups at 'allow'"
+	@echo "  lets a sandboxed target holding in-namespace CAP_SETGID call"
+	@echo "  setgroups(2) and DROP inherited supplementary groups, defeating"
+	@echo "  negative group permissions (CVE-2014-8989 class) on files"
+	@echo "  visible to it. The helper only serves its owner (or root);"
+	@echo "  skip the grant to keep newgidmap's setgroups=deny instead."
+	@echo
 	@echo "  core/sandbox/_spawn.py auto-detects this binary and uses it"
 	@echo "  instead of newgidmap when CAP_SETGID is present."
 	@echo

@@ -431,6 +431,39 @@ static void test_invoker_identity(void) {
 /* raptor-gidmap-allow: parse_strict_ulong / validate_mapping_args      */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* raptor-gidmap-allow: check_gidmap_invoker_identity                  */
+/* ------------------------------------------------------------------ */
+
+static void test_gidmap_invoker_identity(void) {
+    char err[512];
+
+    CHECK(check_gidmap_invoker_identity(1000, 1000, 1000,
+                                        err, sizeof err) == 0,
+          "gidmap: accepts the trusted owner (uid==euid==owner)");
+    CHECK(check_gidmap_invoker_identity(0, 0, 1000, err, sizeof err) == 0,
+          "gidmap: accepts root regardless of the owner uid");
+    CHECK(check_gidmap_invoker_identity(0, 0, 0, err, sizeof err) == 0,
+          "gidmap: accepts root for a root-owned install");
+    CHECK(check_gidmap_invoker_identity(1001, 1001, 1000,
+                                        err, sizeof err) != 0
+              && strstr(err, "invoker identity") != NULL,
+          "gidmap: refuses a foreign local user");
+    CHECK(check_gidmap_invoker_identity(1000, 1001, 1000,
+                                        err, sizeof err) != 0,
+          "gidmap: refuses when only the real uid matches (euid differs)");
+    CHECK(check_gidmap_invoker_identity(1001, 1000, 1000,
+                                        err, sizeof err) != 0,
+          "gidmap: refuses when only the effective uid matches (uid differs)");
+    CHECK(check_gidmap_invoker_identity(1000, 1000, 0,
+                                        err, sizeof err) != 0,
+          "gidmap: refuses a non-root invoker of a root-owned install");
+    CHECK(check_gidmap_invoker_identity(0, 1000, 1000,
+                                        err, sizeof err) != 0,
+          "gidmap: refuses a mixed root/non-root identity");
+}
+
+
 static void test_parse_strict_ulong(void) {
     unsigned long v = 0;
     CHECK(parse_strict_ulong("0", &v) == 0 && v == 0,
@@ -668,6 +701,7 @@ int main(void) {
     test_exec_target();
     test_derive_raptor_dir();
     test_invoker_identity();
+    test_gidmap_invoker_identity();
     test_parse_strict_ulong();
     test_mapping_args();
     test_ns_owner();

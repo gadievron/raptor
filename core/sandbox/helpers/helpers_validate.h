@@ -92,6 +92,18 @@ int validate_mapping_args(int argc, char **argv,
                           unsigned long *pid_out,
                           char *err, size_t errsz);
 
+/* Invoker-identity contract for the gid_map helper — same rule as the
+ * coord launcher's check_invoker_identity (separate definition because
+ * each helper binary links standalone): the invoking real AND
+ * effective uid must both equal `trusted_uid` (the helper binary's
+ * owner, i.e. the operator who applied the setcap grant), or both be
+ * root. Refuses any other identity so the
+ * gid_map-without-setgroups-deny primitive stays scoped to the
+ * granting operator instead of every local user. */
+int check_gidmap_invoker_identity(uid_t invoker_uid, uid_t invoker_euid,
+                                  uid_t trusted_uid, char *err,
+                                  size_t errsz);
+
 /* Identity pin for the target process: opens /proc/<pid> exactly once
  * as an O_PATH|O_DIRECTORY fd and returns it (or -1 with a reason in
  * `err`). Every later access — the ns/user ownership check and the

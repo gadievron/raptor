@@ -43,6 +43,28 @@
  *   3. ARGUMENT HYGIENE: the PID and every triple component must be
  *      strictly numeric decimal; at most 8 triples; counts must be
  *      positive, bounded, and must not overflow the gid range.
+ *   4. INVOKER IDENTITY: the invoking real AND effective uid must both
+ *      be this binary's own owner (the operator who applied the setcap
+ *      grant) or root — mirroring raptor-coord-launcher. Without this
+ *      gate a world-executable setcap'd binary would hand the
+ *      gid_map-without-setgroups-deny primitive to EVERY local user
+ *      (for namespaces they own) — a host-wide behaviour change, not
+ *      one scoped to the granting operator.
+ *
+ * DELIBERATE RESIDUAL — setgroups stays "allow": once gid_map is
+ * written with setgroups not denied, a process holding in-namespace
+ * CAP_SETGID (ns-root) may call setgroups(2) and DROP supplementary
+ * groups it inherited. Dropping a group defeats "negative group
+ * permissions" (files whose group bits are MORE restrictive than
+ * their other bits) — the CVE-2014-8989-class attack that made the
+ * kernel require setgroups=deny before unprivileged gid_map writes.
+ * That is the accepted cost of this helper's whole purpose (targets
+ * calling setgroups() during init must not abort): a sandboxed target
+ * can shed the invoker's supplementary groups and read
+ * negative-group-protected files visible in its bind tree. Operators
+ * for whom that matters must not grant CAP_SETGID to this helper —
+ * core/sandbox/_spawn.py then falls back to newgidmap, which denies
+ * setgroups.
  *
  *  The binary does NOT set any UIDs/GIDs itself — it only writes the
  *  mapping file for a child process in a user namespace the caller
@@ -62,12 +84,14 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
 #include <sys/ioctl.h>
+#include <sys/stat.h>
 
 #if defined(__has_include)
 # if __has_include(<linux/nsfs.h>)
@@ -190,6 +214,28 @@ int validate_mapping_args(int argc, char **argv,
 }
 
 
+int check_gidmap_invoker_identity(uid_t invoker_uid, uid_t invoker_euid,
+                                  uid_t trusted_uid, char *err, size_t errsz) {
+    /* Same contract as raptor-coord-launcher's check_invoker_identity
+     * (separate definition: each helper binary links standalone).
+     * Root is unconditionally trusted — a root-owned install is meant
+     * to be invoked by root, and root gains nothing from the grant. */
+    if (invoker_uid == 0 && invoker_euid == 0) {
+        return 0;
+    }
+    if (invoker_uid != trusted_uid || invoker_euid != trusted_uid) {
+        snprintf(err, errsz,
+                 "invoker identity: invoked by uid %u (euid %u), but this "
+                 "helper's gid_map grant belongs to its owner (uid %u) — "
+                 "only the granting identity (or root) may consume it",
+                 (unsigned)invoker_uid, (unsigned)invoker_euid,
+                 (unsigned)trusted_uid);
+        return -1;
+    }
+    return 0;
+}
+
+
 int open_proc_pid_dir(unsigned long pid, char *err, size_t errsz) {
     /* O_PATH|O_DIRECTORY: a pure handle on THIS incarnation of the pid's
      * /proc entry, usable as the dirfd of every subsequent openat().
@@ -260,8 +306,50 @@ static int collect_invoker_gids(gid_t **out, size_t *n_out) {
 }
 
 
+/* The trusted uid is this binary's own owner — the operator who applied
+ * the capability grant (mirrors raptor-coord-launcher's trusted-path
+ * rule). Resolved via /proc/self/exe so the check binds to the file
+ * actually executing, not to an argv[0] spelling. */
+static int trusted_owner_uid(uid_t *out, char *err, size_t errsz) {
+    char self_exe[PATH_MAX];
+    ssize_t linklen = readlink("/proc/self/exe", self_exe,
+                               sizeof self_exe - 1);
+    if (linklen <= 0 || linklen >= (ssize_t)(sizeof self_exe - 1)) {
+        snprintf(err, errsz,
+                 "invoker identity: cannot resolve /proc/self/exe: %s",
+                 strerror(errno));
+        return -1;
+    }
+    self_exe[linklen] = '\0';
+    struct stat st;
+    if (stat(self_exe, &st) != 0 || !S_ISREG(st.st_mode)) {
+        snprintf(err, errsz,
+                 "invoker identity: %s is not a stat-able regular file",
+                 self_exe);
+        return -1;
+    }
+    *out = st.st_uid;
+    return 0;
+}
+
+
 int main(int argc, char **argv) {
-    char err[512];
+    /* Sized like the sibling launcher's: refusal messages may embed a
+     * PATH_MAX path (trusted_owner_uid). */
+    char err[2 * PATH_MAX];
+
+    /* INVOKER IDENTITY (contract item 4): only the binary's owner (or
+     * root) may consume the capability grant. Checked BEFORE any other
+     * processing so a foreign local user gets a refusal, not a
+     * primitive. */
+    uid_t trusted_uid = (uid_t)-1;
+    if (trusted_owner_uid(&trusted_uid, err, sizeof err) != 0
+            || check_gidmap_invoker_identity(getuid(), geteuid(),
+                                             trusted_uid,
+                                             err, sizeof err) != 0) {
+        fprintf(stderr, "%s: refusing: %s\n", argv[0], err);
+        return 3;
+    }
 
     gid_t *allowed = NULL;
     size_t n_allowed = 0;
