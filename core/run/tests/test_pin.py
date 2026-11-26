@@ -754,6 +754,30 @@ class WitnessAndTamperTest(_PinCase):
                             pin_project="pinned", record_pin=True)
         self.assertTrue(_pin_witness_ok(d, resolve_run_pin(d)))
 
+    def test_witness_internal_failure_warns_loudly(self):
+        """The exception leg keeps the aid-not-gate posture (returns
+        True — the write proceeds) but must say so at WARNING: at debug
+        a broken witness path silently degraded every privileged
+        project-store write to unverified."""
+        from core.run.metadata import _pin_witness_ok
+        from core.run.pin import resolve_run_pin
+        self._sessioned()
+        d = self.root / "out" / "pinned" / "scan_warn"
+        d.mkdir(parents=True)
+        save_json(d / RUN_METADATA_FILE, {
+            "status": "completed", "project": "pinned",
+            "project_source": "session",
+        })
+        pin = resolve_run_pin(d)
+        with patch.object(sessions, "ledger_pin_witness",
+                          side_effect=RuntimeError("ledger io")), \
+             self.assertLogs("core.run.metadata", level="WARNING") as logs:
+            self.assertTrue(_pin_witness_ok(d, pin))
+        self.assertTrue(
+            any("WITHOUT" in message for message in logs.output),
+            logs.output,
+        )
+
     def test_corrupt_marker_fails_closed_for_writers(self):
         from core.run.metadata import _journal_project_dir
         from core.run.pin import legacy_probe_allowed, resolve_run_pin

@@ -2284,7 +2284,15 @@ def _pin_witness_ok(run_dir, pin) -> bool:
             return False
         return True
     except Exception:  # noqa: BLE001 — witness is an aid, never a crash
-        logger.debug("pin witness check failed", exc_info=True)
+        # Aid-not-gate posture: the write proceeds. But proceeding
+        # WITHOUT tamper verification must be visible — at debug this
+        # leg was silent under normal logging, so a broken (or
+        # deliberately broken) witness path degraded every privileged
+        # project-store write to unverified with no trace.
+        logger.warning(
+            "pin: witness check failed for %s — proceeding WITHOUT "
+            "tamper verification of the run's project pin",
+            run_dir, exc_info=True)
         return True
 
 
