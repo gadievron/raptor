@@ -73,6 +73,12 @@ def _tally_strategy_log(
                         entry = json.loads(line)
                     except json.JSONDecodeError:
                         continue
+                    if not isinstance(entry, dict):
+                        # Valid-but-non-object JSON (scalar, list) must
+                        # skip the line like malformed JSON — it would
+                        # otherwise raise past the enclosing OSError
+                        # handler and crash the caller.
+                        continue
                     if entry.get("action") != "orchestrator_review":
                         continue
                     status = entry.get("status", "")

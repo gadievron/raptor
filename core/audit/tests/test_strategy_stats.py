@@ -107,6 +107,25 @@ class TestAggregateStrategyStats:
         stats = aggregate_strategy_stats([tmp_path / "nonexistent"])
         assert stats == {}
 
+    def test_non_object_json_line_skipped(self, tmp_path):
+        # A prior-run log line holding valid-but-non-object JSON (a
+        # bare number, string, list, or null) must be skipped like a
+        # malformed line — not raise and crash new-audit startup.
+        log_dir = tmp_path / "run1"
+        log_dir.mkdir(parents=True)
+        (log_dir / ".audit-log.jsonl").write_text(
+            "42\n"
+            '"stray"\n'
+            "[]\n"
+            "null\n"
+            + json.dumps({"action": "orchestrator_review",
+                          "status": "finding",
+                          "strategies": ["general"]}) + "\n",
+        )
+        stats = aggregate_strategy_stats([log_dir])
+        assert stats["general"]["wins"] == 1
+        assert stats["general"]["total"] == 1
+
     def test_error_status_excluded(self, tmp_path):
         # Errors are excluded from the denominator AND from
         # min_samples: an error-only strategy contributes no stats
