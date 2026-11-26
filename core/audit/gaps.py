@@ -25,6 +25,10 @@ from typing import Any
 from core.artifacts.context_map_budget import CONTEXT_MAP_CONSUMER_MAX_BYTES
 from core.coverage.journal import make_function_key
 from core.inventory.languages import SCRIPT_PER_FILE_LANGUAGES
+from core.inventory.review_policy import (
+    DEFAULT_EXTRA_KINDS as _DEFAULT_EXTRA_KINDS,
+    FUNCTION_KINDS as _REVIEWABLE_KINDS,
+)
 from core.inventory.script_handler import (
     interstitial_is_handler,
     script_handler_stamp,
@@ -52,10 +56,10 @@ _LARGE_SLOC = 200
 # non-int/non-None value). Never equal to any recorded raw line_end,
 # so the recorded-site slice short-circuit stays off for it.
 _RAW_END_UNKNOWN: Any = object()
-_REVIEWABLE_KINDS = frozenset({"function", "method", ""})
 # Included by DEFAULT: import-time module code (module-level yaml.load,
 # eval on env, subprocess at import), C/C++ macros (an unsafe macro
-# replicates its bug at every expansion site), and globals. The
+# replicates its bug at every expansion site), globals, and named types.
+# Layouts/aliases can encode security invariants without executable bodies. The
 # extractor builds these as reviewable units; dropping them silently
 # was a pure recall hole. Opt out via --include-kinds exclusion syntax
 # ("-macro"), or override the extras entirely with a positive list.
@@ -66,7 +70,6 @@ _REVIEWABLE_KINDS = frozenset({"function", "method", ""})
 # keeps them in the checklist for coverage bookkeeping, but reviewing
 # them burned full LLM review + tool sweeps on items with nothing to
 # review. Operators can opt in via a positive --include-kinds list.
-_DEFAULT_EXTRA_KINDS = frozenset({"top_level", "macro", "global"})
 
 
 def _script_interstitials_enabled(include_kinds: set | None) -> bool:
@@ -103,7 +106,7 @@ def _resolve_reviewable_kinds(include_kinds: set | None) -> frozenset:
     ``--include-kinds`` value.
 
     * ``None`` / empty → functions/methods plus the default extras
-      (``top_level``, ``macro``, ``global``).
+      (``top_level``, ``macro``, ``global``, ``class``).
     * Positive entries (``{"top_level"}``) OVERRIDE the default
       extras — only the named kinds are added.
     * ``-kind`` entries opt out of a default extra
@@ -208,6 +211,7 @@ def compute_gaps(
     source_roots: dict[str, Path] | None = None,
     require_c_foundation: bool = True,
     binary_view_snapshot: Any = None,
+    _journal_dirs: list[Path] | None = None,
 ) -> list[dict[str, Any]]:
     """Compute the list of unreviewed functions.
 
@@ -524,6 +528,10 @@ def compute_gaps(
         domain_ctx=domain_ctx,
         reuse_stats=reuse_stats,
         current_tools=current_tools,
+        journal_dirs=_journal_dirs,
+        strict_source_keys={key for key, sites in items_by_key.items()
+                            if any(item.get("kind") in {"class", "global", "macro"}
+                                   for item, _ in sites.values())},
     )
     # A later observation must not leave an earlier binary projection or
     # journal credit current after the module changed during this fold.
@@ -771,7 +779,7 @@ def compute_gaps(
                             ),
                         )
 
-            # Functions/methods plus top_level/macro/global by default
+            # Functions/methods plus top_level/macro/global/class by default
             # (see _resolve_reviewable_kinds); --include-kinds narrows
             # or widens the set. Interstitial stays out EXCEPT the
             # script-per-file handler spans gated above (default-on;
@@ -2007,7 +2015,7 @@ def gap_for_site(
             # stays refused.
             and (
                 it.get("kind", "") in (
-                    _REVIEWABLE_KINDS | {"top_level", "macro", "global"})
+                    _REVIEWABLE_KINDS | _DEFAULT_EXTRA_KINDS)
                 or (
                     it.get("kind", "") == "interstitial"
                     and _site_script_handler(it, file_info, target_path)
@@ -2267,6 +2275,7 @@ def _build_covered_set(
     current_binary_hashes = (_current_binary_hashes(checklist, target_path)
                              if _binary_hashes is None else _binary_hashes)
     binary_sites: set[tuple[str, str]] = set()
+    named_source_keys: set[str] = set()
     files_val = (checklist or {}).get("files")
     for file_info in files_val if isinstance(files_val, list) else []:
         if not isinstance(file_info, dict):
@@ -2280,6 +2289,8 @@ def _build_covered_set(
                 continue
             name = item.get("name", "")
             ls = item.get("line_start", 0)
+            if isinstance(name, str) and name and item.get("kind") in {"class", "global", "macro"}:
+                named_source_keys.add(make_function_key(fp, name))
             if (isinstance(name, str) and name and item.get("address") is not None
                     and not (type(ls) is int and ls > 0)):
                 binary_sites.add((fp, name))
@@ -2366,6 +2377,10 @@ def _build_covered_set(
                 )
                 continue
             accepted_key = make_function_key(file_path, func_name)
+            if accepted_key in named_source_keys:
+                # Existence-only rows cannot vouch for a named declaration's
+                # current source. Its original journal is verified below.
+                continue
             covered.add(accepted_key)
             if (manual_binary_covered is not None and tool in {"mark", "annotations"}
                     and accepted_key in current_binary_hashes):
@@ -2566,6 +2581,8 @@ def _fold_journal_into_covered(
     current_tools: frozenset[str] | None = None,
     source_roots: dict[str, Path] | None = None,
     require_c_foundation: bool = False,
+    journal_dirs: list[Path] | None = None,
+    strict_source_keys: set[str] | None = None,
 ) -> None:
     """Fold review-journal entries into the covered-function set so
     LLM-reviewed functions suppress gaps mid-run.
@@ -2626,6 +2643,46 @@ def _fold_journal_into_covered(
             project_entries = list(load_index_full(project_dir).values())
         except Exception:
             logger.warning("journal-fold: project rows unavailable", exc_info=True)
+    if journal_dirs is not None:
+        # Coverage may aggregate several run directories. Read all originals
+        # before per-site latest collapse so an old mark cannot outvote a
+        # newer withdrawal merely because run-directory order changed.
+        from .journal import load_entries
+        own_entries = [entry for directory in journal_dirs
+                       for entry in load_entries(directory, fresh=True)]
+    strict = strict_source_keys or set()
+    if strict:
+        from core.coverage.journal_mac import row_sha256
+        candidates = [entry for entry in [*(own_entries or []), *(project_entries or [])]
+                      if make_function_key(entry.file, entry.function) in strict]
+        named = _latest_review_rows_per_site(candidates)
+        latest = {(entry.file, entry.function, entry.line_start): entry for entry in named}
+        ambiguous = set()
+        for entry in candidates:
+            site = (entry.file, entry.function, entry.line_start)
+            selected = latest.get(site)
+            if (selected is not None and entry.ts == selected.ts
+                    and _latest_review_rows_per_site([entry])
+                    and row_sha256(entry.to_dict()) != row_sha256(selected.to_dict())):
+                ambiguous.add(site)
+        # Legacy second-precision timestamps can tie across original runs.
+        # Conflicting equal-time rows grant no named credit in either order.
+        named = [entry for entry in named
+                 if (entry.file, entry.function, entry.line_start) not in ambiguous]
+        # No legacy hashless credit for newly reviewable declarations. Keep
+        # original MAC/current-source/context checks in _verify_entries_fold.
+        named = [entry for entry in named if target_path is not None
+                 and (current_spans or {}).get(make_function_key(entry.file, entry.function))
+                 and isinstance(entry.source_hash, str) and entry.source_hash]
+        if own_entries is not None:
+            own_entries = [entry for entry in own_entries
+                           if make_function_key(entry.file, entry.function) not in strict] + named
+            if project_entries is not None:
+                project_entries = [entry for entry in project_entries
+                                   if make_function_key(entry.file, entry.function) not in strict]
+        elif project_entries is not None:
+            project_entries = [entry for entry in project_entries
+                               if make_function_key(entry.file, entry.function) not in strict] + named
     context_barriers = _review_context_barriers(
         [*(own_entries or []), *(project_entries or [])])
     # Coverage records only retain an unlocated existence mark. Once a

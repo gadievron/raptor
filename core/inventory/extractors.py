@@ -3955,6 +3955,8 @@ def extract_items(filepath: str, language: str, content: str,
             logger.debug("tree-sitter top-level extraction failed for %s", filepath, exc_info=True)
         try:
             items.extend(_extract_c_types_ts(tree.root_node, language))
+            if language == "rust":
+                items.extend(_extract_rust_types_ts(tree.root_node))
         except Exception:
             logger.debug("tree-sitter c-types extraction failed for %s", filepath, exc_info=True)
 
@@ -4066,6 +4068,62 @@ def _extract_top_level_ts(root_node, language: str) -> list[CodeItem]:
     return out
 
 
+# Descend declaration scopes only: never function bodies, initializers, or
+# arbitrary expression trees. In particular C# fields live below namespaces
+# and type bodies, and Rust constants can live inside inline modules/impls.
+_GLOBAL_SCOPE_TYPES = {
+    "rust": ("mod_item", "impl_item", "trait_item", "declaration_list"),
+    "csharp": ("namespace_declaration", "class_declaration", "struct_declaration",
+               "interface_declaration", "record_declaration", "declaration_list"),
+    "ruby": ("class", "module", "singleton_class", "body_statement"),
+    "php": ("namespace_definition", "compound_statement", "class_declaration",
+            "interface_declaration", "trait_declaration", "enum_declaration",
+            "declaration_list"),
+    "kotlin": ("class_declaration", "object_declaration", "companion_object", "class_body"),
+    "swift": ("class_declaration", "protocol_declaration", "class_body", "protocol_body"),
+    "scala": ("package_clause", "package_body", "class_definition", "object_definition",
+              "trait_definition", "template_body"),
+}
+
+
+def _global_scope_nodes(root_node, language: str):
+    """Yield file/type-scope declarations in source order, excluding locals."""
+    scopes = _GLOBAL_SCOPE_TYPES.get(language, ())
+    stack = list(reversed(root_node.named_children))
+    while stack:
+        node = stack.pop()
+        yield node
+        if node.type in scopes:
+            stack.extend(reversed(node.named_children))
+
+
+def _declaration_start_line(node, language: str) -> int:
+    # Rust outer attributes are siblings, not children of the item they
+    # describe. Keep repr(C), cfg, etc. in the named review span.
+    start = node.start_point[0] + 1
+    if language == "rust":
+        previous = node.prev_named_sibling
+        while previous is not None and previous.type in ("attribute_item", "line_comment", "block_comment"):
+            if previous.type == "attribute_item":
+                start = previous.start_point[0] + 1
+            previous = previous.prev_named_sibling
+    return start
+
+
+def _extract_rust_types_ts(root_node) -> list[CodeItem]:
+    """Index named Rust layouts/aliases independently of method containers."""
+    out = []
+    for node in _global_scope_nodes(root_node, "rust"):
+        if node.type not in ("struct_item", "enum_item", "union_item", "type_item", "trait_item"):
+            continue
+        name = node.child_by_field_name("name")
+        if name is not None:
+            out.append(CodeItem(name=name.text.decode(), kind=KIND_CLASS,
+                                line_start=_declaration_start_line(node, "rust"),
+                                line_end=node.end_point[0] + 1))
+    return out
+
+
 def _extract_globals_ts(root_node, language: str) -> list[CodeItem]:
     """Extract global variables/constants from a tree-sitter parse tree."""
     globals_found: list[CodeItem] = []
@@ -4080,6 +4138,14 @@ def _extract_globals_ts(root_node, language: str) -> list[CodeItem]:
         "cpp": ("declaration",),
         "java": ("field_declaration",),
         "go": ("var_declaration", "const_declaration"),
+        "rust": ("const_item", "static_item"),
+        "csharp": ("field_declaration",),
+        "ruby": ("assignment",),
+        "php": ("const_declaration", "property_declaration", "expression_statement"),
+        "kotlin": ("property_declaration",),
+        "swift": ("property_declaration",),
+        "lua": ("assignment_statement", "variable_declaration"),
+        "scala": ("val_definition", "var_definition", "val_declaration", "var_declaration"),
     }
 
     target_types = global_types.get(language, ())
@@ -4107,7 +4173,7 @@ def _extract_globals_ts(root_node, language: str) -> list[CodeItem]:
             else:
                 scan_nodes.append(top)
     else:
-        scan_nodes = root_node.children
+        scan_nodes = _global_scope_nodes(root_node, language)
 
     # C/C++ error recovery can hoist FUNCTION-BODY content to the root:
     # an unparseable construct inside a body (e.g. a block-statement
@@ -4136,7 +4202,7 @@ def _extract_globals_ts(root_node, language: str) -> list[CodeItem]:
             )
             continue
 
-        # Only top-level declarations (not inside functions/classes).
+        # Only file/type-scope declarations, never function-local bindings.
         # Emit ONE CodeItem per spec for languages that allow grouped
         # declarations. Pre-fix `_global_name` returned a single
         # name even for `var ( a int; b string; c bool )` — only
@@ -4151,7 +4217,7 @@ def _extract_globals_ts(root_node, language: str) -> list[CodeItem]:
         globals_found.extend(CodeItem(
                     name=name,
                     kind=kind,
-                    line_start=child.start_point[0] + 1,
+                    line_start=_declaration_start_line(child, language),
                     line_end=child.end_point[0] + 1,
                 ) for name in names if name)
 
@@ -4307,10 +4373,93 @@ def _global_names(node, language: str):
                         break
         return
 
+    if language == "rust":
+        name = node.child_by_field_name("name")
+        if name is not None and name.text != b"_":
+            yield name.text.decode()
+        return
+
+    if language == "csharp":
+        for declaration in node.named_children:
+            if declaration.type == "variable_declaration":
+                for declarator in declaration.named_children:
+                    if declarator.type == "variable_declarator":
+                        name = declarator.child_by_field_name("name")
+                        if name is not None:
+                            yield name.text.decode()
+        return
+
+    if language == "php":
+        for child in node.named_children:
+            if child.type == "const_element":
+                name = next((c for c in child.named_children if c.type == "name"), None)
+            elif child.type == "property_element":
+                name = child.child_by_field_name("name")
+            elif child.type == "assignment_expression":
+                name = child.child_by_field_name("left")
+                if name is not None:
+                    yield from _binding_names(name, ("variable_name",), ("list_literal",))
+                continue
+            else:
+                continue
+            if name is not None:
+                yield name.text.decode()
+        return
+
+    if language == "ruby":
+        left = node.child_by_field_name("left")
+        if left is not None:
+            yield from _binding_names(left, ("constant", "global_variable", "class_variable", "instance_variable",
+                                                  "identifier", "scope_resolution"),
+                                      ("left_assignment_list", "rest_assignment"))
+        return
+
+    if language == "kotlin":
+        for child in node.named_children:
+            if child.type in ("variable_declaration", "multi_variable_declaration"):
+                yield from _binding_names(child, ("identifier",),
+                                          ("variable_declaration", "multi_variable_declaration"))
+        return
+
+    if language == "swift":
+        for child in node.named_children:
+            if child.type == "pattern":
+                yield from _binding_names(child, ("simple_identifier",), ("pattern",))
+        return
+
+    if language == "lua":
+        assignment = node
+        if node.type == "variable_declaration":
+            assignment = next((c for c in node.named_children if c.type == "assignment_statement"), node)
+        for child in assignment.named_children:
+            if child.type == "variable_list":
+                # A table-field assignment does not declare the table itself.
+                yield from (c.text.decode() for c in child.named_children if c.type == "identifier")
+        return
+
+    if language == "scala":
+        pattern = node.child_by_field_name("pattern")
+        if pattern is not None:
+            yield from _binding_names(pattern, ("identifier",), ("tuple_pattern", "capture_pattern", "identifiers"))
+        return
+
     # Other languages: defer to the single-name function.
     name = _global_name(node, language)
     if name:
         yield name
+
+
+def _binding_names(node, identifiers: tuple[str, ...], wrappers: tuple[str, ...]):
+    """Read only declaration patterns, not RHS identifiers or type names."""
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        if current.type in identifiers:
+            name = current.text.decode()
+            if name != "_":
+                yield name
+        elif current.type in wrappers:
+            stack.extend(reversed(current.named_children))
 
 
 # Named node types an initializer may contain and still be pure data.

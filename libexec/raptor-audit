@@ -4885,7 +4885,7 @@ def main() -> int:
     p_run.add_argument("--include-kinds", default=None,
                        help="Comma-separated item kinds to review beyond "
                             "functions/methods. Default: top_level, macro, "
-                            "global. A positive list overrides the default "
+                            "global, class. A positive list overrides the default "
                             "extras; '-kind' opts one out (e.g. '-macro'); "
                             "'none' restricts to functions/methods only. "
                             "The non-reviewable extraction kinds "

@@ -21,6 +21,7 @@ from typing import Any, TYPE_CHECKING
 from core.json import loads
 
 from core.inventory.script_handler import script_handler_stamp
+from core.inventory.review_policy import DEFAULT_REVIEWABLE_KINDS
 
 from .registry import DEPTH_SCANNED, category_of, depth_of
 from .schema import iter_file_entries
@@ -37,19 +38,10 @@ _CATEGORIES = ("static", "llm", "runtime")
 # grow the render's read unbounded (the trail sits in the writable
 # project dir and ships in project archives).
 _MAX_PROGRESS_BYTES = 64 * 1024 * 1024
-# Kinds an LLM reviews unit-by-unit. The LLM-review gap is scoped to these:
-# globals/macros/typedefs/classes are whole-file-scanner territory and
-# interstitial is glue — listing them overstates "unreviewed". EXCEPT the
-# script-per-file handler spans: an interstitial whose builder-persisted
-# ``script_handler`` stamp is True is the unit gap selection schedules for
-# review (a classic PHP request handler), so it belongs in the reviewable
-# denominator too — on script-heavy trees the handler share is roughly a
-# third of the scheduled units, and excluding it made the coverage report
-# claim completion the review loop never had. Stamp absent (a pre-stamp
-# checklist) keeps the old exclusion: this is a reporting surface with no
-# source access, and understating "reviewable" is the safe direction
-# (never overstates "reviewed").
-_REVIEWABLE_KINDS = ("function", "top_level")
+# Match the audit's default scheduled kinds, including named types and
+# globals. Scanner examination is not review credit. Only stamped handler
+# interstitials join these kinds; anonymous residue remains excluded.
+_REVIEWABLE_KINDS = DEFAULT_REVIEWABLE_KINDS
 
 
 def _is_reviewable(kind: str, item: dict[str, Any]) -> bool:
@@ -58,6 +50,40 @@ def _is_reviewable(kind: str, item: dict[str, Any]) -> bool:
     if kind in _REVIEWABLE_KINDS:
         return True
     return kind == "interstitial" and script_handler_stamp(item) is True
+
+
+# Interval extent alone cannot identify a reviewed layout/constant: a nested
+# method (even on the same line) is a different review subject. These kinds
+# require the audit's exact, authenticated, current-source gap decision.
+_NAMED_REVIEW_KINDS = frozenset({"class", "global", "macro"})
+
+
+def _item_reviewed(store, file, name, lo, hi, kind, cov):
+    if kind in _NAMED_REVIEW_KINDS:
+        return (file, name, lo, hi) in getattr(store, "_named_reviewed_items", ())
+    return any(category_of(tool) == "llm" and depth_of(tool) != DEPTH_SCANNED for tool in cov)
+
+
+def _bind_named_reviews(store, checklist, run_dirs, project_dir):
+    """Reconstruct named credit from original evidence, never saved intervals.
+
+    Reuse the scheduler's provenance/source-currentness checks so a review of
+    a nested method, an examined file, or an old version cannot hide debt.
+    This is a transient read projection: no new persisted authority/schema.
+    """
+    from core.audit.gaps import compute_gaps
+    from .record import load_records
+
+    named = {(file, name, lo, hi) for file, name, lo, hi, kind, _ in iter_inventory_items(checklist)
+             if kind in _NAMED_REVIEW_KINDS}
+    store._named_reviewed_items = set()
+    if not named:
+        return
+    records = [record for directory in run_dirs for record in load_records(directory)]
+    gaps = compute_gaps(checklist, records, out_dir=run_dirs[0] if run_dirs else None,
+                        project_dir=project_dir, _journal_dirs=run_dirs if run_dirs else None)
+    unresolved = {(gap["file"], gap["name"], gap["line_start"], gap.get("line_end")) for gap in gaps}
+    store._named_reviewed_items = named - unresolved
 
 
 def _str_members(value: Any) -> list[str]:
@@ -360,6 +386,7 @@ def _build_store(run_dirs, checklist, store_path, annotations_base=None):
     from .importer import backfill
     from .store import CoverageStore
 
+    run_dirs = list(run_dirs)
     store = CoverageStore(Path(store_path))
     project_dir = Path(store_path).parent if store_path else None
     backfill(
@@ -367,6 +394,7 @@ def _build_store(run_dirs, checklist, store_path, annotations_base=None):
         annotations_base=annotations_base,
         project_dir=project_dir,
     )
+    _bind_named_reviews(store, checklist, run_dirs, project_dir)
     return store
 
 
@@ -384,7 +412,7 @@ def file_breakdown(store: CoverageStore, checklist: dict[str, Any]) -> list[dict
     reviewable units, examined items, findings, and file coverage %. Sorted
     worst-first by LLM-review ratio so files needing attention surface first."""
     files: dict[str, dict[str, Any]] = {}
-    for f, _name, lo, hi, kind, item in iter_inventory_items(checklist):
+    for f, name, lo, hi, kind, item in iter_inventory_items(checklist):
         high = hi if hi is not None else lo
         row = files.setdefault(f, {
             "path": f, "items": 0, "reviewable": 0, "llm": 0, "examined": 0})
@@ -395,8 +423,7 @@ def file_breakdown(store: CoverageStore, checklist: dict[str, Any]) -> list[dict
         if _is_reviewable(kind, item):
             row["reviewable"] += 1
             # reviewed = deep llm review (depth >= analysed), not a whole-file read.
-            if any(category_of(t) == "llm" and depth_of(t) != DEPTH_SCANNED
-                   for t in cov):
+            if _item_reviewed(store, f, name, lo, hi, kind, cov):
                 row["llm"] += 1
     for f, row in files.items():
         row["findings"] = len(store.finding_ids(f))
@@ -467,7 +494,7 @@ def render_run_coverage(run_dir, *, current_records: Iterable[Any] | None = None
 
 
 def store_llm_coverage_percent(view: dict[str, Any]) -> float:
-    """Percent of REVIEWABLE units (function/top_level) with LLM coverage.
+    """Percent of default-reviewable inventory units with LLM coverage.
 
     A view with ZERO reviewable units reads as 100.0 (vacuously
     covered) — callers gating on the number must surface the
@@ -572,8 +599,7 @@ def store_view(store: CoverageStore, checklist: dict[str, Any]) -> dict[str, Any
         # function-level review). A whole-file `read` (llm/scanned) does NOT
         # count — reading a file is not reviewing its functions. This is the
         # read-vs-reviewed distinction the LLM-review gap (and /audit) needs.
-        reviewed = any(category_of(t) == "llm" and depth_of(t) != DEPTH_SCANNED
-                       for t in cov)
+        reviewed = _item_reviewed(store, file, name, lo, hi, kind, cov)
         verdict = store.function_verdict(file, lo, high)
         # "Examined" tracks the verdict, not just coverage marks: a finding is
         # itself examination evidence (see function_verdict), so an open /
@@ -590,13 +616,8 @@ def store_view(store: CoverageStore, checklist: dict[str, Any]) -> dict[str, Any
             if c in cats:
                 by_category[c] += 1
         reviewable = _is_reviewable(kind, item)
-        # The LLM-review gap lists only REVIEWABLE units (function /
-        # top_level / stamped script-handler interstitials).
-        # Globals/macros/typedefs/classes are whole-file-scanner territory and
-        # interstitial glue is not a unit the LLM reviews one-by-one, so
-        # listing them overstates "unreviewed" and drowns the real gaps.
-        # (Completeness counts above — total/by_kind/examined/verdicts — still
-        # include every kind.)
+        # Use the same default kinds as audit scheduling so named constants
+        # and layouts cannot disappear from the displayed review debt.
         if reviewable:
             # CI workflow jobs/steps carry kind "function" but are not
             # units an LLM reviews one-by-one — scanners own them.
@@ -741,11 +762,10 @@ def _reviewed_functions(store: CoverageStore,
     inventory (stamped script-handler spans included), no kind filter:
     any item a review-grade mark covers belongs in the intersection."""
     reviewed: set[tuple[str, str]] = set()
-    for file, name, lo, hi, _kind, _item in iter_inventory_items(checklist):
+    for file, name, lo, hi, kind, _item in iter_inventory_items(checklist):
         high = hi if hi is not None else lo
         cov = store.tool_coverage_of_range(file, lo, high)
-        if any(category_of(t) == "llm" and depth_of(t) != DEPTH_SCANNED
-               for t in cov):
+        if _item_reviewed(store, file, name, lo, hi, kind, cov):
             reviewed.add((file, name))
     return reviewed
 

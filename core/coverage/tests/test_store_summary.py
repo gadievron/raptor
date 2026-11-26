@@ -292,14 +292,13 @@ _MIXED_KINDS = {"files": [{"path": "a.c", "lines": 50, "items": [
 
 
 def test_llm_gap_lists_only_reviewable_kinds(tmp_path):
-    # No llm coverage anywhere: only function + top_level are the LLM-review
-    # gap; globals/macros/typedefs are excluded by kind.
+    # Coverage must show the same default reviewable units audit schedules.
     s = _store(tmp_path)
     s.import_inventory_meta(_MIXED_KINDS)
     view = store_view(s, _MIXED_KINDS)
-    assert {g["function"] for g in view["llm_gap_functions"]} == {"fn", "tl"}
-    assert view["llm_reviewable"] == 2
-    assert view["gap_no_llm"] == 2
+    assert {g["function"] for g in view["llm_gap_functions"]} == {"fn", "tl", "G", "M", "T"}
+    assert view["llm_reviewable"] == 5
+    assert view["gap_no_llm"] == 5
     # Completeness counts still include every kind.
     assert view["total_functions"] == 5
 
@@ -309,8 +308,8 @@ def test_llm_gap_excludes_reviewed_function(tmp_path):
     s.import_inventory_meta(_MIXED_KINDS)
     s.mark("a.c", 1, 10, "claude:audit")       # llm reviews fn (analysed depth)
     view = store_view(s, _MIXED_KINDS)
-    assert {g["function"] for g in view["llm_gap_functions"]} == {"tl"}
-    assert view["llm_reviewable"] == 2
+    assert {g["function"] for g in view["llm_gap_functions"]} == {"tl", "G", "M", "T"}
+    assert view["llm_reviewable"] == 5
     assert view["functions_reviewed"] == 1
 
 
@@ -323,7 +322,7 @@ def test_whole_file_read_is_not_reviewed(tmp_path):
     s.mark("a.c", 1, 50, "read")               # the LLM only READ the file
     view = store_view(s, _MIXED_KINDS)
     assert view["functions_reviewed"] == 0
-    assert {g["function"] for g in view["llm_gap_functions"]} == {"fn", "tl"}
+    assert {g["function"] for g in view["llm_gap_functions"]} == {"fn", "tl", "G", "M", "T"}
     # ...but it does count as llm *extent* (the LLM did touch it).
     assert view["functions_by_category"]["llm"] >= 1
 
@@ -336,25 +335,25 @@ def test_store_threshold_helpers(tmp_path):
     )
     s = _store(tmp_path)
     s.import_inventory_meta(_MIXED_KINDS)
-    s.mark("a.c", 1, 10, "claude:audit")       # 1 of 2 reviewable → 50%
+    s.mark("a.c", 1, 10, "claude:audit")       # 1 of 5 reviewable → 20%
     view = store_view(s, _MIXED_KINDS)
-    assert store_llm_coverage_percent(view) == 50.0
-    assert store_coverage_threshold_met(view, 50.0)
+    assert store_llm_coverage_percent(view) == 20.0
+    assert store_coverage_threshold_met(view, 20.0)
     assert not store_coverage_threshold_met(view, 75.0)
     result = format_store_threshold_result(view, 75.0)
-    assert "50.0% LLM item coverage" in result
+    assert "20.0% LLM item coverage" in result
     # Title Case per the output-style rule (never ALL_CAPS).
     assert "Fail" in result
     assert "FAIL" not in result
 
 
-def test_store_threshold_no_reviewable_is_100(tmp_path):
+def test_store_threshold_named_global_is_unreviewed(tmp_path):
     from core.coverage.store_summary import store_llm_coverage_percent
     s = _store(tmp_path)
     only_global = {"files": [{"path": "a.c", "lines": 5, "items": [
         {"name": "G", "kind": "global", "line_start": 1, "line_end": 1}]}]}
     s.import_inventory_meta(only_global)
-    assert store_llm_coverage_percent(store_view(s, only_global)) == 100.0
+    assert store_llm_coverage_percent(store_view(s, only_global)) == 0.0
 
 
 def test_render_coverage_combines_state_and_execution(tmp_path):

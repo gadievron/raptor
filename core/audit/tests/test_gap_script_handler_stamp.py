@@ -173,4 +173,8 @@ class TestStampConsumption:
         gaps = _run(ck)
         names = {g["name"] for g in gaps
                  if g["name"].startswith("interstitial:")}
-        assert names == {"interstitial:10-12"}
+        # The request assignment is now a named global; only the subsequent
+        # dispatch call remains anonymous handler code. Neither review is lost.
+        assert names == {"interstitial:12-12"}
+        request, = [g for g in gaps if g["file"] == "handler.php" and g["name"] == "$cmd"]
+        assert request["line_start"] == request["line_end"] == 11
