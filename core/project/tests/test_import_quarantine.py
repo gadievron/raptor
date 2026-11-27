@@ -158,6 +158,42 @@ class TestImportQuarantinesPrivilegedArtifacts(unittest.TestCase):
                              "quarantine must not nest on re-import")
             self.assertFalse((root2 / "coverage.json").exists())
 
+    def test_dot_component_quarantine_member_dropped(self):
+        """A ``.`` path component ("root/./_imported-quarantine/x")
+        survives common-root stripping and extracts to the same
+        location, but dodges a first-component name comparison; the
+        entry path must be normalised before the drop check."""
+        import zipfile
+
+        with TemporaryDirectory() as td:
+            d = Path(td)
+            src = d / "src" / "myproj"
+            run = src / "scan_20260101-000000"
+            run.mkdir(parents=True)
+            (run / "findings.json").write_text('{"findings": []}')
+            zip_path = d / "myproj.zip"
+            project_json = d / "myproj.json"
+            project_json.write_text(json.dumps({
+                "name": "myproj",
+                "target": str(d / "fake-target"),
+                "output_dir": str(src),
+            }))
+            export_project(src, zip_path, project_json_path=project_json)
+            # The zip is attacker-authored: append the dot-form member
+            # the exporter would never write.
+            with zipfile.ZipFile(zip_path, "a") as zf:
+                zf.writestr(
+                    f"myproj/./{_QUARANTINE}/sneaky.txt", "LAUNDERED")
+            result = import_project(zip_path, d / "projects",
+                                    output_base=d / "imported_out")
+            root = Path(result["output_dir"])
+            self.assertFalse(
+                (root / _QUARANTINE / "sneaky.txt").exists(),
+                "dot-component quarantine member restored")
+            # Benign content imported fine.
+            self.assertTrue((root / "scan_20260101-000000"
+                             / "findings.json").is_file())
+
     def test_archive_shipped_quarantine_members_dropped(self):
         """An archive can ship ``_imported-quarantine/`` content
         directly (the exporter never wrote it — the zip is attacker-

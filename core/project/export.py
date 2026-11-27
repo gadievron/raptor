@@ -7,6 +7,7 @@ zip archives back, with path traversal and symlink validation.
 from contextlib import ExitStack
 import fnmatch
 import os
+import posixpath
 import stat
 import time
 import zipfile
@@ -1059,6 +1060,18 @@ def _import_project(zip_path: Path, projects_dir: Path, force: bool,
                         continue
                 else:
                     arcrel = info.filename
+                # Normalise BEFORE any name-based check: a `.` path
+                # component ("root/./_imported-quarantine/x") survives
+                # common-root stripping, extracts to the same location,
+                # but would dodge a first-component comparison. `..`
+                # is refused upstream by _check_zip_entries; refuse it
+                # here again rather than trusting that check.
+                arcrel = posixpath.normpath(arcrel)
+                if not arcrel or arcrel == ".":
+                    continue
+                if arcrel == ".." or arcrel.startswith("../"):
+                    msg = f"Entry escapes archive root: {info.filename!r}"
+                    raise ValueError(msg)
                 # Never restore archive-shipped quarantine content.
                 # The quarantine dir name belongs to THIS importer's
                 # `_quarantine_imported_privileged_artifacts` pass —
