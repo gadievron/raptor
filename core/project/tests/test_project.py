@@ -363,6 +363,57 @@ class TestProjectManager(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.mgr.delete("nonexistent")
 
+    def _plant_legacy_entry(self, name: str) -> Path:
+        """Write a registry record directly, as a registry created under
+        older, looser name rules would hold it (create() refuses the
+        name today)."""
+        import json
+        self.projects_dir.mkdir(parents=True, exist_ok=True)
+        record = self.projects_dir / f"{name}.json"
+        record.write_text(json.dumps({
+            "name": name,
+            "target": self.target_code,
+            "output_dir": str(Path(self.tmpdir.name) / "legacy-out"),
+        }))
+        return record
+
+    def test_delete_allows_legacy_invalid_name(self):
+        """Names legal under older validation (interior ``..``, trailing
+        dot, 65+ chars) no longer load, but delete must keep working —
+        together with rename-away it is the migration path."""
+        for legacy in ("proj..legacy", "proj.", "p" * 70):
+            record = self._plant_legacy_entry(legacy)
+            self.assertIsNone(self.mgr.load(legacy))
+            self.mgr.delete(legacy)
+            self.assertFalse(record.exists(),
+                             f"legacy entry {legacy!r} not deleted")
+
+    def test_rename_allows_legacy_invalid_old_name(self):
+        legacy = "proj..legacy"
+        record = self._plant_legacy_entry(legacy)
+        p = self.mgr.rename(legacy, "fixed-legacy")
+        self.assertEqual(p.name, "fixed-legacy")
+        self.assertFalse(record.exists())
+        self.assertIsNotNone(self.mgr.load("fixed-legacy"))
+
+    def test_delete_still_refuses_traversal_spellings(self):
+        """The legacy-tolerant removal lookup must not reopen the
+        aliasing hole load() closed: separator spellings stay refused
+        even when the aliased target exists."""
+        self.mgr.create("real", self.target_code)
+        with self.assertRaises(ValueError):
+            self.mgr.delete("ghost/../real")
+        self.assertTrue((self.projects_dir / "real.json").exists())
+        # rename's required=True registry lock fails on the missing
+        # intermediate dir before the removal lookup runs (OSError);
+        # were the lock path somehow resolvable, _load_for_removal's
+        # separator refusal would still raise ValueError. Either way
+        # the aliased record must survive and no new name may appear.
+        with self.assertRaises((ValueError, OSError)):
+            self.mgr.rename("ghost/../real", "stolen")
+        self.assertTrue((self.projects_dir / "real.json").exists())
+        self.assertFalse((self.projects_dir / "stolen.json").exists())
+
     def test_rename(self):
         self.mgr.create("old", self.target_code)
         p = self.mgr.rename("old", "new")

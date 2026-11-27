@@ -1133,6 +1133,32 @@ class ProjectManager:
             return None
         return Project.from_dict(data)
 
+    def _load_for_removal(self, name: str) -> Project | None:
+        """Legacy-tolerant lookup used by delete and rename-from only.
+
+        Name validation has tightened over time, so a registry can hold
+        entries whose names creation would refuse today. Delete and
+        rename-away are the migration path for those entries and must
+        keep working. This lookup never trusts the raw name for path
+        derivation beyond a plain one-component filename: names that
+        could escape the registry directory (separators, NUL, bare dot
+        forms) are refused outright; the rest must match the stored
+        record's own name exactly.
+        """
+        project = self.load(name)
+        if project is not None:
+            return project
+        if (not name or "/" in name or "\\" in name or "\x00" in name
+                or name in (".", "..")):
+            return None
+        record = load_json(self.projects_dir / f"{name}.json")
+        if isinstance(record, dict) and record.get("name") == name:
+            logger.warning(
+                "project name %r no longer passes validation — allowing "
+                "removal/rename-away as the migration path", name)
+            return Project.from_dict(record)
+        return None
+
     def list_projects(self) -> list[Project]:
         """List all projects."""
         projects = []
@@ -1196,7 +1222,7 @@ class ProjectManager:
 
     def _delete_locked(self, name: str, *, purge: bool,
                        force: bool) -> None:
-        project = self.load(name)
+        project = self._load_for_removal(name)
         if not project:
             msg = f"Project '{name}' not found"
             raise ValueError(msg)
@@ -1356,7 +1382,7 @@ class ProjectManager:
 
     def _rename_locked(self, old_name: str, new_name: str,
                        force: bool) -> Project:
-        project = self.load(old_name)
+        project = self._load_for_removal(old_name)
         if not project:
             msg = f"Project '{old_name}' not found"
             raise ValueError(msg)
