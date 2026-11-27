@@ -17,6 +17,7 @@ the run directory and exact error message available when checking a failure.
 
 - [Self-test](#self-test)
 - [Run introspection](#run-introspection)
+- [Verified outcomes](#verified-outcomes)
 - [Session scratch cleanup](#session-scratch-cleanup)
 - [Sandbox](#sandbox)
 - [Running under endpoint security (EDR)](#running-under-endpoint-security-edr)
@@ -78,6 +79,31 @@ vs the run's cap, LLM call / failed-attempt / timeout counts, breaker
 trips, and the newest call class as a phase hint.  `--raw` prints the
 same as JSON.  After completion, `raptor-review digest <run-dir>`
 gives the ranked what-matters summary (verified findings first).
+
+
+## Verified outcomes
+
+### Outcomes verified before an upgrade show as Inconclusive
+
+Verified-outcome records are authenticated: each producer stamps the
+record with an installation-local message-authentication token when it
+writes the trail, and the viewer (`libexec/raptor-verified-outcomes`)
+accepts a decisive verdict (Verified / Refuted) only from records whose
+token checks out. Records written by a RAPTOR version from before
+outcome authentication carry no token, so after an upgrade they are
+shown as Inconclusive — the summary prints one note counting them. The
+same happens to trails copied in from another installation (each
+installation has its own key).
+
+This is deliberate, not data loss: an unauthenticated line in a run
+directory is indistinguishable from one planted by a hostile target, so
+it must not be able to assert a confirmed (or suppress-a-finding
+Refuted) verdict. The records themselves remain visible and intact.
+
+To restore verified status, re-run the validation that produced the
+outcome (e.g. `/validate` on the finding, or the original `/fuzz` /
+`/agentic` / `/crash-analysis` flow); newly written records are stamped
+and count as verified again.
 
 
 ## Session scratch cleanup

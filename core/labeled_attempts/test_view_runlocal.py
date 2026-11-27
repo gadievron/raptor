@@ -174,6 +174,62 @@ def test_tampered_stamped_record_demotes(tmp_path, monkeypatch):
     assert outcomes[0].evidence.get("trail_verification") == "unverified"
 
 
+def test_demotion_distinguishes_missing_from_invalid_stamp(
+        tmp_path, monkeypatch):
+    """The demotion records WHY the token failed: "missing" (no token —
+    the shape of every record written before outcome authentication
+    existed, and of planted lines) vs "invalid" (content edited under a
+    surviving token). Presentation-tier only — both demote to
+    Inconclusive identically."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    run = tmp_path / "run"
+    _write(run, _record("CVE-2024-OLDS"), stamp=False)
+    _write(run, _record("CVE-2024-EDIT"))
+    path = run / VERIFIED_OUTCOMES_FILENAME
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "CVE-2024-EDIT", "CVE-2024-EDTD"),
+        encoding="utf-8")
+
+    outcomes = {o.finding_id: o for o in collect_outcomes(run)
+                if o.oracle is Oracle.CONSENSUS}
+    assert outcomes["CVE-2024-OLDS"].evidence.get("trail_stamp") == "missing"
+    assert outcomes["CVE-2024-EDTD"].evidence.get("trail_stamp") == "invalid"
+    assert all(o.status is OutcomeStatus.INCONCLUSIVE
+               for o in outcomes.values())
+
+
+def test_summary_counts_unstamped_records_once(tmp_path, monkeypatch):
+    """The operator summary carries ONE line counting records that
+    predate outcome authentication (missing stamp); tampered records
+    (invalid stamp) are not folded into it, and a fully stamped corpus
+    gets no note at all."""
+    from core.labeled_attempts.view import render_outcome_summary
+
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    run = tmp_path / "run"
+    _write(run, _record("CVE-2024-OLDS"), stamp=False)
+    _write(run, _record("CVE-2024-EDIT"))
+    _write(run, _record("CVE-2024-REAL"))
+    path = run / VERIFIED_OUTCOMES_FILENAME
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "CVE-2024-EDIT", "CVE-2024-EDTD"),
+        encoding="utf-8")
+
+    out = render_outcome_summary(
+        [o for o in collect_outcomes(run) if o.oracle is Oracle.CONSENSUS])
+    assert "1 record(s) carry no outcome-authentication stamp" in out
+    assert "re-run validation" in out
+
+    clean_run = tmp_path / "clean"
+    _write(clean_run, _record("CVE-2024-GOOD"))
+    out_clean = render_outcome_summary(
+        [o for o in collect_outcomes(clean_run)
+         if o.oracle is Oracle.CONSENSUS])
+    assert "outcome-authentication stamp" not in out_clean
+
+
 def test_stamped_record_keeps_decisive_status(tmp_path, monkeypatch):
     """Two-direction guard: a record stamped by this install's
     producers keeps its verdict (also proves the demotion tests above

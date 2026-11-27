@@ -599,7 +599,10 @@ def collect_outcomes(
     # contract this loop always had: missing/unreadable/symlinked
     # files load as empty, malformed lines are skipped, never fatal.
     from core.json import load_jsonl
-    from core.labeled_attempts.trail_provenance import verify_outcome_record
+    from core.labeled_attempts.trail_provenance import (
+        TRAIL_PROVENANCE_KEY,
+        verify_outcome_record,
+    )
 
     for run_dir in _verified_outcome_dirs(output_dir, project_root):
         path = run_dir / VERIFIED_OUTCOMES_FILENAME
@@ -634,6 +637,16 @@ def collect_outcomes(
             if (vo.status is not OutcomeStatus.INCONCLUSIVE
                     and not verify_outcome_record(rec)):
                 vo.evidence["trail_verification"] = "unverified"
+                # Why the token failed, for rendering only: "missing"
+                # (no token at all — the shape every record written
+                # before outcome authentication existed has, and also
+                # the cheapest shape to plant) vs "invalid" (a token is
+                # present but the content or key changed under it).
+                # Presentation-tier: both demote identically; the
+                # marker never weakens the fail-closed direction.
+                vo.evidence["trail_stamp"] = (
+                    "invalid" if rec.get(TRAIL_PROVENANCE_KEY)
+                    else "missing")
                 vo.evidence["claimed_status"] = vo.status.value
                 vo.status = OutcomeStatus.INCONCLUSIVE
             outcomes.append(vo)
@@ -1094,6 +1107,25 @@ def render_outcome_summary(outcomes: Iterable[VerifiedOutcome]) -> str:
             f"{_STATUS_LABEL[st]}={n}" for st, n in cells
         )
         lines.append(f"  {oracle.value:<8} {cell_str}")
+
+    # Records demoted for carrying NO authentication token are the
+    # upgrade-visible shape: everything verified before outcome
+    # authentication existed reads Inconclusive until re-validated.
+    # Count only — an unstamped record is indistinguishable from a
+    # planted one, so the note names both readings and never restores
+    # trust.
+    unstamped = sum(
+        1 for o in items
+        if o.evidence.get("trail_verification") == "unverified"
+        and o.evidence.get("trail_stamp") == "missing"
+    )
+    if unstamped:
+        lines += ["", (
+            f"Note: {unstamped} record(s) carry no outcome-authentication "
+            "stamp (written before this install stamped outcomes, or by "
+            "another install) and are counted as Inconclusive, not "
+            "Verified — re-run validation to re-earn verified status."
+        )]
 
     verified = [o for o in items if o.status is OutcomeStatus.VERIFIED]
     if verified:
