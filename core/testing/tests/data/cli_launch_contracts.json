@@ -1288,11 +1288,12 @@
     "packages/static-analysis/tests/test_scanner_cocci.py": "474abf63754a19a04924fc699c08eea3c85f833432eda9c1658394bc760d1b92",
     "packages/static-analysis/tests/test_scanner_compiler_scan.py": "2f815927edf9c92d6f0a3bf7e08ffdb9056074361a0d432e54f5a25d6bc1e7e7",
     "packages/static-analysis/tests/test_scanner_expanded_semgrep.py": "27b8fac7802a845086ae0a05c16c1d48d688830c756a993bae285e3ee39f63fa",
-    "packages/static-analysis/tests/test_scanner_graduated_rules.py": "7a6836b36899a6de0ae24752fc0c879e4742151904c1be86d859c95057b00efb",
+    "packages/static-analysis/tests/test_scanner_graduated_rules.py": "adebf1dc2af686431959d837fe5a5495b1655852abedcf0713a01a0ecfcd1b0a",
     "packages/static-analysis/tests/test_scanner_semgrep.py": "17202a67c0c9348e0977d67b835a7f101125dec6f1298f6084f35a3b0b2b3c49",
     "packages/static-analysis/tests/test_scanner_semgrep_parallel.py": "cfc15131e6b8c132d846f42da16efac063db39cac9cbed3c1a01c4ebe499ab78",
     "packages/static-analysis/tests/test_scanner_source_wrappers.py": "562ce453380849c76ad6ede5ed65826fafbe18a5992307cda1ce29a900bfbc89",
     "packages/static-analysis/tests/test_scanner_verification.py": "8ea5f8f0f348971a4531807af95a53a191422a72df774c301002b698761e6280",
+    "packages/static-analysis/tests/test_stage_lanes.py": "3871555b231d5252bea0da62861887974c310065e9cddc3bbf22bfec947e8e96",
     "packages/strategy_eval/tests/test_libexec_shim.py": "8153ed415234f6407783f117d810e2e47c6d071e3dddaa2a952887ad3a0225b7",
     "packages/web/api_testing.py": "49887444f7875826397b6a05cfd43697d91e70698aa4b1527aa8784f1ef4c43b",
     "packages/web/tests/conftest.py": "a34911c2a9764f008d0aaba30c947365e5310e29e5c53915c6ceba245b3e9be2",
@@ -45291,6 +45292,14 @@
       "count": 1,
       "contract": "owned-in-process",
       "purpose": "packages/static-analysis/tests/test_scanner_verification.py:<module>: scoped test loader/library entry; registry fixture now restores authorization and scratch caches together; parser/path assertions remain native."
+    },
+    {
+      "path": "packages/static-analysis/tests/test_stage_lanes.py",
+      "scope": "",
+      "signature": "55cc5699d3e95479918c9a6a7f1e81c70a737682a6d4b46f1498c0547ee670cb",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "packages/static-analysis/tests/test_stage_lanes.py:<module>: scoped test loader/library entry; loads scanner.py via importlib to exercise the stage-lane pool with in-thread callables; no subprocess launched."
     },
     {
       "path": "packages/strategy_eval/tests/test_libexec_shim.py",

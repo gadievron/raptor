@@ -2200,6 +2200,62 @@ def _write_stage_report(path: Path, document: dict, diagnostics: list[dict]) -> 
     return [str(path)]
 
 
+def _run_stage_lanes(
+    lanes: list[tuple[str, Callable[[], Any]]],
+    *,
+    sequential: bool,
+    max_workers: int,
+) -> dict[str, Any]:
+    """Run independent post-scan stage lanes, collecting in list order.
+
+    Lane contract (holds for the python-sql / cocci / graduated /
+    source-wrapper quartet): each lane is subprocess-wait-bound, reads
+    only completed inputs (the target tree and the finished main-scan
+    SARIFs) and writes disjoint artifacts, so lanes may execute
+    concurrently. Collection iterates ``lanes`` IN ORDER regardless of
+    completion order, so the order in which callers concatenate lane
+    outputs (combined.sarif's run order) never depends on thread
+    scheduling — identical to the sequential path.
+
+    Failure contract: every submitted lane is awaited even after one
+    raises (no lane's subprocess is left running when the error
+    propagates), then the FIRST failure in lane order re-raises — the
+    same exception the sequential path would surface.
+
+    ``sequential`` (the --sequential debug flag) and a single lane run
+    inline; ``max_workers`` ties lane concurrency to the same tuning
+    knob as the main semgrep stage.
+    """
+    if sequential or len(lanes) <= 1:
+        return {name: fn() for name, fn in lanes}
+    width = max(1, min(len(lanes), max_workers))
+    results: dict[str, Any] = {}
+    first_error: BaseException | None = None
+    pool = ThreadPoolExecutor(
+        max_workers=width, thread_name_prefix="scan-stage",
+    )
+    try:
+        futures = [(name, pool.submit(fn)) for name, fn in lanes]
+        for name, future in futures:
+            try:
+                results[name] = future.result()
+            except BaseException as exc:  # noqa: BLE001 — awaited-all-then-reraise, see docstring
+                logger.warning("stage lane %s failed", name)
+                if first_error is None:
+                    first_error = exc
+    finally:
+        # An abort escaping the collection loop itself (a Ctrl-C landing
+        # between result() waits) must not let QUEUED lanes start and run
+        # to completion behind it — a context-managed pool's exit is
+        # shutdown(wait=True) WITHOUT cancel_futures, which does exactly
+        # that. Cancel what never started; wait out what did (each lane
+        # is subprocess-wait-bound by its own timeouts).
+        pool.shutdown(wait=True, cancel_futures=True)
+    if first_error is not None:
+        raise first_error
+    return results
+
+
 def run_python_sql_stage(
     repo_path: Path, out_dir: Path, configs: list[str], semgrep_sarifs: list[str],
 ) -> tuple[list[str], "SemgrepOutputSummary | None"]:
@@ -4102,9 +4158,26 @@ def main() -> None:
                 traced_build=args.traced_build,
             )
 
-        python_sql_sarifs, python_sql_summary = run_python_sql_stage(
-            repo_path, out_dir, [*rules_dirs, *(args.extra_config or [])], semgrep_sarifs,
-        )
+        # Post-scan additive stages. The four lanes below are
+        # subprocess-wait-bound, read only completed inputs (the
+        # target tree; python-sql additionally reads the FINISHED
+        # semgrep SARIFs) and write disjoint artifacts
+        # (python-sql.sarif / cocci.sarif + its coverage record /
+        # graduated.sarif / source-wrappers*), so they run
+        # concurrently on a bounded pool (_run_stage_lanes) and are
+        # collected in fixed lane order — combined.sarif's run order
+        # never depends on completion order. The compiler →
+        # expanded pair stays SERIAL below (they share one
+        # AnalysisSetup's preprocessed views), as does the
+        # config-resolved stage (in-process CPU-bound, not a
+        # subprocess wait).
+        current_coverage_records: list[dict[str, Any]] = []
+
+        def _python_sql_lane() -> "tuple[list[str], SemgrepOutputSummary | None]":
+            return run_python_sql_stage(
+                repo_path, out_dir,
+                [*rules_dirs, *(args.extra_config or [])], semgrep_sarifs,
+            )
 
         # Coccinelle stage. Default-on for C/C++ targets; auto-skips
         # silently when spatch is absent or the repo has no C/C++
@@ -4113,10 +4186,52 @@ def main() -> None:
         # the shipped rule set is small and AST-level matching is
         # fast — but the opt-out exists for unattended pipelines
         # where any extra signal is noise.
-        current_coverage_records: list[dict[str, Any]] = []
-        cocci_sarifs = []
-        if not args.no_cocci:
-            cocci_sarifs = run_cocci(repo_path, out_dir, on_coverage=current_coverage_records.append)
+        def _cocci_lane() -> list[str]:
+            if args.no_cocci:
+                return []
+            return run_cocci(repo_path, out_dir,
+                             on_coverage=current_coverage_records.append)
+
+        # Graduated synthesized rules (default-on, opt-out). Every
+        # past confirmed bug pattern that graduated from the rule
+        # library re-fires as a standing zero-LLM-cost detector, with
+        # provenance synthesized:<id> per result. Auto-skips silently
+        # when the project has no graduated rules.
+        def _graduated_lane() -> list[str]:
+            if args.no_graduated_rules:
+                return []
+            return run_graduated_rules_stage(
+                repo_path, out_dir,
+                rules_dir=(
+                    Path(args.graduated_rules_dir)
+                    if args.graduated_rules_dir else None
+                ),
+            )
+
+        # Source-wrapper projection (default-on, opt-out): helper
+        # methods that provably return servlet-request data become
+        # additional taint sources for the in-repo java sink profiles.
+        def _source_wrapper_lane() -> tuple[list[str], list[str]]:
+            if args.no_source_wrappers:
+                return [], []
+            return run_source_wrapper_stage(repo_path, out_dir)
+
+        _lane_results = _run_stage_lanes(
+            [
+                ("python-sql", _python_sql_lane),
+                ("cocci", _cocci_lane),
+                ("graduated", _graduated_lane),
+                ("source-wrappers", _source_wrapper_lane),
+            ],
+            sequential=args.sequential,
+            max_workers=RaptorConfig.MAX_SEMGREP_WORKERS,
+        )
+        python_sql_sarifs, python_sql_summary = _lane_results["python-sql"]
+        cocci_sarifs = _lane_results["cocci"]
+        graduated_sarifs = _lane_results["graduated"]
+        source_wrapper_sarifs, source_wrapper_names = (
+            _lane_results["source-wrappers"]
+        )
 
         # Compiler-analyzer stage (opt-in). Same channel as /audit's
         # compiler_sweep, opposite direction — per-TU gcc -fanalyzer /
@@ -4143,31 +4258,6 @@ def main() -> None:
                 repo_path, out_dir, rules_dirs, list(resolved_baseline),
                 extra_configs=args.extra_config,
                 setup=analysis_setup,
-            )
-
-        # Graduated synthesized rules (default-on, opt-out). Every
-        # past confirmed bug pattern that graduated from the rule
-        # library re-fires as a standing zero-LLM-cost detector, with
-        # provenance synthesized:<id> per result. Auto-skips silently
-        # when the project has no graduated rules.
-        graduated_sarifs = []
-        if not args.no_graduated_rules:
-            graduated_sarifs = run_graduated_rules_stage(
-                repo_path, out_dir,
-                rules_dir=(
-                    Path(args.graduated_rules_dir)
-                    if args.graduated_rules_dir else None
-                ),
-            )
-
-        # Source-wrapper projection (default-on, opt-out): helper
-        # methods that provably return servlet-request data become
-        # additional taint sources for the in-repo java sink profiles.
-        source_wrapper_sarifs: list[str] = []
-        source_wrapper_names: list[str] = []
-        if not args.no_source_wrappers:
-            source_wrapper_sarifs, source_wrapper_names = (
-                run_source_wrapper_stage(repo_path, out_dir)
             )
 
         # Config-resolved additive findings (default-on, opt-out):

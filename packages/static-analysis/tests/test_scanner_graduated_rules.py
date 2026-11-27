@@ -675,7 +675,9 @@ class TestGraduatedBatchPath:
 def test_scanner_flag_default_on_opt_out():
     src = _SCANNER_PATH.read_text(encoding="utf-8")
     assert '"--no-graduated-rules"' in src
-    assert "if not args.no_graduated_rules:" in src
+    # The opt-out is internalised in the stage lane: the lane runs by
+    # default and returns [] when the flag is set.
+    assert "if args.no_graduated_rules:" in src
     assert "graduated_sarifs" in src
 
 
