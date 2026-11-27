@@ -184,6 +184,13 @@ class SemgrepResult:
     json_output: str = ""
     elapsed_ms: int = 0
     errors: list[str] = field(default_factory=list)
+    # True when the Semgrep subprocess exhausted its wall-clock budget
+    # (errors then also carry a human-readable "Timeout after Ns"
+    # entry). Lets callers tell budget exhaustion — retryable with a
+    # smaller workload — from rule/target damage without parsing error
+    # strings. Process-local: not serialized, so persisted artifact
+    # shapes are unchanged.
+    timed_out: bool = False
     # Runner-only association with path-bearing errors; preserve multiplicity.
     # None retains legacy behavior for results without producer correlation.
     # Raw JSON remains available separately; this field is not serialized.

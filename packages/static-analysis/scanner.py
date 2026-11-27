@@ -11,6 +11,7 @@
 import argparse
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -18,6 +19,7 @@ import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import Callable
@@ -2597,12 +2599,205 @@ def _graduated_demux_map(rule_files: list[Path]) -> dict[str, str] | None:
 
 def _graduated_check_id_stem(
     check_id: str, mapping: dict[str, str],
-) -> str | None:
-    """Resolve one batched Semgrep check id to its rule-file stem."""
+) -> tuple[str, str] | None:
+    """Resolve one batched Semgrep check id to ``(in-file id, stem)``."""
     for rule_id, stem in mapping.items():
         if check_id == rule_id or check_id.endswith("." + rule_id):
-            return stem
+            return rule_id, stem
     return None
+
+
+def _graduated_canonical_slice_id(inner_id: str, rules_dir: Path) -> str:
+    """Canonical check id for a bisect-slice finding.
+
+    A slice runs from a private mkdtemp COPY of its rule files, so the
+    check id Semgrep emits is prefixed with the DOTTED SCRATCH PATH — a
+    random per-run name. Persisting it would leak the scratch layout
+    into graduated.sarif and make the forensics property
+    nondeterministic run-to-run, so slice findings are rewritten onto
+    the original rules dir: the prefix Semgrep's config-path dotting
+    gives the whole-set batch for the same rule set.
+    """
+    dotted = str(rules_dir).replace(os.sep, ".").lstrip(".")
+    return f"{dotted}.{inner_id}"
+
+
+def _graduated_slice_outcome(
+    res: Any,
+    mapping: dict[str, str],
+    rule_files: list[Path],
+    label: str,
+    *,
+    canonical_rules_dir: Path | None = None,
+) -> tuple[str, list[tuple[str, dict]], dict | None]:
+    """Classify one batched Semgrep invocation covering ``rule_files``.
+
+    Returns ``(kind, findings, diagnostic)`` with ``kind`` one of:
+
+    - ``"ok"`` — clean run; findings attributed and grouped by
+      rule-file stem in sorted file order (the serial loop's shape);
+    - ``"timeout"`` — the subprocess exhausted its wall-clock budget,
+      the only failure a SMALLER batch of the same rules can cure;
+    - ``"refusal"`` — any other condition under which the batch's
+      findings could not carry the serial loop's per-rule provenance
+      or its per-rule failure isolation would matter (errors, bad
+      exit, rule-side skips, unmappable check ids). A smaller batch
+      reproduces the same ambiguity, so refusals route to the
+      per-rule loop directly and are never bisected.
+
+    File-side partials (files_failed/skipped_summary) are target
+    conditions identical across the batch and survive as one stage
+    diagnostic on the "ok" outcome.
+
+    ``canonical_rules_dir`` is set for bisect slices, which run from a
+    scratch copy of their rule files: matched findings get their check
+    id rewritten onto the original rules dir
+    (``_graduated_canonical_slice_id``) so no per-run scratch path
+    lands in the emitted SARIF.
+    """
+    if getattr(res, "timed_out", False):
+        return "timeout", [], None
+    if res.errors or getattr(res, "returncode", 0) not in (0, 1):
+        logger.warning(
+            "graduated-rules: %s refused (errors or unexpected exit); "
+            "routing to the per-rule loop", label,
+        )
+        return "refusal", [], None
+    if getattr(res, "skipped_rules", ()):
+        logger.warning(
+            "graduated-rules: %s refused (rule-side skips); "
+            "routing to the per-rule loop", label,
+        )
+        return "refusal", [], None
+    findings_by_stem: dict[str, list[dict]] = {
+        rule_file.stem: [] for rule_file in rule_files
+    }
+    for finding in res.findings:
+        matched = _graduated_check_id_stem(finding.rule_id, mapping)
+        # A stem outside this invocation's rule set would mean a rule
+        # that was never loaded produced a finding — mis-attribution
+        # either way; the per-rule loop's provenance is structural.
+        if matched is None or matched[1] not in findings_by_stem:
+            logger.warning(
+                "graduated-rules: batched check id %r matched no "
+                "graduated rule in %s; re-running per-rule",
+                finding.rule_id, label,
+            )
+            return "refusal", [], None
+        inner_id, stem = matched
+        finding_dict = finding.to_dict()
+        if canonical_rules_dir is not None:
+            finding_dict["rule_id"] = _graduated_canonical_slice_id(
+                inner_id, canonical_rules_dir)
+        findings_by_stem[stem].append(finding_dict)
+    findings = [
+        (rule_file.stem, finding_dict)
+        for rule_file in rule_files
+        for finding_dict in findings_by_stem[rule_file.stem]
+    ]
+    return "ok", findings, _semgrep_stage_diagnostic(res, label)
+
+
+def _graduated_bisect(
+    repo_path: Path,
+    rules_dir: Path,
+    rule_files: list[Path],
+    mapping: dict[str, str],
+    semgrep_run_rule: Callable[..., Any],
+) -> tuple[list[tuple[str, dict]], list[dict], list[Path]]:
+    """Recover from a timed-out whole-set batch by halving it.
+
+    A timeout says only "this workload was too big for the budget" —
+    usually one slow rule, not n slow rules — so serializing the whole
+    set (n full-repo subprocesses) throws away the batching win for
+    every innocent rule. Halving isolates instead: each half retries
+    under the SAME per-attempt timeout and env as the whole-set batch;
+    a half that passes lands its findings batched, a half that times
+    out splits again. Slices of ONE rule are never attempted here — a
+    one-rule batch costs exactly one per-rule invocation, so they go
+    to ``serial_residue`` and the serial loop (which also owns the
+    per-rule diagnostics). One slow rule thus costs O(log2 n) extra
+    attempts while every other rule still runs batched.
+
+    Cost cap: when EVERY attempted half of a split times out, the
+    slowness is target-wide rather than one bad rule, and each further
+    split would pay another full timeout before reaching the serial
+    loop anyway — the whole slice goes to ``serial_residue``. Halving
+    strictly shrinks every slice, so recursion depth is bounded by
+    ceil(log2(n)) by construction; the explicit cap is an invariant
+    guard, not a tunable.
+
+    Each attempted slice runs from a private scratch directory holding
+    COPIES of just that slice's rule files (a directory config is the
+    only multi-rule invocation shape, and symlinks must not widen what
+    the sandbox lets the scan read). Slice check ids are rewritten onto
+    ``rules_dir`` at attribution time — the scratch directory's random
+    per-run name must never reach the emitted SARIF.
+
+    Returns ``(findings, diagnostics, serial_residue)``.
+    """
+    findings: list[tuple[str, dict]] = []
+    diagnostics: list[dict] = []
+    residue: list[Path] = []
+    depth_cap = max(1, math.ceil(math.log2(len(rule_files))))
+    bisect_root = Path(tempfile.mkdtemp(prefix="raptor-graduated-bisect-"))
+
+    def attempt(start: int, end: int) -> tuple[str, list[tuple[str, dict]], dict | None]:
+        label = f"graduated-slice-{start}-{end}"
+        slice_dir = bisect_root / label
+        try:
+            slice_dir.mkdir()
+            for rule_file in rule_files[start:end]:
+                shutil.copyfile(rule_file, slice_dir / rule_file.name)
+        except OSError as exc:
+            logger.warning(
+                "graduated-rules: %s staging failed: %s", label, exc)
+            return "refusal", [], None
+        try:
+            res = semgrep_run_rule(
+                Path(repo_path), str(slice_dir),
+                name=label,
+                timeout=RaptorConfig.SEMGREP_PACK_TIMEOUT,
+                env=RaptorConfig.get_safe_env(preserve_proxy=True),
+            )
+        except Exception as exc:  # noqa: BLE001 — slice failure routes to the per-rule loop
+            logger.warning(
+                "graduated-rules: %s invocation failed: %s", label, exc)
+            return "refusal", [], None
+        return _graduated_slice_outcome(
+            res, mapping, rule_files[start:end], label,
+            canonical_rules_dir=Path(rules_dir))
+
+    def solve(start: int, end: int, depth: int) -> None:
+        if end - start <= 1 or depth > depth_cap:
+            residue.extend(rule_files[start:end])
+            return
+        mid = (start + end) // 2
+        outcomes: list[tuple[int, int, str, list[tuple[str, dict]], dict | None]] = []
+        for lo, hi in ((start, mid), (mid, end)):
+            if hi - lo == 1:
+                residue.extend(rule_files[lo:hi])
+                continue
+            outcomes.append((lo, hi, *attempt(lo, hi)))
+        if outcomes and all(kind == "timeout" for _, _, kind, _, _ in outcomes):
+            for lo, hi, _kind, _found, _diag in outcomes:
+                residue.extend(rule_files[lo:hi])
+            return
+        for lo, hi, kind, slice_findings, diagnostic in outcomes:
+            if kind == "ok":
+                findings.extend(slice_findings)
+                if diagnostic:
+                    diagnostics.append(diagnostic)
+            elif kind == "timeout":
+                solve(lo, hi, depth + 1)
+            else:
+                residue.extend(rule_files[lo:hi])
+
+    try:
+        solve(0, len(rule_files), 1)
+    finally:
+        shutil.rmtree(bisect_root, ignore_errors=True)
+    return findings, diagnostics, residue
 
 
 def _graduated_batch_attempt(
@@ -2610,19 +2805,27 @@ def _graduated_batch_attempt(
     rules_dir: Path,
     rule_files: list[Path],
     semgrep_run_rule: Callable[..., Any],
-) -> tuple[list[tuple[str, dict]], list[dict]] | None:
+) -> tuple[list[tuple[str, dict]], list[dict], list[Path]] | None:
     """Try the whole graduated set as ONE Semgrep invocation.
 
     Semgrep loads every rule file in a directory config in a single
     pass (one process, one target walk) instead of one full-repo
-    subprocess per rule. Correctness guard: any condition under which
-    the batch's findings could not be attributed to exactly the same
-    per-rule provenance the serial loop produces — or under which the
-    serial loop's per-rule failure isolation would matter — returns
-    None and the caller runs the historical per-rule loop instead.
+    subprocess per rule. Correctness guard: any NON-timeout condition
+    under which the batch's findings could not be attributed to
+    exactly the same per-rule provenance the serial loop produces — or
+    under which the serial loop's per-rule failure isolation would
+    matter — returns None and the caller runs the historical per-rule
+    loop over the full set instead.
 
-    Returns ``(findings, diagnostics)`` on success, findings grouped
-    by rule-file stem in sorted file order (the serial loop's shape).
+    A TIMEOUT of the whole-set batch does not surrender the batching
+    win outright: the set is bisected (``_graduated_bisect``) so one
+    slow rule costs O(log2 n) retries instead of serializing all n.
+
+    Returns ``(findings, diagnostics, serial_residue)`` — findings
+    grouped by rule-file stem in sorted file order (the serial loop's
+    shape) for every rule that ran batched, plus the rule files the
+    caller must still run through the per-rule loop (empty on full
+    batch success).
     """
     mapping = _graduated_demux_map(rule_files)
     if mapping is None:
@@ -2646,35 +2849,23 @@ def _graduated_batch_attempt(
     except Exception as exc:  # noqa: BLE001 — batch failure falls back, never kills the stage
         logger.warning("graduated-rules: batched invocation failed: %s", exc)
         return None
-    # Errors / bad exit: the serial loop isolates the offending rule;
-    # skipped_rules: rule-side partial coverage the batch cannot
-    # attribute to a specific graduated rule. Both demand the per-rule
-    # path. File-side partials (files_failed/skipped_summary) are
-    # target conditions identical across the batch and survive as one
-    # stage diagnostic below.
-    if res.errors or getattr(res, "returncode", 0) not in (0, 1):
+    kind, findings, diagnostic = _graduated_slice_outcome(
+        res, mapping, rule_files, "graduated")
+    if kind == "refusal":
         return None
-    if getattr(res, "skipped_rules", ()):
-        return None
-    findings_by_stem: dict[str, list[dict]] = {
-        rule_file.stem: [] for rule_file in rule_files
-    }
-    for finding in res.findings:
-        stem = _graduated_check_id_stem(finding.rule_id, mapping)
-        if stem is None:
-            logger.warning(
-                "graduated-rules: batched check id %r matched no "
-                "graduated rule; re-running per-rule", finding.rule_id,
-            )
+    if kind == "timeout":
+        if len(rule_files) == 1:
+            # The serial loop IS the one-rule retry.
             return None
-        findings_by_stem[stem].append(finding.to_dict())
-    findings = [
-        (rule_file.stem, finding_dict)
-        for rule_file in rule_files
-        for finding_dict in findings_by_stem[rule_file.stem]
-    ]
-    diagnostic = _semgrep_stage_diagnostic(res, "graduated")
-    return findings, [diagnostic] if diagnostic else []
+        logger.warning(
+            "graduated-rules: batched invocation timed out after %ds; "
+            "bisecting %d rule(s) to isolate the slow one(s)",
+            RaptorConfig.SEMGREP_PACK_TIMEOUT, len(rule_files),
+        )
+        return _graduated_bisect(
+            repo_path, Path(rules_dir), rule_files, mapping,
+            semgrep_run_rule)
+    return findings, [diagnostic] if diagnostic else [], []
 
 
 def run_graduated_rules_stage(
@@ -2748,15 +2939,17 @@ def run_graduated_rules_stage(
                                    _graduated_findings_to_sarif([]),
                                    [_stage_diagnostic("Semgrep not installed", failed=True)])
 
-    # Fast path: one Semgrep invocation for the whole graduated set.
-    # Falls back to the historical one-subprocess-per-rule loop whenever
-    # batched findings could not carry identical per-rule provenance
-    # (see _graduated_batch_attempt).
+    # Fast path: one Semgrep invocation for the whole graduated set,
+    # bisected on timeout so one slow rule does not serialize the rest.
+    # Falls back to the historical one-subprocess-per-rule loop (for
+    # the whole set on a non-timeout refusal, for the serial residue
+    # otherwise) whenever batched findings could not carry identical
+    # per-rule provenance (see _graduated_batch_attempt).
     batch = _graduated_batch_attempt(
         repo_path, rules_dir, rule_files, semgrep_run_rule,
     )
-    if batch is not None:
-        all_findings, diagnostics = batch
+    if batch is not None and not batch[2]:
+        all_findings, diagnostics, _ = batch
         sarif_path = Path(out_dir) / "graduated.sarif"
         paths = _write_stage_report(
             sarif_path, _graduated_findings_to_sarif(all_findings), diagnostics,
@@ -2768,10 +2961,22 @@ def run_graduated_rules_stage(
         )
         return paths
 
-    all_findings: list[tuple[str, dict]] = []
-    diagnostics = []
+    if batch is None:
+        batched_findings: list[tuple[str, dict]] = []
+        diagnostics = []
+        serial_files = rule_files
+    else:
+        batched_findings, diagnostics, serial_files = batch
+        logger.info(
+            "graduated-rules: %d/%d rule(s) ran batched after bisection; "
+            "%d via the per-rule loop",
+            len(rule_files) - len(serial_files), len(rule_files),
+            len(serial_files),
+        )
+
+    serial_findings: list[tuple[str, dict]] = []
     failed = 0
-    for rule_file in rule_files:
+    for rule_file in serial_files:
         rule_id = rule_file.stem
         try:
             res = semgrep_run_rule(
@@ -2792,11 +2997,28 @@ def run_graduated_rules_stage(
             diagnostics.append(diagnostic)
             if diagnostic["executionSuccessful"] is False:
                 failed += 1
-        all_findings.extend((rule_id, f.to_dict()) for f in res.findings)
+        serial_findings.extend((rule_id, f.to_dict()) for f in res.findings)
 
+    # failed counts serial attempts only, so this fires exactly when the
+    # WHOLE set ran serially and every rule failed — a mixed run with
+    # batched successes can never reach len(rule_files).
     if rule_files and failed == len(rule_files):
         print(f"⚠️  graduated-rules stage FAILED: all {len(rule_files)} rule(s) failed; "
               "execution errors retained in SARIF", file=sys.stderr)
+
+    # Regroup across the batched and serial legs so the emitted order
+    # is grouped by rule-file stem in sorted file order — identical to
+    # a pure-batch or pure-serial run.
+    findings_by_stem: dict[str, list[dict]] = {
+        rule_file.stem: [] for rule_file in rule_files
+    }
+    for stem, finding_dict in (*batched_findings, *serial_findings):
+        findings_by_stem[stem].append(finding_dict)
+    all_findings = [
+        (rule_file.stem, finding_dict)
+        for rule_file in rule_files
+        for finding_dict in findings_by_stem[rule_file.stem]
+    ]
 
     sarif_path = Path(out_dir) / "graduated.sarif"
     paths = _write_stage_report(sarif_path, _graduated_findings_to_sarif(all_findings), diagnostics)

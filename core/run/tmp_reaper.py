@@ -128,6 +128,10 @@ _DIR_PREFIXES = (
     # Offline Semgrep cache-check scratch; TemporaryDirectory cleans it
     # on normal exit, while killed checks leave it for the reaper.
     "raptor-semgrep-check-",
+    # Graduated-rule bisection slice staging (packages/static-analysis/
+    # scanner.py mkdtemp); rmtree'd in the bisection's finally, so
+    # survival past the floor means the scan process was hard-killed.
+    "raptor-graduated-bisect-",
     # Line-checker build scratch (packages/binary_analysis/
     # blamed_lines.py TemporaryDirectory); cleaned on exit, leaked on
     # SIGKILL/OOM.

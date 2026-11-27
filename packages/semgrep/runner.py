@@ -857,6 +857,7 @@ def run_rule(
                 errors=[f"Timeout after {timeout}s"],
                 returncode=-1,
                 elapsed_ms=int((time.monotonic() - start) * 1000),
+                timed_out=True,
             )
         except (OSError, SnapRuntimeError) as e:
             return SemgrepResult(

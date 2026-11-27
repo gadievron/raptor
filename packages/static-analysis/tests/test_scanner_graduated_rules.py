@@ -73,7 +73,8 @@ def _fake_runner(monkeypatch, results):
 
     def run_rule(target, config, *, name="", timeout=0, env=None, **kw):
         stem = Path(config).stem
-        calls.append({"config": config, "name": name})
+        calls.append({"config": config, "name": name, "timeout": timeout,
+                      "env": env})
         res = results.get(stem)
         if res is None:
             raise RuntimeError(f"no fake semgrep result for {stem!r}")
@@ -456,6 +457,204 @@ class TestGraduatedBatchPath:
         out_dir, rules_dir, repo = self._setup(tmp_path, "only-rule")
         calls = _fake_runner(monkeypatch, {
             "rules": SemgrepResult(**damage),
+            "only-rule": FakeSemgrepResult(findings=[FakeFinding(
+                line=5, rule_id="x.only-rule-inner",
+            )]),
+        })
+        sarifs = _scanner.run_graduated_rules_stage(
+            repo, out_dir, rules_dir=rules_dir,
+        )
+        assert [Path(c["config"]).stem for c in calls] == ["rules", "only-rule"]
+        results = json.loads(Path(sarifs[0]).read_text())["runs"][0]["results"]
+        assert [r["ruleId"] for r in results] == ["synthesized:only-rule"]
+
+    @pytest.mark.parametrize("damage", [
+        {"errors": ["rule failed to compile"]},
+        {"returncode": 2},
+        {"skipped_rules": ["incompatible"]},
+    ])
+    def test_batch_non_timeout_damage_never_bisects(
+        self, tmp_path, monkeypatch, damage,
+    ):
+        """A non-timeout refusal is an attribution problem a smaller
+        batch would reproduce — the whole set goes straight to the
+        per-rule loop, with no bisection slices attempted."""
+        from packages.semgrep.models import SemgrepResult
+
+        out_dir, rules_dir, repo = self._setup(
+            tmp_path, "rule-a", "rule-b", "rule-c", "rule-d",
+        )
+        calls = _fake_runner(monkeypatch, {
+            "rules": SemgrepResult(**damage),
+            "rule-a": FakeSemgrepResult(),
+            "rule-b": FakeSemgrepResult(),
+            "rule-c": FakeSemgrepResult(),
+            "rule-d": FakeSemgrepResult(),
+        })
+        _scanner.run_graduated_rules_stage(repo, out_dir, rules_dir=rules_dir)
+        assert [Path(c["config"]).stem for c in calls] == [
+            "rules", "rule-a", "rule-b", "rule-c", "rule-d",
+        ]
+
+    def _timeout_result(self):
+        from packages.semgrep.models import SemgrepResult
+
+        return SemgrepResult(
+            errors=["Timeout after 600s"], returncode=-1, timed_out=True,
+        )
+
+    def test_batch_timeout_bisects_and_isolates_slow_half(
+        self, tmp_path, monkeypatch,
+    ):
+        """A whole-set timeout halves the batch: the clean half lands
+        its findings batched (never serialized), the timing-out half
+        recurses to singletons which run through the per-rule loop."""
+        out_dir, rules_dir, repo = self._setup(
+            tmp_path, "rule-a", "rule-b", "rule-c", "rule-d",
+        )
+        calls = _fake_runner(monkeypatch, {
+            "rules": self._timeout_result(),
+            "graduated-slice-0-2": FakeSemgrepResult(findings=[
+                FakeFinding(line=3, rule_id="x.rule-a-inner", file="src/a.c"),
+                FakeFinding(line=9, rule_id="x.rule-b-inner", file="src/b.c"),
+            ]),
+            "graduated-slice-2-4": self._timeout_result(),
+            "rule-c": FakeSemgrepResult(findings=[FakeFinding(
+                line=5, rule_id="x.rule-c-inner", file="src/c.c",
+            )]),
+            "rule-d": FakeSemgrepResult(),
+        })
+        sarifs = _scanner.run_graduated_rules_stage(
+            repo, out_dir, rules_dir=rules_dir,
+        )
+        # The clean half never runs serially; the slow half's
+        # singletons go straight to the per-rule loop.
+        assert [Path(c["config"]).stem for c in calls] == [
+            "rules", "graduated-slice-0-2", "graduated-slice-2-4",
+            "rule-c", "rule-d",
+        ]
+        # Timeout/env parity: every leg runs under the same per-attempt
+        # budget and sanitized environment as the whole-set batch.
+        assert len({c["timeout"] for c in calls}) == 1
+        assert all(c["env"] is not None for c in calls)
+        results = json.loads(Path(sarifs[0]).read_text())["runs"][0]["results"]
+        assert [r["ruleId"] for r in results] == [
+            "synthesized:rule-a", "synthesized:rule-b", "synthesized:rule-c",
+        ]
+
+    def test_bisected_findings_never_carry_the_scratch_config_path(
+        self, tmp_path, monkeypatch,
+    ):
+        """A bisect slice runs from a private mkdtemp copy of its rule
+        files, so Semgrep prefixes slice check ids with the dotted
+        scratch path — a random per-run name. The emitted SARIF must
+        rewrite those onto the original rules dir: a scratch prefix
+        would leak the scratch layout and make the forensics property
+        nondeterministic run-to-run."""
+        import os
+
+        out_dir, rules_dir, repo = self._setup(
+            tmp_path, "rule-a", "rule-b", "rule-c", "rule-d",
+        )
+        scratch_id = (
+            "tmp.raptor-graduated-bisect-k3xq9z.graduated-slice-0-2"
+            ".rule-a-inner"
+        )
+        _fake_runner(monkeypatch, {
+            "rules": self._timeout_result(),
+            "graduated-slice-0-2": FakeSemgrepResult(findings=[
+                FakeFinding(line=3, rule_id=scratch_id, file="src/a.c"),
+                # Bare in-file id (no config prefix) rewrites too — the
+                # bisect leg emits ONE canonical shape.
+                FakeFinding(line=9, rule_id="rule-b-inner", file="src/b.c"),
+            ]),
+            "graduated-slice-2-4": self._timeout_result(),
+            "rule-c": FakeSemgrepResult(findings=[FakeFinding(
+                line=5, rule_id="x.rule-c-inner", file="src/c.c",
+            )]),
+            "rule-d": FakeSemgrepResult(),
+        })
+        sarifs = _scanner.run_graduated_rules_stage(
+            repo, out_dir, rules_dir=rules_dir,
+        )
+        text = Path(sarifs[0]).read_text()
+        assert "graduated-bisect" not in text
+        assert "graduated-slice" not in text
+        results = json.loads(text)["runs"][0]["results"]
+        dotted = str(rules_dir).replace(os.sep, ".").lstrip(".")
+        assert [r["properties"]["semgrep_rule_id"] for r in results] == [
+            f"{dotted}.rule-a-inner",
+            f"{dotted}.rule-b-inner",
+            # The per-rule loop keeps Semgrep's own id untouched.
+            "x.rule-c-inner",
+        ]
+        assert [r["ruleId"] for r in results] == [
+            "synthesized:rule-a", "synthesized:rule-b", "synthesized:rule-c",
+        ]
+
+    def test_batch_timeout_everywhere_stops_bisecting(
+        self, tmp_path, monkeypatch,
+    ):
+        """When BOTH halves of a split time out the slowness is
+        target-wide, not one bad rule — further splits would pay a full
+        timeout each before reaching the serial loop, so the slices go
+        serial directly."""
+        out_dir, rules_dir, repo = self._setup(
+            tmp_path, "rule-a", "rule-b", "rule-c", "rule-d",
+        )
+        serial = {stem: FakeSemgrepResult()
+                  for stem in ("rule-a", "rule-b", "rule-c", "rule-d")}
+        calls = _fake_runner(monkeypatch, {
+            "rules": self._timeout_result(),
+            "graduated-slice-0-2": self._timeout_result(),
+            "graduated-slice-2-4": self._timeout_result(),
+            **serial,
+        })
+        _scanner.run_graduated_rules_stage(repo, out_dir, rules_dir=rules_dir)
+        assert [Path(c["config"]).stem for c in calls] == [
+            "rules", "graduated-slice-0-2", "graduated-slice-2-4",
+            "rule-a", "rule-b", "rule-c", "rule-d",
+        ]
+
+    def test_bisect_half_refusal_goes_direct_serial(
+        self, tmp_path, monkeypatch,
+    ):
+        """A NON-timeout refusal inside a half during bisection routes
+        that half to the per-rule loop without further splitting."""
+        from packages.semgrep.models import SemgrepResult
+
+        out_dir, rules_dir, repo = self._setup(
+            tmp_path, "rule-a", "rule-b", "rule-c", "rule-d",
+        )
+        calls = _fake_runner(monkeypatch, {
+            "rules": self._timeout_result(),
+            "graduated-slice-0-2": SemgrepResult(
+                errors=["rule failed to compile"],
+            ),
+            "graduated-slice-2-4": FakeSemgrepResult(findings=[FakeFinding(
+                line=7, rule_id="x.rule-d-inner", file="src/d.c",
+            )]),
+            "rule-a": FakeSemgrepResult(),
+            "rule-b": FakeSemgrepResult(),
+        })
+        sarifs = _scanner.run_graduated_rules_stage(
+            repo, out_dir, rules_dir=rules_dir,
+        )
+        assert [Path(c["config"]).stem for c in calls] == [
+            "rules", "graduated-slice-0-2", "graduated-slice-2-4",
+            "rule-a", "rule-b",
+        ]
+        results = json.loads(Path(sarifs[0]).read_text())["runs"][0]["results"]
+        assert [r["ruleId"] for r in results] == ["synthesized:rule-d"]
+
+    def test_single_rule_timeout_goes_straight_serial(
+        self, tmp_path, monkeypatch,
+    ):
+        """A one-rule set has nothing to bisect — the serial loop IS
+        the retry."""
+        out_dir, rules_dir, repo = self._setup(tmp_path, "only-rule")
+        calls = _fake_runner(monkeypatch, {
+            "rules": self._timeout_result(),
             "only-rule": FakeSemgrepResult(findings=[FakeFinding(
                 line=5, rule_id="x.only-rule-inner",
             )]),

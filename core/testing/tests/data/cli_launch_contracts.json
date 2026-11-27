@@ -1287,7 +1287,7 @@
     "packages/static-analysis/tests/test_scanner_cocci.py": "474abf63754a19a04924fc699c08eea3c85f833432eda9c1658394bc760d1b92",
     "packages/static-analysis/tests/test_scanner_compiler_scan.py": "2f815927edf9c92d6f0a3bf7e08ffdb9056074361a0d432e54f5a25d6bc1e7e7",
     "packages/static-analysis/tests/test_scanner_expanded_semgrep.py": "27b8fac7802a845086ae0a05c16c1d48d688830c756a993bae285e3ee39f63fa",
-    "packages/static-analysis/tests/test_scanner_graduated_rules.py": "f7073fef74e6a1d2642e90623b9f49ea422ff0cf94123906745decfdadf1aeb5",
+    "packages/static-analysis/tests/test_scanner_graduated_rules.py": "7a6836b36899a6de0ae24752fc0c879e4742151904c1be86d859c95057b00efb",
     "packages/static-analysis/tests/test_scanner_semgrep.py": "17202a67c0c9348e0977d67b835a7f101125dec6f1298f6084f35a3b0b2b3c49",
     "packages/static-analysis/tests/test_scanner_semgrep_parallel.py": "cfc15131e6b8c132d846f42da16efac063db39cac9cbed3c1a01c4ebe499ab78",
     "packages/static-analysis/tests/test_scanner_source_wrappers.py": "562ce453380849c76ad6ede5ed65826fafbe18a5992307cda1ce29a900bfbc89",
