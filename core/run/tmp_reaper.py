@@ -132,6 +132,10 @@ _DIR_PREFIXES = (
     # scanner.py mkdtemp); rmtree'd in the bisection's finally, so
     # survival past the floor means the scan process was hard-killed.
     "raptor-graduated-bisect-",
+    # Verified graph-store snapshot copies (packages/binary_analysis/
+    # graph_store.py open_verified_graph_store); rmtree'd in the
+    # context manager's finally, leaked only on SIGKILL/OOM.
+    "raptor-graph-verify-",
     # Line-checker build scratch (packages/binary_analysis/
     # blamed_lines.py TemporaryDirectory); cleaned on exit, leaked on
     # SIGKILL/OOM.

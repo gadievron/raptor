@@ -10,9 +10,14 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import hmac
 import json
 import logging
+import os
+import shutil
 import sqlite3
+import stat
+import tempfile
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -21,14 +26,414 @@ from typing import Any, Self, TYPE_CHECKING
 from urllib.parse import quote
 
 from core.hash import sha256_file
+from core.security import mac_key
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Mapping
 
 logger = logging.getLogger(__name__)
 
 GRAPH_FILENAME = "binary-graph.sqlite"
 SCHEMA_VERSION = 2
+
+# ── Store provenance (sidecar MAC over the db file content) ──────────
+#
+# Graph stores live under run output dirs — trees that sandboxed
+# children and scanned-target build steps can often write. Trusted
+# consumers (the binary-oracle edge index, the audit sink-edge bridge)
+# steer verdicts off edges read from here, so a planted or rewritten
+# sqlite file must not be taken at face value. Writers stamp the store
+# at close/finalize time: an HMAC-SHA256 token over the db file's
+# content hash, under a per-purpose key
+# (``$XDG_DATA_HOME/raptor/graph-store-mac.key`` — never shared with
+# any other subsystem's key, core.security.mac_key doctrine; the key
+# lives outside every LLM-writable and sandbox-readable tree). A
+# verified token proves the store was last finalized by code that
+# could read that key file, nothing stronger; key confidentiality is
+# the trust anchor.
+#
+# Failure policy is demote-never-error: no usable key → the store
+# stays unstamped and trusted consumers SKIP it with a loud warning
+# (edge enrichment is an upgrade, not a right). Display-only readers
+# (the graph query CLIs, report rendering) stay unverified.
+
+#: Sidecar filename suffix: ``binary-graph.sqlite.provenance.json``.
+PROVENANCE_SUFFIX = ".provenance.json"
+
+_PROVENANCE_KIND = "binary-graph-store"
+_PROVENANCE_KEY_LEN = 32
+
+# Sidecars are a three-field JSON object (<1 KiB); the bound keeps a
+# planted oversize sidecar from being buffered. Generous headroom so a
+# legitimate future field never trips it; verification fails closed
+# (skip) above it either way.
+_PROVENANCE_MAX_BYTES = 64 * 1024
+
+_warned_key_paths: set[str] = set()
+
+
+def _provenance_key_path() -> Path:
+    xdg = os.environ.get("XDG_DATA_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".local" / "share"
+    return base / "raptor" / "graph-store-mac.key"
+
+
+def _warn_once_suspect_key(path: Path, reason: str, remedy: str) -> None:
+    key = str(path)
+    if key in _warned_key_paths:
+        logger.debug(
+            "graph-store provenance: suspect key %s (%s)", path, reason)
+        return
+    _warned_key_paths.add(key)
+    logger.warning(
+        "graph-store provenance: refusing key %s — %s. Binary graph "
+        "stores will not mint or verify provenance (trusted consumers "
+        "skip them) until this is fixed: %s",
+        path, reason, remedy,
+    )
+
+
+def _read_existing_provenance_key(
+    path: Path,
+) -> bytes | mac_key.Refused | None:
+    return mac_key.read_existing_key(
+        path, key_len=_PROVENANCE_KEY_LEN, warn=_warn_once_suspect_key)
+
+
+def _load_or_create_provenance_key() -> bytes | None:
+    return mac_key.load_or_create_key(
+        _provenance_key_path(), key_len=_PROVENANCE_KEY_LEN,
+        warn=_warn_once_suspect_key,
+        read_existing=_read_existing_provenance_key,
+        recreate_hint="a fresh key is created on the next store stamp")
+
+
+def provenance_key_usable() -> bool:
+    """Whether this install can mint/verify graph-store tokens at all."""
+    try:
+        return bool(_load_or_create_provenance_key())
+    except OSError:
+        return False
+
+
+def _provenance_canonical(fields: Mapping[str, object]) -> bytes:
+    """Injective canonical encoding — key-sorted, length-prefixed —
+    identical construction to witness/outcome-trail provenance's."""
+    items = sorted((str(k), str(v)) for k, v in fields.items())
+    out = bytearray()
+    out += len(items).to_bytes(4, "big")
+    for key, value in items:
+        for part in (key.encode("utf-8"), value.encode("utf-8")):
+            out += len(part).to_bytes(4, "big")
+            out += part
+    return bytes(out)
+
+
+def _provenance_mint(fields: Mapping[str, object]) -> str | None:
+    try:
+        key = _load_or_create_provenance_key()
+    except OSError:
+        return None
+    if not key:
+        return None
+    return hmac.new(
+        key, _provenance_canonical(fields), hashlib.sha256).hexdigest()
+
+
+def _provenance_verify(fields: Mapping[str, object], token: object) -> bool:
+    if not token or not isinstance(token, str):
+        return False
+    try:
+        expected = _provenance_mint(fields)
+        if expected is None:
+            return False
+        return hmac.compare_digest(expected, token.strip().lower())
+    except Exception:  # noqa: BLE001 — verification failure is the skip path, never an error
+        return False
+
+
+def provenance_path_for(path: Path) -> Path:
+    """The provenance sidecar path for a graph store db file."""
+    path = Path(path)
+    return path.with_name(path.name + PROVENANCE_SUFFIX)
+
+
+def _db_content_sha256(path: Path) -> str | None:
+    """Streamed content hash of the db file, None when unreadable."""
+    try:
+        return sha256_file(Path(path))
+    except OSError:
+        return None
+
+
+def _pending_journal(path: Path) -> bool:
+    """Whether uncheckpointed journal content rides NEXT TO the db
+    file. The content hash covers the db file alone, so a non-empty
+    ``-wal``/``-journal`` sibling changes the store's EFFECTIVE
+    content without changing the hash — a planted journal would be
+    folded into the db by the next (trusted, unsandboxed) open. Such a
+    store is unverified; a clean writer close checkpoints the WAL
+    away, so legitimate finalized stores do not carry one."""
+    path = Path(path)
+    for suffix in ("-wal", "-journal"):
+        sibling = path.with_name(path.name + suffix)
+        try:
+            if sibling.stat().st_size > 0:
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _provenance_fields(db_sha256: str) -> dict[str, str]:
+    return {"kind": _PROVENANCE_KIND, "db_sha256": db_sha256}
+
+
+def stamp_graph_store(path: Path) -> None:
+    """Stamp a graph store the caller has just finished writing.
+
+    Called at every writer close/finalize seam
+    (:meth:`BinaryGraphStore.close`, :func:`graph_connection` exit) —
+    legitimate mutate-then-close cycles re-stamp. Best-effort and
+    demote-never-error: an unreadable db, a pending journal (another
+    connection still open — ITS close re-stamps), or no usable key
+    leaves the store unstamped, and trusted consumers skip it.
+    """
+    path = Path(path)
+    if not path.is_file():
+        return
+    if _pending_journal(path):
+        return
+    digest = _db_content_sha256(path)
+    if not digest:
+        return
+    token = _provenance_mint(_provenance_fields(digest))
+    if not token:
+        return
+    payload = {
+        "kind": _PROVENANCE_KIND,
+        "db_sha256": digest,
+        "token": token,
+    }
+    try:
+        from core.json.utils import save_json
+        save_json(provenance_path_for(path), payload)
+    except OSError:
+        logger.debug(
+            "graph-store provenance: sidecar write failed for %s",
+            path, exc_info=True)
+
+
+def _load_provenance_sidecar(path: Path) -> tuple[str, str] | None:
+    """The (recorded db hash, token) pair from the store's sidecar,
+    None when absent or malformed — the caller's skip path."""
+    sidecar = provenance_path_for(path)
+    if not sidecar.is_file():
+        return None
+    try:
+        from core.json.utils import load_json
+        payload = load_json(
+            sidecar, strict=True, max_bytes=_PROVENANCE_MAX_BYTES)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    recorded = payload.get("db_sha256")
+    token = payload.get("token")
+    if not isinstance(recorded, str) or not isinstance(token, str):
+        return None
+    return recorded, token
+
+
+def verify_graph_store(path: Path) -> bool:
+    """Whether the store at *path* carries a valid provenance stamp
+    over its CURRENT content (and no uncheckpointed journal rides next
+    to it). False for unstamped (legacy / foreign / planted) stores
+    and on any verification failure — the caller's skip path, never an
+    error.
+
+    This is a point-in-time PREDICATE over the path: nothing stops the
+    file from being swapped after it returns. Consumers that go on to
+    READ edges and steer verdicts must use
+    :func:`open_verified_graph_store` instead, which verifies and
+    queries one private snapshot copy with no verify/open window."""
+    path = Path(path)
+    if not path.is_file():
+        return False
+    if _pending_journal(path):
+        return False
+    loaded = _load_provenance_sidecar(path)
+    if loaded is None:
+        return False
+    recorded, token = loaded
+    digest = _db_content_sha256(path)
+    # The recorded hash must match the db's CURRENT content — the
+    # token authenticates the recorded hash, the comparison binds it
+    # to the bytes actually on disk.
+    if not digest or recorded != digest:
+        return False
+    return _provenance_verify(_provenance_fields(digest), token)
+
+
+# ── Verified snapshot open (TOCTOU-free consumer path) ───────────────
+#
+# verify_graph_store() hashes the file AT ITS PATH and then returns;
+# any consumer that re-opens the same path afterwards races every
+# other writer of the run dir — a sandboxed build child or planted
+# artifact can swap the db (or drop a -wal sibling that a writable
+# open would fold in) between the verify and the open. The fix is to
+# never read the path twice: copy the db ONCE into a private 0700
+# mkdtemp, hashing the same bytes being copied, verify the MAC over
+# that hash, and serve every query from the copy via an
+# ``immutable=1`` sqlite open (no locking, no journal consultation —
+# a planted -wal/-shm next to the SOURCE is never copied and never
+# consulted; a hash-matching db was stamped journal-free, so sibling
+# journal files next to it can only be planted or stale and are
+# correctly ignored rather than refused).
+
+#: Scratch dir prefix for snapshot copies — registered in
+#: core.run.tmp_reaper._DIR_PREFIXES so crashed runs' copies are
+#: reaped (the census test there fails on unregistered prefixes).
+_SNAPSHOT_DIR_PREFIX = "raptor-graph-verify-"
+
+# Snapshot copy bound. Too low and legitimately large graph stores
+# (hundreds of thousands of nodes/edges for big binaries reach tens
+# of MB) silently lose edge enrichment; too high and a planted
+# oversize file makes the trusted process copy+hash attacker-sized
+# bytes before the MAC check can refuse them. Verified real-world
+# stores sit well under 1 GiB; raise only with evidence of a
+# legitimate store above the bound.
+_SNAPSHOT_MAX_DB_BYTES = 1 << 30
+
+_SNAPSHOT_COPY_CHUNK = 1 << 20
+
+
+def _snapshot_copy_db(path: Path, dest: Path) -> str | None:
+    """Copy the db file at *path* to *dest*, returning the sha256 of
+    the bytes ACTUALLY COPIED (the hash the caller must verify — never
+    re-hash the source). None on any refusal: symlink, non-regular
+    file, over-bound size, or I/O failure."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(str(path), flags)
+    except OSError:
+        return None
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            return None
+        if info.st_size > _SNAPSHOT_MAX_DB_BYTES:
+            return None
+        hasher = hashlib.sha256()
+        total = 0
+        with dest.open("wb") as out:
+            while True:
+                chunk = os.read(fd, _SNAPSHOT_COPY_CHUNK)
+                if not chunk:
+                    break
+                total += len(chunk)
+                # Re-enforced cumulatively: the file can grow after
+                # the fstat above while we read it.
+                if total > _SNAPSHOT_MAX_DB_BYTES:
+                    return None
+                hasher.update(chunk)
+                out.write(chunk)
+        return hasher.hexdigest()
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
+def _open_snapshot_connection(copy_path: Path) -> sqlite3.Connection | None:
+    """Immutable read connection over the verified private copy.
+    ``immutable=1`` disables locking and journal lookups entirely —
+    correct here because the copy lives in our own 0700 scratch dir
+    and nothing else may write it."""
+    try:
+        conn = sqlite3.connect(
+            f"file:{quote(str(copy_path))}?immutable=1", uri=True)
+    except sqlite3.Error:
+        return None
+    try:
+        conn.row_factory = sqlite3.Row
+        current = int(conn.execute("PRAGMA user_version").fetchone()[0])
+    except sqlite3.Error:
+        with contextlib.suppress(sqlite3.Error):
+            conn.close()
+        return None
+    if current > SCHEMA_VERSION:
+        # Newer-schema stores are skipped like unverified ones: the
+        # consumer degrades to fresh extraction, never errors.
+        with contextlib.suppress(sqlite3.Error):
+            conn.close()
+        return None
+    return conn
+
+
+class VerifiedGraphSnapshot:
+    """Query handle over a verified PRIVATE COPY of a graph store.
+
+    Only ever constructed by :func:`open_verified_graph_store`; every
+    query method reads the copy, so post-verification changes to the
+    original path cannot reach consumers."""
+
+    def __init__(self, source_path: Path, conn: sqlite3.Connection) -> None:
+        self.source_path = Path(source_path)
+        self._conn = conn
+
+    def summary(self) -> dict[str, Any]:
+        """:func:`graph_summary` over the verified copy."""
+        return _summary_from_connection(self._conn, self.source_path)
+
+    def edges(self, *, kind: str | None = None) -> list[dict[str, Any]]:
+        """:func:`query_edges` over the verified copy."""
+        return _edges_from_connection(self._conn, kind=kind)
+
+
+@contextmanager
+def open_verified_graph_store(
+    path: Path,
+) -> Iterator[VerifiedGraphSnapshot | None]:
+    """Verify and open the graph store at *path* with no verify/open
+    window: snapshot-copy, hash the copy, MAC-verify that hash, and
+    serve queries from the copy only.
+
+    Yields None when the store cannot be verified (unstamped, tampered,
+    oversize, unreadable, newer schema) — the caller's skip path, never
+    an error. The REQUIRED path for every consumer whose reads steer
+    verdicts; see the module comment above ``_SNAPSHOT_DIR_PREFIX``.
+    """
+    path = Path(path)
+    tmpdir: str | None = None
+    conn: sqlite3.Connection | None = None
+    try:
+        try:
+            loaded = _load_provenance_sidecar(path)
+            if loaded is not None:
+                recorded, token = loaded
+                tmpdir = tempfile.mkdtemp(prefix=_SNAPSHOT_DIR_PREFIX)
+                copy_path = Path(tmpdir) / GRAPH_FILENAME
+                digest = _snapshot_copy_db(path, copy_path)
+                if (
+                    digest is not None
+                    and digest == recorded
+                    and _provenance_verify(
+                        _provenance_fields(digest), token)
+                ):
+                    conn = _open_snapshot_connection(copy_path)
+        except OSError:
+            logger.debug(
+                "graph-store snapshot: open failed for %s",
+                path, exc_info=True)
+            conn = None
+        yield VerifiedGraphSnapshot(path, conn) if conn is not None else None
+    finally:
+        if conn is not None:
+            with contextlib.suppress(sqlite3.Error):
+                conn.close()
+        if tmpdir is not None:
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def _json(value: Any) -> str:
@@ -164,6 +569,11 @@ def graph_connection(path: Path) -> Iterator[sqlite3.Connection]:
         except BaseException:
             if not failed:
                 raise
+        else:
+            # Writer finalize seam: even a rolled-back cycle may have
+            # changed on-disk bytes (migration, WAL checkpoint), so
+            # re-stamp over whatever content the close left behind.
+            stamp_graph_store(Path(path))
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
@@ -392,6 +802,18 @@ class BinaryGraphStore:
         if self._conn is not None:
             self._conn.close()
             self._conn = None
+            # Writer finalize seam: every ingest producer routes
+            # through this close (context-managed), so the store's
+            # provenance stamp follows its final content. Guarded —
+            # __del__ may run this during interpreter teardown, where
+            # module globals are unreliable, and a stamp failure must
+            # never mask the close.
+            try:
+                stamp_graph_store(self.path)
+            except Exception:  # noqa: BLE001 — best-effort stamp; readers skip an unstamped store
+                logger.debug(
+                    "graph-store provenance: stamp failed for %s",
+                    self.path, exc_info=True)
 
     def __enter__(self) -> Self:
         return self
@@ -570,80 +992,92 @@ class BinaryGraphStore:
             )
 
 
+def _summary_from_connection(
+    conn: sqlite3.Connection, path: Path,
+) -> dict[str, Any]:
+    latest = conn.execute("SELECT * FROM snapshots ORDER BY created_at DESC LIMIT 1").fetchone()
+    if latest is None:
+        return {"exists": True, "path": str(path), "nodes": {}, "edges": {}, "evidence": {}}
+    snapshot_id = latest["id"]
+    nodes = {
+        row["kind"]: row["count"]
+        for row in conn.execute(
+            "SELECT kind, COUNT(*) AS count FROM nodes WHERE snapshot_id=? GROUP BY kind",
+            (snapshot_id,),
+        )
+    }
+    edges = {
+        row["kind"]: row["count"]
+        for row in conn.execute(
+            "SELECT kind, COUNT(*) AS count FROM edges WHERE snapshot_id=? GROUP BY kind",
+            (snapshot_id,),
+        )
+    }
+    evidence = {
+        row["tier"]: row["count"]
+        for row in conn.execute(
+            "SELECT tier, COUNT(*) AS count FROM evidence WHERE snapshot_id=? GROUP BY tier",
+            (snapshot_id,),
+        )
+    }
+    return {
+        "exists": True,
+        "path": str(path),
+        "latest_snapshot": dict(latest),
+        "nodes": nodes,
+        "edges": edges,
+        "evidence": evidence,
+    }
+
+
 def graph_summary(path: Path) -> dict[str, Any]:
     if not Path(path).exists():
         return {"exists": False, "path": str(path)}
     with graph_read_connection(path) as conn:
-        latest = conn.execute("SELECT * FROM snapshots ORDER BY created_at DESC LIMIT 1").fetchone()
-        if latest is None:
-            return {"exists": True, "path": str(path), "nodes": {}, "edges": {}, "evidence": {}}
-        snapshot_id = latest["id"]
-        nodes = {
-            row["kind"]: row["count"]
-            for row in conn.execute(
-                "SELECT kind, COUNT(*) AS count FROM nodes WHERE snapshot_id=? GROUP BY kind",
-                (snapshot_id,),
-            )
+        return _summary_from_connection(conn, Path(path))
+
+
+def _edges_from_connection(
+    conn: sqlite3.Connection, *, kind: str | None = None,
+) -> list[dict[str, Any]]:
+    latest = conn.execute("SELECT id FROM snapshots ORDER BY created_at DESC LIMIT 1").fetchone()
+    if latest is None:
+        return []
+    params: list[Any] = [latest["id"]]
+    where = "WHERE e.snapshot_id=?"
+    if kind:
+        where += " AND e.kind=?"
+        params.append(kind)
+    rows = conn.execute(
+        f"""
+        SELECT e.*, s.name AS src_name, s.kind AS src_kind,
+               d.name AS dst_name, d.kind AS dst_kind
+        FROM edges e
+        JOIN nodes s ON s.snapshot_id=e.snapshot_id AND s.id=e.src_id
+        JOIN nodes d ON d.snapshot_id=e.snapshot_id AND d.id=e.dst_id
+        {where}
+        ORDER BY e.kind, s.name, d.name
+        """,
+        tuple(params),
+    ).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "kind": row["kind"],
+            "source": {"id": row["src_id"], "kind": row["src_kind"], "name": row["src_name"]},
+            "target": {"id": row["dst_id"], "kind": row["dst_kind"], "name": row["dst_name"]},
+            "confidence": row["confidence"],
+            "props": json.loads(row["props_json"] or "{}"),
         }
-        edges = {
-            row["kind"]: row["count"]
-            for row in conn.execute(
-                "SELECT kind, COUNT(*) AS count FROM edges WHERE snapshot_id=? GROUP BY kind",
-                (snapshot_id,),
-            )
-        }
-        evidence = {
-            row["tier"]: row["count"]
-            for row in conn.execute(
-                "SELECT tier, COUNT(*) AS count FROM evidence WHERE snapshot_id=? GROUP BY tier",
-                (snapshot_id,),
-            )
-        }
-        return {
-            "exists": True,
-            "path": str(path),
-            "latest_snapshot": dict(latest),
-            "nodes": nodes,
-            "edges": edges,
-            "evidence": evidence,
-        }
+        for row in rows
+    ]
 
 
 def query_edges(path: Path, *, kind: str | None = None) -> list[dict[str, Any]]:
     if not Path(path).exists():
         return []
     with graph_read_connection(path) as conn:
-        latest = conn.execute("SELECT id FROM snapshots ORDER BY created_at DESC LIMIT 1").fetchone()
-        if latest is None:
-            return []
-        params: list[Any] = [latest["id"]]
-        where = "WHERE e.snapshot_id=?"
-        if kind:
-            where += " AND e.kind=?"
-            params.append(kind)
-        rows = conn.execute(
-            f"""
-            SELECT e.*, s.name AS src_name, s.kind AS src_kind,
-                   d.name AS dst_name, d.kind AS dst_kind
-            FROM edges e
-            JOIN nodes s ON s.snapshot_id=e.snapshot_id AND s.id=e.src_id
-            JOIN nodes d ON d.snapshot_id=e.snapshot_id AND d.id=e.dst_id
-            {where}
-            ORDER BY e.kind, s.name, d.name
-            """,
-            tuple(params),
-        ).fetchall()
-        return [
-            {
-                "id": row["id"],
-                "kind": row["kind"],
-                "source": {"id": row["src_id"], "kind": row["src_kind"], "name": row["src_name"]},
-                "target": {"id": row["dst_id"], "kind": row["dst_kind"], "name": row["dst_name"]},
-                "confidence": row["confidence"],
-                "props": json.loads(row["props_json"] or "{}"),
-            }
-            for row in rows
-        ]
+        return _edges_from_connection(conn, kind=kind)
 
 
 def query_evidence(path: Path, *, tier: str | None = None) -> list[dict[str, Any]]:
@@ -685,14 +1119,21 @@ def query_evidence(path: Path, *, tier: str | None = None) -> list[dict[str, Any
 
 __all__ = [
     "GRAPH_FILENAME",
+    "PROVENANCE_SUFFIX",
     "BinaryGraphStore",
+    "VerifiedGraphSnapshot",
     "graph_path_for_run",
     "graph_read_connection",
     "graph_summary",
     "open_graph",
     "open_graph_readonly",
+    "open_verified_graph_store",
+    "provenance_key_usable",
+    "provenance_path_for",
     "query_edges",
     "query_evidence",
     "stable_edge_id",
     "stable_node_id",
+    "stamp_graph_store",
+    "verify_graph_store",
 ]

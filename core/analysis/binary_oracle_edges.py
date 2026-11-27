@@ -305,8 +305,7 @@ def _try_graph_store(binary_path: Path) -> BinaryEdgeIndex | None:
     try:
         from packages.binary_analysis.graph_store import (
             graph_path_for_run,
-            graph_summary,
-            query_edges,
+            open_verified_graph_store,
         )
     except ImportError:
         return None
@@ -355,12 +354,37 @@ def _try_graph_store(binary_path: Path) -> BinaryEdgeIndex | None:
             gpath = graph_path_for_run(sub)
             if not gpath.is_file():
                 continue
+            # Verdict-steering consumer: edges read here suppress
+            # findings downstream, so only a provenance-stamped store
+            # (stamped at writer close over the db content hash —
+            # packages.binary_analysis.graph_store) is trusted.
+            # open_verified_graph_store closes the verify/open window:
+            # it copies the db to a private scratch dir, MAC-verifies
+            # the COPY, and serves these queries from it — a swap of
+            # the run-dir file after verification cannot reach us.
+            # Skipping is fail-safe: edge enrichment is an upgrade,
+            # not a right — fresh extraction still runs. Verified once
+            # per store open, not per query.
             try:
-                summary = graph_summary(gpath)
-                latest = summary.get("latest_snapshot") or {}
-                if latest.get("binary_sha256") != requested_sha256:
-                    continue
-                raw_edges = query_edges(gpath, kind=None)
+                with open_verified_graph_store(gpath) as snapshot:
+                    if snapshot is None:
+                        logger.warning(
+                            "binary_oracle_edges: skipping graph store %s "
+                            "— no valid provenance stamp over its current "
+                            "content (legacy store, foreign install, or a "
+                            "planted/tampered file). Edge reuse from it "
+                            "is disabled; re-run the mapping that "
+                            "produced it (e.g. /understand --map or "
+                            "/binary map on the binary) to regenerate "
+                            "and re-stamp it.",
+                            gpath,
+                        )
+                        continue
+                    summary = snapshot.summary()
+                    latest = summary.get("latest_snapshot") or {}
+                    if latest.get("binary_sha256") != requested_sha256:
+                        continue
+                    raw_edges = snapshot.edges(kind=None)
             except Exception as exc:  # noqa: BLE001 - best-effort cache reuse only
                 logger.debug(
                     "binary_oracle_edges: ignoring unreadable graph store %s: %s",

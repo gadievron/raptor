@@ -161,20 +161,119 @@ def find_binary_run_dirs(
     return candidates[:max_dirs]
 
 
-def _load_graph_sink_edges(run_dir: Path) -> list[BinarySinkEdge]:
-    """Extract CALLS_SURFACE edges from a binary graph store."""
+def _snapshot_identity_bound(
+    latest: dict,
+    graph_path: Path,
+    *,
+    allowed_binary_sha256s: frozenset[str] | None,
+    target_root: Path | None,
+) -> bool:
+    """Bind a verified store's latest snapshot to this run's binaries.
+
+    Strongest available bind wins: a non-empty sha allowlist demands a
+    content-hash match; otherwise *target_root* demands the recorded
+    binary path resolve under the audited target. Warnings log the
+    store path and the reason only — snapshot fields are
+    attacker-copyable strings and are never echoed.
+    """
+    if allowed_binary_sha256s is not None:
+        recorded_sha = latest.get("binary_sha256") or ""
+        if recorded_sha in allowed_binary_sha256s:
+            return True
+        logger.warning(
+            "binary_bridge: skipping graph store %s — its stamp is "
+            "valid but its latest snapshot is not about any binary in "
+            "this run's target set (sidecar replay of a store for a "
+            "different binary, or a stale store for an older build). "
+            "Re-run the mapping against the current binary to refresh "
+            "it.",
+            graph_path,
+        )
+        return False
+    if target_root is not None:
+        recorded_path = latest.get("binary_path") or ""
+        try:
+            resolved_root = target_root.resolve()
+            resolved_bin = Path(recorded_path).resolve()
+            if resolved_bin.is_relative_to(resolved_root):
+                return True
+        except (OSError, ValueError):
+            pass
+        logger.warning(
+            "binary_bridge: skipping graph store %s — its stamp is "
+            "valid but its latest snapshot records a binary outside "
+            "the audited target (sidecar replay from another target). "
+            "Re-run the mapping on a binary under the target to "
+            "refresh it.",
+            graph_path,
+        )
+        return False
+    return True
+
+
+def _load_graph_sink_edges(
+    run_dir: Path,
+    *,
+    allowed_binary_sha256s: frozenset[str] | None = None,
+    target_root: Path | None = None,
+) -> list[BinarySinkEdge]:
+    """Extract CALLS_SURFACE edges from a binary graph store.
+
+    The provenance stamp proves the store was finalized by this
+    install; it does NOT bind it to a binary or run — any legitimate
+    store+sidecar pair this install ever stamped verifies wherever it
+    is copied (sidecar replay). The consumer binds identity instead:
+    *allowed_binary_sha256s* (the content hashes of THIS run's target
+    binaries) requires the store's latest snapshot to be about one of
+    them; when the caller has no binary identities, *target_root*
+    falls back to requiring the stamped snapshot's recorded binary
+    path to live under the audited target (blocks cross-target
+    replays; a same-target replay of an OLDER store for the same
+    binary stays undetected on this weaker bind). Neither available →
+    unbound, the pre-existing behaviour.
+    """
     graph_path = run_dir / GRAPH_SUBDIR / GRAPH_FILENAME
     if not graph_path.exists():
         return []
 
     try:
-        from packages.binary_analysis.graph_store import query_edges
+        from packages.binary_analysis.graph_store import (
+            open_verified_graph_store,
+        )
     except ImportError:
         logger.debug("binary_analysis.graph_store not importable")
         return []
 
+    # Verdict-steering consumer: sink edges read here seed audit
+    # hypotheses, so only a provenance-stamped store (stamped at
+    # writer close over the db content hash) is trusted.
+    # open_verified_graph_store closes the verify/open window: it
+    # copies the db to a private scratch dir, MAC-verifies the COPY,
+    # and serves the query from it — a swap of the run-dir file after
+    # verification cannot reach us. Skipping is fail-safe — sink-edge
+    # enrichment is an upgrade, not a right.
     try:
-        raw_edges = query_edges(graph_path, kind=None)
+        with open_verified_graph_store(graph_path) as snapshot:
+            if snapshot is None:
+                logger.warning(
+                    "binary_bridge: skipping graph store %s — no valid "
+                    "provenance stamp over its current content (legacy "
+                    "store, foreign install, or a planted/tampered "
+                    "file). Sink-edge enrichment from it is disabled; "
+                    "re-run the mapping that produced it (e.g. "
+                    "/understand --map or /binary map on the binary) "
+                    "to regenerate and re-stamp it.",
+                    graph_path,
+                )
+                return []
+            latest = snapshot.summary().get("latest_snapshot") or {}
+            if not _snapshot_identity_bound(
+                latest, graph_path,
+                allowed_binary_sha256s=allowed_binary_sha256s,
+                target_root=target_root,
+            ):
+                return []
+            raw_edges = snapshot.edges(kind=None)
     except Exception:
         logger.debug("failed to query graph store %s", graph_path, exc_info=True)
         return []
@@ -336,9 +435,32 @@ def load_binary_bridge(
     Without that scoping every entry an external writer ever left in
     the shared cache merged into every audit as current-target sink
     evidence. No known build-ids → nothing merges (fail closed).
-    Returns None when no binary analysis output is found.
+    *current_build_ids* also feeds the sidecar-replay bind on sibling
+    graph stores (see :func:`_load_graph_sink_edges`): the hashes of
+    those binaries are the sha allowlist a store's latest snapshot must
+    match, with *target_path* as the weaker path bind when no binary
+    hashes. Returns None when no binary analysis output is found.
     """
     run_dirs = find_binary_run_dirs(out_dir, target_path=target_path)
+
+    # Snapshot-identity bind for sibling graph stores (the provenance
+    # stamp is install-bound, not binary-bound — sidecar replay): when
+    # this run knows its binaries (*current_build_ids*), their content
+    # hashes become the allowlist a store's latest snapshot must match.
+    # Binaries that no longer hash contribute nothing; if NONE hash the
+    # allowlist is unavailable (None) and the weaker target-path bind
+    # below applies rather than an empty allowlist wiping out stores
+    # over a transient hashing failure.
+    allowed_shas: frozenset[str] | None = None
+    if current_build_ids:
+        from .build_id_cache import _binary_sha256
+        hashed = {
+            sha
+            for p in current_build_ids.values()
+            if p and (sha := _binary_sha256(p)) is not None
+        }
+        if hashed:
+            allowed_shas = frozenset(hashed)
 
     result = BinaryBridgeResult()
 
@@ -356,7 +478,11 @@ def load_binary_bridge(
     result.source_dirs = [str(d) for d in run_dirs]
 
     for d in run_dirs:
-        result.sink_edges.extend(_load_graph_sink_edges(d))
+        result.sink_edges.extend(_load_graph_sink_edges(
+            d,
+            allowed_binary_sha256s=allowed_shas,
+            target_root=target_path,
+        ))
 
         surfaces, boundaries = _load_investigation(d)
         result.ranked_surfaces.extend(surfaces)

@@ -107,6 +107,16 @@ with (_path_patch.object(sys, "path", sys.path.copy())
             "TemporaryDirectory created in the enclosing with-block"
         ),
         (
+            "packages/binary_analysis/graph_store.py",
+            'with dest.open("wb") as out:',
+        ): (
+            "snapshot copy destination inside a fresh "
+            "process-private mkdtemp verify dir created two "
+            "lines above the call; the hazardous side (the "
+            "source db) is opened O_NOFOLLOW with an fstat "
+            "regular-file check"
+        ),
+        (
             "packages/fuzzing/afl_runner.py",
             "shutil.copy2(entry, staged / entry.name)",
         ): (

@@ -18,7 +18,7 @@ def test_graph_fixture_closes_connection(deny_schema, tmp_path):
     text = source.read_text()
     assert (
         hashlib.sha256(text.encode()).hexdigest()
-        == "8ea9b26dc4eb937796998e51c8d91f951aad3c8aae4d7c059254ea2589e79e73"
+        == "d9ce3aa7605490877a27427c25f83acc49c83e507cf94597027601dd19e1910b"
     )
     node = next(
         n
@@ -27,7 +27,7 @@ def test_graph_fixture_closes_connection(deny_schema, tmp_path):
     )
     assert (
         hashlib.sha256(ast.get_source_segment(text, node).encode()).hexdigest()
-        == "1a05b93a3ebd50868330efe593aab9ee9669151705bd20b3a9636b9929ac79bb"
+        == "abcdff19c2e10d1a7e18565f3db2637b2d7ae3f89a925b2a317665802ecb833f"
     )
     connections, denials = [], []
 
@@ -57,6 +57,9 @@ def test_graph_fixture_closes_connection(deny_schema, tmp_path):
     failed = False
     try:
         try:
+            # stamp=False: provenance stamping happens after the writer
+            # close and is owned by the graph-store provenance tests;
+            # this guard owns only the connection lifecycle.
             namespace["_create_graph_store"](
                 tmp_path,
                 [
@@ -66,6 +69,7 @@ def test_graph_fixture_closes_connection(deny_schema, tmp_path):
                         "kind": "CALLS_SURFACE",
                     }
                 ],
+                stamp=False,
             )
         except sqlite3.DatabaseError as exc:
             assert exc.sqlite_errorcode == sqlite3.SQLITE_AUTH

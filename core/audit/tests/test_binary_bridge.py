@@ -32,8 +32,13 @@ def _write_context_map(run_dir: Path, data: dict) -> None:
     (run_dir / "binary-context-map.json").write_text(json.dumps(data))
 
 
-def _create_graph_store(run_dir: Path, edges: list) -> None:
-    """Create a minimal graph store SQLite database with edges."""
+def _create_graph_store(run_dir: Path, edges: list,
+                        stamp: bool = True) -> None:
+    """Create a minimal graph store SQLite database with edges.
+
+    ``stamp=True`` (default) mints the writer-close provenance stamp
+    the consumer requires; ``stamp=False`` models a legacy or planted
+    store."""
     graph_dir = run_dir / "graph"
     graph_dir.mkdir(parents=True, exist_ok=True)
     db_path = graph_dir / "binary-graph.sqlite"
@@ -105,6 +110,31 @@ def _create_graph_store(run_dir: Path, edges: list) -> None:
         conn.commit()
     finally:
         conn.close()
+    if stamp:
+        from packages.binary_analysis.graph_store import stamp_graph_store
+        stamp_graph_store(db_path)
+
+
+def _set_snapshot_identity(run_dir: Path, *, sha: str | None = None,
+                           path: str | None = None) -> None:
+    """Rewrite the store's snapshot identity fields and re-stamp.
+
+    The provenance stamp covers db content, not binary identity, so a
+    re-stamped rewrite models a store this install LEGITIMATELY
+    produced for some binary — the exact artifact a sidecar replay
+    carries into another run dir."""
+    db_path = run_dir / "graph" / "binary-graph.sqlite"
+    conn = sqlite3.connect(db_path)
+    try:
+        if sha is not None:
+            conn.execute("UPDATE snapshots SET binary_sha256=?", (sha,))
+        if path is not None:
+            conn.execute("UPDATE snapshots SET binary_path=?", (path,))
+        conn.commit()
+    finally:
+        conn.close()
+    from packages.binary_analysis.graph_store import stamp_graph_store
+    stamp_graph_store(db_path)
 
 
 # ── find_binary_run_dirs ─────────────────────────────────────────────
@@ -193,6 +223,219 @@ class TestLoadGraphSinkEdges:
         ])
         edges = _load_graph_sink_edges(tmp_path)
         assert len(edges) == 0
+
+    def test_unstamped_store_is_skipped_loudly(self, tmp_path, caplog):
+        """A store without a valid provenance stamp (legacy run, or a
+        file planted into a sibling run dir) must not seed audit
+        hypotheses: skipped with a warning naming the regeneration
+        path, never parsed, never an error."""
+        import logging
+
+        _create_graph_store(tmp_path, [
+            {"caller": "process_input", "sink": "system",
+             "kind": "CALLS_SURFACE"},
+        ], stamp=False)
+        with caplog.at_level(logging.WARNING,
+                             logger="core.audit.binary_bridge"):
+            assert _load_graph_sink_edges(tmp_path) == []
+        assert any("provenance" in r.getMessage() and "re-run" in
+                   r.getMessage() for r in caplog.records)
+
+    def test_tampered_store_is_skipped(self, tmp_path, caplog):
+        """Stamped, then rewritten: the recorded content hash no
+        longer matches the db bytes — skipped, not parsed."""
+        import logging
+
+        _create_graph_store(tmp_path, [
+            {"caller": "process_input", "sink": "system",
+             "kind": "CALLS_SURFACE"},
+        ])
+        db_path = tmp_path / "graph" / "binary-graph.sqlite"
+        with db_path.open("r+b") as fh:
+            fh.seek(-1, 2)
+            last = fh.read(1)
+            fh.seek(-1, 2)
+            fh.write(bytes([last[0] ^ 0xFF]))
+        with caplog.at_level(logging.WARNING,
+                             logger="core.audit.binary_bridge"):
+            assert _load_graph_sink_edges(tmp_path) == []
+        assert any("provenance" in r.getMessage()
+                   for r in caplog.records)
+
+    def test_swapped_store_edges_are_never_served(self, tmp_path, caplog):
+        """Stamped, then the whole db swapped for a VALID sqlite store
+        carrying planted sink edges (the legitimate sidecar left in
+        place): the consumer queries only a verified private copy, so
+        the attacker edges are never served."""
+        import logging
+
+        _create_graph_store(tmp_path, [
+            {"caller": "process_input", "sink": "system",
+             "kind": "CALLS_SURFACE"},
+        ])
+        attacker = tmp_path / "attacker"
+        _create_graph_store(attacker, [
+            {"caller": "main", "sink": "ATTACKER_sink",
+             "kind": "CALLS_SURFACE"},
+        ], stamp=False)
+        db_path = tmp_path / "graph" / "binary-graph.sqlite"
+        db_path.write_bytes(
+            (attacker / "graph" / "binary-graph.sqlite").read_bytes())
+        with caplog.at_level(logging.WARNING,
+                             logger="core.audit.binary_bridge"):
+            assert _load_graph_sink_edges(tmp_path) == []
+        assert any("provenance" in r.getMessage()
+                   for r in caplog.records)
+
+    def test_planted_wal_does_not_block_or_poison(self, tmp_path):
+        """A -wal planted next to a hash-matching stamped db is foreign
+        by construction (stamping refuses pending journals). The
+        snapshot consumer ignores it: stamped edges served, planted
+        frames never folded in."""
+        _create_graph_store(tmp_path, [
+            {"caller": "process_input", "sink": "system",
+             "kind": "CALLS_SURFACE"},
+        ])
+        db_path = tmp_path / "graph" / "binary-graph.sqlite"
+        wal = db_path.with_name(db_path.name + "-wal")
+        wal.write_bytes(b"planted frames")
+        edges = _load_graph_sink_edges(tmp_path)
+        assert [(e.caller, e.sink) for e in edges] == [
+            ("process_input", "system")]
+        assert wal.read_bytes() == b"planted frames"
+
+    # The provenance stamp binds a store to this INSTALL, not to a
+    # binary — any stamped store+sidecar pair replays wherever copied.
+    # The consumer binds snapshot identity itself.
+
+    def test_replayed_store_for_foreign_binary_is_skipped(
+            self, tmp_path, caplog):
+        """Validly stamped store whose latest snapshot is about a
+        binary outside this run's target set (sidecar replay): skipped
+        with a warning, never served."""
+        import logging
+
+        _create_graph_store(tmp_path, [
+            {"caller": "process_input", "sink": "system",
+             "kind": "CALLS_SURFACE"},
+        ])
+        with caplog.at_level(logging.WARNING,
+                             logger="core.audit.binary_bridge"):
+            edges = _load_graph_sink_edges(
+                tmp_path,
+                allowed_binary_sha256s=frozenset({"ff" * 32}),
+            )
+        assert edges == []
+        assert any("replay" in r.getMessage() and "target set" in
+                   r.getMessage() for r in caplog.records)
+
+    def test_store_for_current_binary_is_served(self, tmp_path):
+        """A snapshot whose binary_sha256 is in the run's allowlist
+        passes the bind."""
+        _create_graph_store(tmp_path, [
+            {"caller": "process_input", "sink": "system",
+             "kind": "CALLS_SURFACE"},
+        ])
+        edges = _load_graph_sink_edges(
+            tmp_path, allowed_binary_sha256s=frozenset({"abc123"}))
+        assert [(e.caller, e.sink) for e in edges] == [
+            ("process_input", "system")]
+
+    def test_sha_allowlist_outranks_path_bind(self, tmp_path, caplog):
+        """When the run knows its binary hashes, a sha mismatch skips
+        the store even if the snapshot's recorded path sits under the
+        target (strongest available bind wins)."""
+        import logging
+
+        _create_graph_store(tmp_path, [
+            {"caller": "process_input", "sink": "system",
+             "kind": "CALLS_SURFACE"},
+        ])
+        _set_snapshot_identity(
+            tmp_path, path=str(tmp_path / "target" / "binary"))
+        with caplog.at_level(logging.WARNING,
+                             logger="core.audit.binary_bridge"):
+            edges = _load_graph_sink_edges(
+                tmp_path,
+                allowed_binary_sha256s=frozenset({"ff" * 32}),
+                target_root=tmp_path / "target",
+            )
+        assert edges == []
+        assert any("replay" in r.getMessage() for r in caplog.records)
+
+    def test_path_bind_blocks_cross_target_replay(self, tmp_path, caplog):
+        """No binary hashes known: the weaker bind still refuses a
+        snapshot recorded against a binary outside the audited
+        target."""
+        import logging
+
+        _create_graph_store(tmp_path, [
+            {"caller": "process_input", "sink": "system",
+             "kind": "CALLS_SURFACE"},
+        ])
+        with caplog.at_level(logging.WARNING,
+                             logger="core.audit.binary_bridge"):
+            edges = _load_graph_sink_edges(
+                tmp_path,
+                target_root=tmp_path / "some-target",
+            )
+        assert edges == []
+        assert any("outside" in r.getMessage() and "replay" in
+                   r.getMessage() for r in caplog.records)
+
+    def test_path_bind_accepts_in_target_snapshot(self, tmp_path):
+        """A snapshot recorded against a binary under the audited
+        target passes the path bind."""
+        target = tmp_path / "some-target"
+        target.mkdir()
+        _create_graph_store(tmp_path, [
+            {"caller": "process_input", "sink": "system",
+             "kind": "CALLS_SURFACE"},
+        ])
+        _set_snapshot_identity(tmp_path, path=str(target / "app"))
+        edges = _load_graph_sink_edges(tmp_path, target_root=target)
+        assert [(e.caller, e.sink) for e in edges] == [
+            ("process_input", "system")]
+
+    def test_unbound_call_preserves_behavior(self, tmp_path):
+        """Neither identity signal available (e.g. the engagement
+        router path): the pre-existing stamped-store behavior."""
+        _create_graph_store(tmp_path, [
+            {"caller": "process_input", "sink": "system",
+             "kind": "CALLS_SURFACE"},
+        ])
+        edges = _load_graph_sink_edges(tmp_path)
+        assert [(e.caller, e.sink) for e in edges] == [
+            ("process_input", "system")]
+
+    def test_bridge_wires_current_build_ids_into_bind(self, tmp_path):
+        """load_binary_bridge hashes current_build_ids binaries into
+        the allowlist: a sibling store about a different binary drops;
+        rewriting its snapshot to the current binary's hash serves."""
+        from core.audit.build_id_cache import _binary_sha256
+
+        run1 = tmp_path / "run1"
+        _create_graph_store(run1, [
+            {"caller": "process_input", "sink": "system",
+             "kind": "CALLS_SURFACE"},
+        ])
+        current = tmp_path / "current"
+        current.mkdir()
+        binary = tmp_path / "app"
+        binary.write_bytes(b"\x7fELFcurrent-binary")
+
+        result = load_binary_bridge(
+            current, current_build_ids={"bid1": str(binary)})
+        assert result is None or result.sink_edges == []
+
+        sha = _binary_sha256(str(binary))
+        assert sha is not None
+        _set_snapshot_identity(run1, sha=sha)
+        result = load_binary_bridge(
+            current, current_build_ids={"bid1": str(binary)})
+        assert result is not None
+        assert [(e.caller, e.sink) for e in result.sink_edges] == [
+            ("process_input", "system")]
 
 
 # ── _load_investigation ──────────────────────────────────────────────
