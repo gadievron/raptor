@@ -835,7 +835,17 @@ def _start_orphan_watchdog(
                     b"group kill and reaping only the tracked child\n",
                 )
             if child is not None:
-                _signal_owned_child(child, signal.SIGKILL)
+                # Terminal signal before os._exit: the SIGTERM leg above
+                # retries for the whole grace window, but a single
+                # non-blocking acquire here can lose the race against
+                # main()'s wait(timeout=0.2) holding _waitpid_lock — the
+                # child would leak alive while we exit. The wait() hold
+                # is released every poll cycle, so a short bounded retry
+                # is enough.
+                for _ in range(3):
+                    if _signal_owned_child(child, signal.SIGKILL):
+                        break
+                    time.sleep(0.05)
         os._exit(1)  # unreachable when the killpg landed
 
     t = threading.Thread(
