@@ -893,6 +893,99 @@ class TestEnableForModel:
         assert TestBringupFailurePolicy.NOTICE in capsys.readouterr().err
 
 
+class TestExtraHostRegistrationFailure:
+    """A failure AFTER successful bring-up is not a bring-up downgrade:
+    the chokepoint is live and keeps enforcing the allowlist, and the
+    caller's extra fetch lanes fail closed at it. Pre-fix the handler
+    reported "falling back to direct outbound. Allowlist enforcement
+    disabled" — the opposite of the truth on this leg."""
+
+    @pytest.fixture
+    def failing_registration(self, monkeypatch):
+        """Bring-up (model-allowlist get_proxy calls) succeeds; the
+        extra-host registration (the call carrying the caller's fetch
+        host) fails."""
+        import core.sandbox.proxy as proxy_mod
+
+        class _StubProxy:
+            port = 51234
+
+        calls: list[list[str]] = []
+
+        def stub(allowed_hosts, **kwargs):
+            hosts = list(allowed_hosts)
+            calls.append(hosts)
+            if "api.osv.dev" in hosts:
+                raise OSError("simulated registration failure")
+            return _StubProxy()
+
+        monkeypatch.setattr(proxy_mod, "get_proxy", stub)
+        monkeypatch.delenv("RAPTOR_LLM_EGRESS_STRICT", raising=False)
+        return calls
+
+    def test_message_states_chokepoint_live(
+            self, failing_registration, capsys):
+        egress.enable_llm_egress_for_model(  # must not raise
+            _model(provider="anthropic"), extra_hosts=("api.osv.dev",))
+        err = capsys.readouterr().err
+        assert "chokepoint is active" in err
+        assert "allowlist enforcement remains enabled" in err
+        assert "fail closed" in err
+        assert "api.osv.dev" in err
+        # The pre-fix lie must be gone in both spellings.
+        assert "falling back to direct outbound" not in err
+        assert "enforcement disabled" not in err
+        # And the chokepoint really is live on this leg: the env
+        # capture from the successful bring-up stands.
+        assert os.environ["HTTPS_PROXY"] == "http://127.0.0.1:51234"
+
+    def test_strict_aborts_with_accurate_message(
+            self, failing_registration, monkeypatch):
+        monkeypatch.setenv("RAPTOR_LLM_EGRESS_STRICT", "1")
+        with pytest.raises(egress.LLMEgressBringupError) as exc_info:
+            egress.enable_llm_egress_for_model(
+                _model(provider="anthropic"), extra_hosts=("api.osv.dev",))
+        text = str(exc_info.value)
+        assert "chokepoint is active" in text
+        assert "api.osv.dev" in text
+        assert "falling back" not in text
+
+    def test_telemetry_event_is_truthful(self, failing_registration):
+        from core.llm import telemetry
+
+        records: list[dict] = []
+
+        class _Sink:
+            def record(self, rec: dict) -> None:
+                records.append(rec)
+
+        telemetry.set_sink(_Sink())
+        try:
+            egress.enable_llm_egress_for_model(
+                _model(provider="anthropic"), extra_hosts=("api.osv.dev",))
+        finally:
+            telemetry.set_sink(None)
+        events = [r for r in records
+                  if r.get("event") == "egress_extra_hosts_failed"]
+        assert len(events) == 1
+        assert events[0]["hosts"] == "api.osv.dev"
+        assert "simulated registration failure" in events[0]["error"]
+        # No false "egress degraded" record lands on this leg.
+        assert not [r for r in records if r.get("event") == "egress_degraded"]
+
+    def test_stderr_notice_once_per_process(
+            self, failing_registration, capsys):
+        egress.enable_llm_egress_for_model(
+            _model(provider="anthropic"), extra_hosts=("api.osv.dev",))
+        # A second consumer re-registering: already-enabled chokepoint,
+        # registration fails again — the log repeats, the operator
+        # notice does not.
+        egress.enable_llm_egress_for_model(
+            _model(provider="anthropic"), extra_hosts=("api.osv.dev",))
+        err = capsys.readouterr().err
+        assert err.count("chokepoint is active") == 1
+
+
 class TestEnableIsThreadSafe:
 
     def test_racing_first_callers_snapshot_operator_env_once(

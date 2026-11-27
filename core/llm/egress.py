@@ -187,6 +187,12 @@ EGRESS_STRICT_ENV = "RAPTOR_LLM_EGRESS_STRICT"
 # single line suffices. Guarded by _STATE_LOCK.
 _degraded_notice_printed = False
 
+# Same once-per-process rule for the post-bring-up extra-host
+# registration failure (a distinct fact: the chokepoint stays live and
+# only the caller's extra fetch hosts fail closed). Guarded by
+# _STATE_LOCK.
+_extra_host_notice_printed = False
+
 
 class LLMEgressBringupError(RuntimeError):
     """Egress chokepoint bring-up failed while ``RAPTOR_LLM_EGRESS_STRICT``
@@ -653,6 +659,52 @@ def _handle_bringup_failure(exc: Exception) -> None:
     )
 
 
+def _handle_extra_host_registration_failure(
+    exc: Exception, hosts: Iterable[str],
+) -> None:
+    """Strict-abort / loud policy for a failure AFTER successful
+    bring-up: the chokepoint is live and allowlist enforcement remains
+    active — only *hosts* failed to join the proxy allowlist, so the
+    caller's own lanes to them fail closed at the chokepoint. Never
+    claims an egress downgrade: outbound stays captured."""
+    global _extra_host_notice_printed
+    from core.config import env_flag
+    from core.security.log_sanitisation import escape_nonprintable
+
+    # Failure text and host names are env/config-derived — render
+    # inert and bound before any surface.
+    detail = escape_nonprintable(str(exc))[:200]
+    affected = escape_nonprintable(
+        ", ".join(sorted({h for h in hosts if h})))[:200] or "<none>"
+    if env_flag(EGRESS_STRICT_ENV, False):
+        raise LLMEgressBringupError(
+            f"LLM egress chokepoint is active, but extra-host "
+            f"registration failed ({detail}); affected hosts: "
+            f"{affected}. {EGRESS_STRICT_ENV} is set — aborting"
+        ) from exc
+    message = (
+        f"LLM egress chokepoint is active; allowlist enforcement "
+        f"remains enabled. Extra-host registration failed ({detail}), "
+        f"so caller lanes to these hosts fail closed at the "
+        f"chokepoint: {affected}. Set {EGRESS_STRICT_ENV}=1 to abort "
+        "instead."
+    )
+    logger.warning("%s", message)
+    with _STATE_LOCK:
+        first_notice = not _extra_host_notice_printed
+        _extra_host_notice_printed = True
+    if first_notice:
+        # Operator surface, independent of logging configuration.
+        print(f"WARNING: {message}", file=sys.stderr)
+    from . import telemetry
+    telemetry.emit(
+        event="egress_extra_hosts_failed",
+        call_class="egress",
+        error=detail,
+        hosts=affected,
+    )
+
+
 class _SingleModelView:
     """Duck-typed single-model stand-in for ``LLMConfig`` — exactly the
     three attributes :func:`derive_allowlist` and
@@ -686,13 +738,30 @@ def enable_llm_egress_for_model(
     actually captured the proxy env (empty / loopback-only model
     configs stay mutation-free and need no allowlist widening);
     loopback entries are dropped, same as the model allowlist.
+
+    A failure AFTER successful bring-up (extra-host registration) is
+    handled separately: the chokepoint stays live with allowlist
+    enforcement active, and the strict/loud policy reports exactly
+    that — the caller's lanes to the affected hosts fail closed at
+    the chokepoint; nothing falls back to direct outbound.
     """
     view = cast("LLMConfig", _SingleModelView(model))
     try:
         enable_llm_egress(view)
-        _register_extra_hosts(extra_hosts)
     except Exception as exc:  # noqa: BLE001 — single policy boundary for any bring-up fault
         _handle_bringup_failure(exc)
+        return
+    try:
+        _register_extra_hosts(extra_hosts)
+    except Exception as exc:  # noqa: BLE001 — same policy boundary, post-bring-up leg
+        # Bring-up SUCCEEDED: the chokepoint is live and keeps
+        # enforcing the model allowlist — nothing falls back to direct
+        # outbound on this leg. Only the caller's extra fetch hosts
+        # failed to join the allowlist, so those lanes fail closed at
+        # the chokepoint. The degraded-bring-up handler's "falling
+        # back to direct outbound" message would be the opposite of
+        # the truth here.
+        _handle_extra_host_registration_failure(exc, extra_hosts)
 
 
 def _register_extra_hosts(hosts: Iterable[str]) -> None:
@@ -714,11 +783,13 @@ def _reset_for_tests() -> None:
     """Test-only helper: reset the module-level idempotency flag.
     Does NOT clear env vars or the singleton proxy — those are
     process-wide concerns the test fixture handles separately."""
-    global _enabled, _original_proxy_env, _degraded_notice_printed
+    global _enabled, _original_proxy_env, _degraded_notice_printed, \
+        _extra_host_notice_printed
     with _STATE_LOCK:
         _enabled = False
         _original_proxy_env = None
         _degraded_notice_printed = False
+        _extra_host_notice_printed = False
 
 
 
