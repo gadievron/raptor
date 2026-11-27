@@ -495,6 +495,7 @@
     "core/sage/tests/test_sage_setup_reexec_quoting.py": "75f561f95ef122e068b344849d99e531ba72845e30dd4918b86f72504869006f",
     "core/sage/tests/test_sage_setup_teardown_resilience.py": "8d86d8e8ba97f5ed96caf8143db7be83d2fec1a7252b692519a7a31d81b4d73e",
     "core/sage/tests/test_seed_sage_knowledge.py": "646c18625c81a59d729362d6d81cc4d12deb28d1b15c70188acc7679ca7cb11d",
+    "core/sandbox/_attestation.py": "d3fb1e872d038b8a2af7d2655c9abfdbed7f30ed4b33b93c0fff60307b779fd6",
     "core/sandbox/tests/capability.py": "a20783ba8e89568528e97de4a4510d435eed0d9ce5d01260e048096d80a2eff9",
     "core/sandbox/tests/conftest.py": "3bf5a618220f3b4971998b51e5a78f111966c42089a5cf696a28bf56c1f43783",
     "core/sandbox/tests/pipe_host.py": "b11e01696e4167a02dfe78f1b036da61af62f9614f3e71f8d3f07c2c5aff74fe",
@@ -1097,8 +1098,8 @@
     "packages/exploit_feasibility/tests/test_integration.py": "f7c88accfa8eb5806a521bb6a6414501b89cb55a9383f4d60f75b89059bd3bb1",
     "packages/exploit_feasibility/tests/test_loader_execution_native.py": "d5298776f5d5d386c8de81fa8526925c3a5a85bf18539d24ac256eb7d3d9f993",
     "packages/exploit_feasibility/tests/test_operand_call_model.py": "39aa87a48a621a7948c2b15116f8cbd897d3b9f109b83423bf6ef3e2a780dc06",
-    "packages/exploit_feasibility/tests/test_runtime_probe_native.py": "044673a0477cc426f927efd2da1142ebbf9075ae3e08093bac930da49d6e4271",
-    "packages/exploit_feasibility/tests/test_sandboxed_probes.py": "75b6471b614e67ed66a181af232b7980ec5cced5313fb6750604a7cce6deaeaf",
+    "packages/exploit_feasibility/tests/test_runtime_probe_native.py": "4df281920e46cbe2228720e23d752b313754b9841265f64b4e62af28df025890",
+    "packages/exploit_feasibility/tests/test_sandboxed_probes.py": "84534ebda221fa8d7c5f8960ff7867b0f0c126fed9afb8822f8ebea746af02cc",
     "packages/exploit_feasibility/tests/test_smt_path.py": "7603fe78b99dd079d776af1cc88429064fc84e3b1e9694abb46ad6357b571bca",
     "packages/exploit_feasibility/tests/test_smt_verbs.py": "5b5e8e0fe89fbbc21be0ba2387d02ddb8ec8344f103c7a6361a36927d0086a20",
     "packages/exploit_feasibility/tests/test_under_mitigations.py": "b7db928c075e2d62a65617df59ee5fe3ac0e4aa6d2359790fe4bd4f7d05520cd",
@@ -38962,6 +38963,14 @@
       "count": 1,
       "contract": "non-cli-probe",
       "purpose": "packages/exploit_feasibility/tests/test_sandboxed_probes.py:TestFidelityControl.test_entropy_classification_matches_bare_control: external tool or library/OS probe; exact command/environment source is pinned, and this category is not a claim of standalone launch isolation."
+    },
+    {
+      "path": "packages/exploit_feasibility/tests/test_sandboxed_probes.py",
+      "scope": "TestUntracedSurvivorEndToEnd.test_clone_untraced_survivor_is_refused",
+      "signature": "4afa997bc0596df18046c65166ee39575c3d120b698d6541c6e033e3a39721a0",
+      "count": 1,
+      "contract": "non-cli-probe",
+      "purpose": "packages/exploit_feasibility/tests/test_sandboxed_probes.py:TestUntracedSurvivorEndToEnd.test_clone_untraced_survivor_is_refused: external tool or library/OS probe; exact command/environment source is pinned, and this category is not a claim of standalone launch isolation."
     },
     {
       "path": "packages/exploit_feasibility/tests/test_smt_path.py",

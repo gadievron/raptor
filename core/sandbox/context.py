@@ -4326,6 +4326,12 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         env_caller_filtered = kwargs.pop("env_caller_filtered", False)
         _skip_pid_ns = kwargs.pop("skip_pid_ns", False)
         _skip_mount_ns = kwargs.pop("skip_mount_ns", False)
+        # Pid-ns quiescence attestation (see core.sandbox._attestation):
+        # forwarded only to the native pid-ns spawn lane. Every other
+        # lane (fallback subprocess, audit, macOS, skip_pid_ns) leaves
+        # the result attribute off, which reads as unattested —
+        # consumers requiring attestation refuse those lanes by design.
+        _pidns_attest = bool(kwargs.pop("pidns_attest", False))
         # Kept separate from require_fresh_procfs: the operator's degraded
         # untrusted opt-in relaxes the fresh-procfs requirement, but it must
         # not erase the fact that the workload is untrusted. The waived
@@ -6670,6 +6676,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                 restore_signals=kwargs.get("restore_signals", True),
                                 inherit_netns=_inherit_netns,
                                 skip_pid_ns=_skip_pid_ns,
+                                pidns_attest=_pidns_attest,
                                 skip_mount_ns=skip_mount,
                                 # The ported ns-only mode hard-requires
                                 # the fresh procfs mount ('F' fail-

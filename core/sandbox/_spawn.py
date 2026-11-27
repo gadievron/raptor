@@ -81,6 +81,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
 
 from . import _pathpin, state
+from ._attestation import decode_attestation_bytes as _decode_attestation
+from ._attestation import record_pidns_attestation as _record_pidns_attestation
 from ._capture import record_truncation as _record_truncation
 from ._exec_signals import restore_exec_signals
 from ._stdio import preserve_output_sources as _preserve_output_sources
@@ -1577,7 +1579,75 @@ def _anchor_grants_to_bind_view(
     return anchored, carry_rw
 
 
-def _pid1_split_for_waiter(wstat_w: int | None = None) -> None:
+def _pidns_sweep_found_processes() -> bool:
+    """Probe whether anything beyond the reaped target remains in the
+    pid namespace, without signals or /proc.
+
+    Runs in the pid-ns init AFTER the supervised target was reaped, so
+    any remaining process is foreign by definition (e.g. a
+    ``clone(CLONE_UNTRACED)`` child that escaped a tracer's follow-fork
+    kill sweep).  The probe must work under the TARGET's own seccomp +
+    Landlock posture — both were installed before the pid-1 split, so
+    this init shares them: broadcast ``kill(-1)`` is EPERM-denied by
+    the sandbox's own filter (seccomp.py broadcast-signal deny) and
+    /proc may be read-denied.  ``wait(2)`` needs neither: every process
+    left in the namespace sits in a tree rooted — live or zombie — at a
+    child of this init (its original parent chain ends at the dead
+    target, so the root reparented here), which makes one
+    ``waitpid(-1, WNOHANG)`` a complete census.  ECHILD proves the
+    namespace empty, and nothing can fork afterwards (no process exists
+    to fork); any other outcome — a reaped zombie orphan or a live
+    child (pid 0) — is a foreign process.
+
+    No kill is needed for cleanup: this init exits right after the
+    verdict, and the kernel SIGKILLs every remaining namespace process
+    when its init dies.
+
+    Returns True when any foreign process existed (or the probe could
+    not prove emptiness) — callers must treat True as untrusted.
+    """
+    while True:
+        try:
+            pid_, _status = os.waitpid(-1, os.WNOHANG)
+        except InterruptedError:
+            continue
+        except ChildProcessError:
+            return False  # no children at all: namespace empty
+        except OSError:
+            return True  # cannot prove quiescence — never attest clean
+        del pid_  # >0 reaped a zombie orphan; ==0 a live child remains
+        return True
+
+
+def _conclude_attestation(attest_w: int, foreign: bool) -> None:
+    """Sweep the namespace, then write the single verdict byte.
+
+    Ordering is the integrity argument: the CLEAN byte is written only
+    after ``_pidns_sweep_found_processes`` proved the namespace empty,
+    so no target process can still be alive to drain it (a same-uid
+    target CAN reopen this fd — even a read side of the write end — via
+    ``/proc/1/fd/N``; Yama ptrace_scope ≥ 1 blocks a descendant from
+    ptrace-attaching to this ancestor init, and Landlock does not apply
+    here since the init shares the target's post-setup domain).  Bytes
+    injected EARLIER make the stream != one clean byte, which the
+    reader refuses.  A FOREIGN byte may still race live survivors, but
+    draining or garbling it only shifts the verdict to unattested —
+    both refuse.  The write is non-blocking: a target that pre-filled
+    the pipe buffer merely turns the verdict into garbage (refusal), it
+    cannot block this init.
+    """
+    foreign = _pidns_sweep_found_processes() or foreign
+    with contextlib.suppress(OSError):
+        os.set_blocking(attest_w, False)
+    with contextlib.suppress(OSError):
+        os.write(attest_w, b"F" if foreign else b"A")
+    with contextlib.suppress(OSError):
+        os.close(attest_w)
+
+
+def _pid1_split_for_waiter(
+    wstat_w: int | None = None, attest_w: int | None = None
+) -> None:
     """Fork so the exec target becomes PID 2 of the pid-ns; PID 1 (this
     process) stays as a minimal in-process init that reaps children and
     mirrors the target's exit.
@@ -1604,6 +1674,16 @@ def _pid1_split_for_waiter(wstat_w: int | None = None) -> None:
     The write end exists ONLY here and (briefly, CLOEXEC + swept)
     in the exec path — the target can never reach it.
 
+    ``attest_w``: write end of the pid-ns quiescence attestation pipe
+    (see ``core.sandbox._attestation``). When set, this init tracks
+    whether any process beyond the directly-supervised target ever
+    surfaced — an orphan reap here, or a live pid found by the
+    post-exit kill sweep — and writes exactly one verdict byte before
+    reporting the wait status. Unlike the wstat pipe, this fd IS
+    reachable by the same-uid target via ``/proc/1/fd/N``, so the
+    channel is designed to survive injection: forgery can only turn
+    the verdict into a refusal, never into trust.
+
     Returns in the CHILD (the exec path). The PID 1 side never returns
     (``os._exit``).
     """
@@ -1618,19 +1698,24 @@ def _pid1_split_for_waiter(wstat_w: int | None = None) -> None:
         os.close(forward_r)
         if ready != b"R":
             os._exit(126)
-        # Exec path: drop the side-channel write end immediately so
+        # Exec path: drop the side-channel write ends immediately so
         # EOF semantics never depend on the pre-exec fd sweep.
         if wstat_w is not None:
             with contextlib.suppress(OSError):
                 os.close(wstat_w)
+        if attest_w is not None:
+            with contextlib.suppress(OSError):
+                os.close(attest_w)
         return  # exec path continues as PID 2
 
     # Only the target owns caller capabilities. Retaining either end of an
     # RPC pipe here can prevent the target from seeing EOF or keep its reply
-    # pipe open after it dies. Retain only the wait-status channel and
+    # pipe open after it dies. Retain only the side channels and
     # the startup gate, which is closed as soon as the forwarders are armed.
     os.close(forward_r)
-    _close_fds_except((forward_w,) if wstat_w is None else (wstat_w, forward_w))
+    _close_fds_except(
+        fd for fd in (wstat_w, attest_w, forward_w) if fd is not None
+    )
 
     def _forward(signum, _frame, _child=child) -> None:
         with contextlib.suppress(OSError):
@@ -1642,7 +1727,14 @@ def _pid1_split_for_waiter(wstat_w: int | None = None) -> None:
     os.write(forward_w, b"R")
     os.close(forward_w)
 
+    foreign_seen = False
+
     def _report_and_exit(status: int, code: int) -> None:
+        # Attest BEFORE the wstat write: the setup child unblocks on the
+        # wstat bytes, so the verdict byte must already be buffered (and
+        # the namespace already swept empty) by then.
+        if attest_w is not None:
+            _conclude_attestation(attest_w, foreign_seen)
         if wstat_w is not None:
             with contextlib.suppress(OSError):
                 os.write(wstat_w, f"{status}".encode("ascii"))
@@ -1656,9 +1748,20 @@ def _pid1_split_for_waiter(wstat_w: int | None = None) -> None:
         except InterruptedError:
             continue
         except ChildProcessError:
+            # No children left and the target's status never surfaced —
+            # anomalous; exit without an attestation byte (reads as
+            # unattested, which consumers must refuse).
             os._exit(0)
         if pid_ != child:
-            continue  # reap orphans; only the target's status mirrors
+            # Reap orphans; only the target's status mirrors. For
+            # attestation the reap itself is the finding: an orphan
+            # reparented here means a process OUTSIDE the supervised
+            # tree existed. Conservative by design — a legitimately
+            # multi-process target that orphans a child reads as
+            # foreign too, and its artifact-derived evidence degrades
+            # to posture-unknown rather than being trusted.
+            foreign_seen = True
+            continue
         if os.WIFEXITED(status):
             _report_and_exit(status, os.WEXITSTATUS(status))
         if os.WIFSIGNALED(status):
@@ -1784,6 +1887,7 @@ def run_sandboxed(
     skip_pid_ns: bool = False,
     skip_mount_ns: bool = False,
     require_fresh_procfs: bool = False,
+    pidns_attest: bool = False,
     landlock_required: bool = True,
     proxy_unix_socket: str | None = None,
     proxy_forwarder_port: int | None = None,
@@ -1806,6 +1910,14 @@ def run_sandboxed(
     the child's mountinfo). Mount-ns lane only; the mountless and
     skip_mount_ns lanes have no private root to stage into and ignore
     both.
+
+    pidns_attest: opt-in pid-ns quiescence attestation. The in-ns init
+    reports over a private pipe whether any process beyond the
+    directly-supervised target ever existed in the namespace; the
+    verdict lands out-of-band on the result (read it with
+    ``core.sandbox.pidns_attestation``). Requires the pid-ns lane —
+    with ``skip_pid_ns`` (or any non-pid-ns serving lane) the result
+    reads as unattested, which consumers must refuse to trust.
 
     landlock_required: containment-floor plumbing, set ONLY by
     ``context.run()`` from the call's resolved floor (never a caller
@@ -2396,6 +2508,16 @@ def run_sandboxed(
         if exec_pid_callback is not None:
             pid_r, pid_w = os.pipe()
             _parent_fds.update({pid_r, pid_w})
+
+        # Pid-ns attestation pipe (optional): the in-ns init writes
+        # exactly one quiescence-verdict byte (see _attestation.py).
+        # The parent drains it non-blocking at collection — correctness
+        # never depends on EOF, because sibling forks or a target's
+        # /proc/1/fd re-open could pin the write side open.
+        att_r = att_w = None
+        if pidns_attest and not skip_pid_ns:
+            att_r, att_w = os.pipe()
+            _parent_fds.update({att_r, att_w})
 
         # Precompute Landlock / seccomp preexec callables in parent so
         # import errors surface before fork. Each returns a callable we
@@ -2993,6 +3115,10 @@ def run_sandboxed(
         # intermediate after the grandchild fork); close the read end.
         if pid_r is not None:
             os.close(pid_r)
+        # Attestation pipe: only the in-ns init WRITES (att_w); close
+        # the read end so the parent alone can drain the verdict.
+        if att_r is not None:
+            os.close(att_r)
         # Unix-scope socketpair: the child only SENDS on the child end
         # (inside the seccomp preexec); close the parent end so the
         # parent's recvmsg sees EOF if the child dies before the
@@ -3745,7 +3871,8 @@ def run_sandboxed(
                         with contextlib.suppress(OSError):
                             os.close(_tgt_wstat_r)
                     _pid1_split_for_waiter(
-                        _tgt_wstat_w if _tgt_wstat_w >= 0 else None)
+                        _tgt_wstat_w if _tgt_wstat_w >= 0 else None,
+                        attest_w=att_w)
                 if _exec_payload is not None:
                     exec_env = _exec_payload[1]
                 elif env is not None:
@@ -3834,6 +3961,13 @@ def run_sandboxed(
                 if _tgt_wstat_w >= 0:
                     with contextlib.suppress(OSError):
                         os.close(_tgt_wstat_w)
+                # Attestation write end belongs to the in-ns init
+                # alone; a copy held here would be one more process
+                # the parent's non-blocking drain doesn't wait on
+                # anyway, but drop it for least privilege.
+                if att_w is not None:
+                    with contextlib.suppress(OSError):
+                        os.close(att_w)
                 # Report the exec'ing grandchild's pid to the parent.
                 # One short ASCII write is atomic (well under PIPE_BUF);
                 # best-effort — if the parent went away the observation
@@ -4158,6 +4292,11 @@ def run_sandboxed(
         # and EOF reaches the parent when they exit pre-fork.
         if pid_w is not None:
             _close_parent_fd(pid_w)
+        # Attestation pipe: the parent only READS (att_r); close the
+        # write end now (BEFORE the tracer fork) so only the in-ns init
+        # holds a writable copy.
+        if att_w is not None:
+            _close_parent_fd(att_w)
         if _capture_any:
             _close_parent_fd(out_w)  # type: ignore[arg-type]
             _close_parent_fd(err_w)  # type: ignore[arg-type]
@@ -4687,6 +4826,9 @@ def run_sandboxed(
     # status_r reclaimed on EVERY exit path (success, timeout, exception).
     setup_status = None
     status_observation = None
+    # Attestation channel bytes, drained in the finally alongside the
+    # status pipe (att_r is reclaimed on every exit path).
+    _attest_data = b""
     collection_error: BaseException | None = None
     try:
         if _capture_any:
@@ -4875,7 +5017,42 @@ def run_sandboxed(
             )
             status_observation = observations[0] if observations else None
 
-        callbacks = [retire_status, lambda: _close_parent_fd(death_w),
+        def retire_attestation():
+            nonlocal _attest_data
+            if att_r is None:
+                return
+            # Non-blocking bounded drain, never an EOF wait: a sibling
+            # fork's inherited copy of att_w (or a target's /proc/1/fd
+            # re-open) could pin the write side open indefinitely. By
+            # this point the setup child has been reaped — the in-ns
+            # init exited before it — so the verdict byte, if any, is
+            # already buffered. The 64KiB+slack cap exceeds the pipe's
+            # default capacity: everything buffered is collected, so a
+            # flood-then-verdict stream can't be clipped back down to a
+            # lone clean byte.
+            chunks: list[bytes] = []
+            total = 0
+            try:
+                os.set_blocking(att_r, False)
+                while total <= 65536 + 4096:
+                    try:
+                        chunk = os.read(att_r, 65536)
+                    except BlockingIOError:
+                        break
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    total += len(chunk)
+            except OSError:
+                # Unreadable channel — leave whatever was collected;
+                # anything but exactly b"A" decodes fail-closed.
+                pass
+            finally:
+                _close_parent_fd(att_r)
+            _attest_data = b"".join(chunks)
+
+        callbacks = [retire_status, retire_attestation,
+                     lambda: _close_parent_fd(death_w),
                      retire_scope_endpoints]
         if tracer_pid is not None:
             callbacks.append(lambda: _reap_tracer(tracer_pid))
@@ -4966,4 +5143,9 @@ def run_sandboxed(
         # final-line shape (e.g. an ELF symbol name echoed by nm), so no
         # decision may be parsed from the data stream.
         _record_truncation(cp, stdout=_truncated[1], stderr=_truncated[2])
+    if pidns_attest:
+        # Recorded even when the pipe never existed (skip_pid_ns lane):
+        # the empty stream decodes to unattested, so consumers refuse
+        # rather than mistake lane selection for a clean namespace.
+        _record_pidns_attestation(cp, _decode_attestation(_attest_data))
     return cp

@@ -698,6 +698,12 @@ Related shared helpers (core.security):
 # Keeping them at the package level preserves backward compatibility while
 # the real definitions live in focused submodules.
 from . import state as _state
+from ._attestation import (
+    PIDNS_ATTEST_CLEAN,
+    PIDNS_ATTEST_FOREIGN,
+    PIDNS_ATTEST_UNATTESTED,
+    pidns_attestation,
+)
 from ._capture import capture_truncated
 from .cli import (
     add_cli_args,
@@ -816,6 +822,10 @@ __all__ = [
     # Out-of-band capture-truncation facts (the in-band marker is
     # display-only; trusted decisions read this flag)
     "capture_truncated",
+    "PIDNS_ATTEST_CLEAN",
+    "PIDNS_ATTEST_FOREIGN",
+    "PIDNS_ATTEST_UNATTESTED",
+    "pidns_attestation",
     "check_child_unix_sockets_available",
     "check_landlock_available",
     "check_mount_available",

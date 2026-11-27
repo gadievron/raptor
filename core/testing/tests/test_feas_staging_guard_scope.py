@@ -93,7 +93,10 @@ def test_actual_staging_guard_rejects_bare_fallback(tmp_path, method):
         assert len(completed) == 1
         if 'seccomp' in method:
             assert completed[0].returncode == 0
-            assert completed[0].stdout == 'no filter\n'
+            # stdout carries the -o report-file listing, never the
+            # shared stream; the probe's fake writes no report, so it
+            # is empty.
+            assert completed[0].stdout == ''
         else:
             assert completed == [None]
         assert native.feas_context.subprocess is namespace

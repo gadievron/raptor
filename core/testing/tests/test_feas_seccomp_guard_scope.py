@@ -61,7 +61,9 @@ def test_actual_seccomp_guard_rejects_bare_fallback():
                 native.TestSamplerRouting().test_seccomp_probe_pins_sandbox_posture(body)
         assert len(reached) == 1
         assert reached[0].returncode == 0
-        assert reached[0].stdout == 'no filter\n'
+        # stdout carries the -o report-file listing, never the shared
+        # stream; the probe's fake writes no report, so it is empty.
+        assert reached[0].stdout == ''
         assert native.feas_context.subprocess is namespace
         assert subprocess.Popen is popen
     assert native.feas_context._seccomp_tools_dump_sandboxed is original

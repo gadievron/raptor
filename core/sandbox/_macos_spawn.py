@@ -748,6 +748,12 @@ def run_sandboxed(cmd: list[str], *,
                   # of host-procfs degrade). macOS has no procfs;
                   # Seatbelt provides the process-info contract.
                   require_fresh_procfs=False,
+                  # pidns_attest: Linux-only — asks the pid-ns init to
+                  # attest namespace quiescence on the result. macOS has
+                  # no pid namespace, so no attestation can exist here;
+                  # accepted + ignored, and the absent result attribute
+                  # correctly reads as unattested (readers fail closed).
+                  pidns_attest=False,
                   # landlock_required: Linux-only floor plumbing (the
                   # Landlock-absent tolerance mode). macOS has no
                   # Landlock layer at all; accepted + ignored for
