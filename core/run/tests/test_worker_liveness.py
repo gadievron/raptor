@@ -163,11 +163,12 @@ class TestWorkerStampRecorder(unittest.TestCase):
         # Live-parent shape pinned as in the session-bound test above
         # (a harness that is itself init-parented would otherwise land
         # in the detached arm).
-        with self._distinct_live_parent() as live_parent:
+        with self._distinct_live_parent() as live_parent, \
+                TemporaryDirectory() as d:
             with mock_module_attribute(_mock_owner('core.run.metadata'), 'os', 'getppid', return_value=live_parent), \
                     mock.patch.object(sessions, "proc_starttime",
                                       lambda pid: None):
-                stamp = _worker_stamp(session_bound=True)
+                stamp = _worker_stamp(session_bound=True, out_dir=Path(d))
             self.assertNotIn("tool_pid_start", stamp)
             self.assertEqual(stamp["tool_pid"], live_parent)
 
@@ -196,8 +197,10 @@ class TestWorkerStampRecorder(unittest.TestCase):
         # recordable worker: legacy pid-less posture, never a poisoned
         # pid<=1 credential.
         with mock_module_attribute(_mock_owner('core.run.metadata'), 'os', 'getppid', return_value=0), \
-                mock_module_attribute(_mock_owner('core.run.metadata'), 'os', 'getpid', return_value=1):
-            self.assertEqual(_worker_stamp(session_bound=False), {})
+                mock_module_attribute(_mock_owner('core.run.metadata'), 'os', 'getpid', return_value=1), \
+                TemporaryDirectory() as d:
+            self.assertEqual(
+                _worker_stamp(session_bound=False, out_dir=Path(d)), {})
 
     def test_sessionless_resume_refreshes_worker_and_drops_session(self):
         # Detached resume: segment N's liveness credential must be

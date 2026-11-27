@@ -157,7 +157,7 @@ class TestEligibility(unittest.TestCase):
             from core.run.resume_state_provenance import (
                 stamp_worker_record,
             )
-            stamp_worker_record(meta)
+            stamp_worker_record(meta, out)
             save_json(meta_path, meta)
             msg = resume_ineligibility(out)
             self.assertIsNotNone(msg)
@@ -250,7 +250,7 @@ class TestEligibility(unittest.TestCase):
             meta["status"] = "running"
             meta["tool_pid"] = os.getpid()
             meta.pop("tool_pid_start", None)
-            stamp_worker_record(meta)
+            stamp_worker_record(meta, out)
             save_json(meta_path, meta)
             msg = resume_ineligibility(out)
             self.assertIsNotNone(msg)

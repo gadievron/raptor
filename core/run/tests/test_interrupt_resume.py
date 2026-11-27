@@ -171,7 +171,7 @@ class TestResumeRun(unittest.TestCase):
                 start = proc_starttime(worker.pid)
                 if start is not None:
                     meta["tool_pid_start"] = start
-                stamp_worker_record(meta)
+                stamp_worker_record(meta, out)
                 save_json(meta_path, meta)
                 with self.assertRaises(ValueError) as ctx:
                     resume_run(out)
@@ -246,7 +246,7 @@ class TestResumeRun(unittest.TestCase):
                 start = proc_starttime(other.pid)
                 if start is not None:
                     meta["tool_pid_start"] = start
-                stamp_worker_record(meta)
+                stamp_worker_record(meta, out)
                 meta["tool_pid"] = worker.pid
                 start = proc_starttime(worker.pid)
                 if start is not None:
@@ -305,7 +305,7 @@ class TestResumeRun(unittest.TestCase):
             start = proc_starttime(os.getpid())
             if start is not None:
                 meta["tool_pid_start"] = start
-            stamp_worker_record(meta)
+            stamp_worker_record(meta, out)
             save_json(meta_path, meta)
             self.assertEqual(resume_run(out), 2)
 

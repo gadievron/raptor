@@ -177,7 +177,7 @@ class TestEligibility(unittest.TestCase):
         else:
             meta["tool_pid_start"] = tool_pid_start
         if stamp:
-            stamp_worker_record(meta)
+            stamp_worker_record(meta, out)
         else:
             meta.pop("tool_pid_provenance", None)
         save_json(meta_path, meta)
@@ -325,7 +325,7 @@ class TestEligibility(unittest.TestCase):
         else:
             meta["tool_pid_start"] = tool_pid_start
         if stamp:
-            stamp_worker_record(meta)
+            stamp_worker_record(meta, out)
         else:
             meta.pop("tool_pid_provenance", None)
         save_json(meta_path, meta)
@@ -377,6 +377,34 @@ class TestEligibility(unittest.TestCase):
             with self.assertLogs("core.run.resume",
                                  level="WARNING") as cm:
                 self.assertIsNone(self._check(out))
+            self.assertTrue(any(
+                "UNVERIFIED" in line for line in cm.output))
+
+    def test_running_with_cross_run_replayed_stamp_proceeds(self):
+        """A verified worker record copied from ANOTHER run's metadata
+        must not read as this run's live worker: the token binds the
+        run dir it was minted for, so the replay demotes to unverified
+        — warn and proceed, never a standing denial of resume."""
+        from core.json import load_json, save_json
+        from core.run import RUN_METADATA_FILE, start_run
+        with TemporaryDirectory() as d:
+            donor = Path(d) / "donor-run"
+            start_run(donor, "example")
+            self._mark_running(donor, os.getpid(), stamp=True)
+            victim = Path(d) / "victim-run"
+            start_run(victim, "example")
+            self._mark_running(victim, os.getpid())
+            donor_meta = load_json(donor / RUN_METADATA_FILE)
+            victim_path = victim / RUN_METADATA_FILE
+            meta = load_json(victim_path)
+            for key in ("tool_pid", "tool_pid_start",
+                        "tool_pid_provenance"):
+                if key in donor_meta:
+                    meta[key] = donor_meta[key]
+            save_json(victim_path, meta)
+            with self.assertLogs("core.run.resume",
+                                 level="WARNING") as cm:
+                self.assertIsNone(self._check(victim))
             self.assertTrue(any(
                 "UNVERIFIED" in line for line in cm.output))
 

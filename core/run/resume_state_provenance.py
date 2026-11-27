@@ -25,18 +25,23 @@ LLM-writable and sandbox-readable tree. A verified token proves the
 record was minted by code that could read that key file, nothing
 stronger; key confidentiality is the trust anchor.
 
-Binding doctrine differs per record:
+Both records bind to the ABSOLUTE run dir they are persisted under:
 
-* Worker records carry NO run binding — the (pid, starttime) tuple is
-  already a transient machine-local fact (replaying it to another run
-  dir only "claims" a worker that is live anyway, a transient state),
-  and run binding would break legitimate run-dir moves (``/project
-  adopt``).
-* Cost-cap records bind to the ABSOLUTE run dir — a stamped "uncapped"
-  config copied into another run would lift that run's budget, a
-  durable grant. A moved run dir therefore verifies as unstamped and
-  resumes under the reader's conservative default (``--max-cost`` on
-  the resume invocation is the documented remedy).
+* Worker records: an unbound stamp over a long-lived pid was a
+  portable artifact — copied into ANOTHER run's metadata it read as
+  that run's live worker, a standing denial-of-resume for as long as
+  the donor pid lived. Binding makes a cross-run copy verify False,
+  which demotes it to the unverified posture (warn, never block).
+  Legitimate run-dir moves (``/project adopt``) demote the same way:
+  liveness then never blocks the next resume, and that resume's
+  re-stamp binds the new location. Records minted before the binding
+  existed verify through an unbound fallback that self-expires (see
+  :func:`verify_worker_record`).
+* Cost-cap records: a stamped "uncapped" config copied into another
+  run would lift that run's budget, a durable grant. A moved run dir
+  therefore verifies as unstamped and resumes under the reader's
+  conservative default (``--max-cost`` on the resume invocation is
+  the documented remedy).
 
 Failure policy is demote-never-error: no usable key → the state
 persists unstamped, and readers degrade exactly as they do for legacy
@@ -166,42 +171,65 @@ def _verify(fields: Mapping[str, object], token: object) -> bool:
 
 # ── Worker-liveness records (run metadata) ───────────────────────────
 
-def _worker_fields(record: Mapping[str, Any]) -> dict[str, str]:
+def _worker_fields(
+    record: Mapping[str, Any], out_dir: Path | None = None,
+) -> dict[str, str]:
     # str() over the recorded values: the canonical encoding is over
     # strings, and a verify against on-disk JSON must reproduce the
     # mint-side encoding byte for byte (ints round-trip through JSON;
     # a tampered type lands on a different string and fails closed).
-    return {
+    fields = {
         "kind": _WORKER_KIND,
         "tool_pid": str(record.get("tool_pid", "")),
         "tool_pid_start": str(record.get("tool_pid_start", "")),
     }
+    # out_dir=None is the LEGACY (pre-run-binding) encoding. It exists
+    # only for verify_worker_record's fallback and must never gain a
+    # writer: every mint goes through stamp_worker_record, which
+    # requires the run dir.
+    if out_dir is not None:
+        fields["run_dir"] = str(Path(out_dir).resolve())
+    return fields
 
 
-def stamp_worker_record(record: dict[str, Any]) -> None:
+def stamp_worker_record(record: dict[str, Any], out_dir: Path) -> None:
     """Stamp a metadata dict carrying ``tool_pid`` (and optionally
-    ``tool_pid_start``) at write time. A record WITHOUT a worker pid —
-    or one minted with no usable key — ends up with no token: readers
-    treat it as unverified (liveness never blocks, never trusted as
-    self)."""
+    ``tool_pid_start``) at write time, bound to *out_dir* — the run
+    dir the metadata is persisted under. A record WITHOUT a worker
+    pid — or one minted with no usable key — ends up with no token:
+    readers treat it as unverified (liveness never blocks, never
+    trusted as self)."""
     record.pop(WORKER_PROVENANCE_KEY, None)
     if record.get("tool_pid") is None:
         return
-    token = _mint(_worker_fields(record))
+    token = _mint(_worker_fields(record, out_dir))
     if token:
         record[WORKER_PROVENANCE_KEY] = token
 
 
-def verify_worker_record(record: Mapping[str, Any]) -> bool:
+def verify_worker_record(record: Mapping[str, Any], out_dir: Path) -> bool:
     """Whether *record*'s ``tool_pid``/``tool_pid_start`` pair was
-    stamped by THIS install. False for unstamped (legacy / foreign /
-    attacker-staged) records and on any verification failure — the
-    caller's degrade path, never an error."""
+    stamped by THIS install for THIS run dir. False for unstamped
+    (legacy / foreign / attacker-staged) records, for a stamped record
+    copied from another run dir, and on any verification failure — the
+    caller's degrade path, never an error.
+
+    Tokens minted before run binding existed carry no ``run_dir``
+    field, so a failed run-bound check retries the legacy unbound
+    encoding. That fallback window self-expires rather than needing a
+    migration: a worker token is only load-bearing while its recorded
+    (pid, starttime) is still live, no writer mints the unbound shape
+    any more, and every resume re-stamps in the bound shape — so the
+    pre-binding replay (copy a stamped long-lived pid into another
+    run's metadata to deny its resume) dies with the last pre-upgrade
+    worker process."""
     if not isinstance(record, Mapping):
         return False
     token = record.get(WORKER_PROVENANCE_KEY)
     if not token:
         return False
+    if _verify(_worker_fields(record, out_dir), token):
+        return True
     return _verify(_worker_fields(record), token)
 
 

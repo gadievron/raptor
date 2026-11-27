@@ -75,7 +75,7 @@ def test_reopen_with_live_worker_refused_through_audit_binding(
     # real writer attaches (an unstamped live record demotes to a
     # warning and never blocks).
     from core.run.resume_state_provenance import stamp_worker_record
-    stamp_worker_record(meta)
+    stamp_worker_record(meta, out)
     meta_path.write_text(json.dumps(meta))
     err = resume_ineligibility(out, reopen=True)
     assert err is not None

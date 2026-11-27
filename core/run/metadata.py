@@ -310,9 +310,11 @@ def _session_stamp(pid: int) -> dict[str, str]:
     return stamp
 
 
-def _worker_stamp(session_bound: bool) -> dict[str, Any]:
+def _worker_stamp(session_bound: bool, out_dir: Path) -> dict[str, Any]:
     """Identity of the worker process recorded as ``tool_pid`` —
     ``{}`` when nothing with a run-tracking lifetime is recordable.
+    *out_dir* is the run dir the stamp will be persisted under; the
+    provenance token binds to it.
 
     The credential is only useful when the recorded process's lifetime
     tracks the run, so the policy is per launch shape:
@@ -359,14 +361,16 @@ def _worker_stamp(session_bound: bool) -> dict[str, Any]:
     start = _sessions.proc_starttime(pid)
     if start is not None:
         stamp["tool_pid_start"] = start
-    # Authorship token over the (pid, starttime) tuple: the resume
-    # double-drive guard treats the recorded worker as load-bearing
-    # evidence, and the metadata file lives in a run dir less-trusted
-    # code can write. Unstamped records (no usable key, legacy runs)
-    # degrade on the read side — liveness then never blocks resume and
-    # never satisfies the guard's own-process exemption.
+    # Authorship token over the (pid, starttime, run dir) tuple: the
+    # resume double-drive guard treats the recorded worker as
+    # load-bearing evidence, and the metadata file lives in a run dir
+    # less-trusted code can write. The run-dir bind keeps a stamped
+    # long-lived pid from being replayed into ANOTHER run's metadata
+    # as its live worker. Unstamped records (no usable key, legacy
+    # runs) degrade on the read side — liveness then never blocks
+    # resume and never satisfies the guard's own-process exemption.
     from core.run.resume_state_provenance import stamp_worker_record
-    stamp_worker_record(stamp)
+    stamp_worker_record(stamp, out_dir)
     return stamp
 
 
@@ -1206,7 +1210,8 @@ def start_run(output_dir: Path, command: str,
         # no session because the parent is init) previously recorded
         # pid 1 and wedged every in-flight guard; sessionless
         # interactive runs record nothing, as before.
-        metadata.update(_worker_stamp(session_bound=session_pid is not None))
+        metadata.update(_worker_stamp(
+            session_bound=session_pid is not None, out_dir=output_dir))
         if session_pid is not None:
             metadata["session_pid"] = session_pid
             metadata.update(_session_stamp(session_pid))
@@ -2821,7 +2826,7 @@ def resume_run(output_dir: Path, note: str | None = None) -> int:
                 from core.run.resume_state_provenance import (
                     verify_worker_record,
                 )
-                if verify_worker_record(metadata):
+                if verify_worker_record(metadata, output_dir):
                     if metadata.get("tool_pid") != os.getpid():
                         msg = (
                             f"run is still in flight ({detail}) — "
@@ -2877,7 +2882,8 @@ def resume_run(output_dir: Path, note: str | None = None) -> int:
         metadata.pop("tool_pid", None)
         metadata.pop("tool_pid_start", None)
         metadata.pop("tool_pid_provenance", None)
-        metadata.update(_worker_stamp(session_bound=session_pid is not None))
+        metadata.update(_worker_stamp(
+            session_bound=session_pid is not None, out_dir=output_dir))
         if session_pid is not None:
             metadata["session_pid"] = session_pid
             # Refresh the FULL identity stamp with the pid — a resumed

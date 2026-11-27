@@ -170,7 +170,7 @@ def resume_ineligibility(
             # record refuses (see the STATUS_RUNNING guard below for
             # why an unverified one must not).
             alive, detail = worker_liveness_for_meta(meta)
-            if alive and not verify_worker_record(meta):
+            if alive and not verify_worker_record(meta, out_dir):
                 logger.warning(
                     "run metadata reports a live worker (%s) but the "
                     "record carries no valid provenance stamp (legacy "
@@ -229,7 +229,7 @@ def resume_ineligibility(
         # in-lock gate in core.run.metadata.resume_run applies the
         # same rule, so the two layers never disagree.
         alive, detail = worker_liveness_for_meta(meta)
-        if alive and not verify_worker_record(meta):
+        if alive and not verify_worker_record(meta, out_dir):
             logger.warning(
                 "run metadata reports a live worker (%s) but the "
                 "record carries no valid provenance stamp (legacy "
