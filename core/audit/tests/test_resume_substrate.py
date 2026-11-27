@@ -151,6 +151,13 @@ class TestEligibility(unittest.TestCase):
                 meta["tool_pid_start"] = start
             else:  # off-Linux: legacy bare-pid record
                 meta.pop("tool_pid_start", None)
+            # A refusal needs a VERIFIED record: mint the provenance
+            # token a real writer attaches (an unstamped live record
+            # demotes to a warning and never blocks).
+            from core.run.resume_state_provenance import (
+                stamp_worker_record,
+            )
+            stamp_worker_record(meta)
             save_json(meta_path, meta)
             msg = resume_ineligibility(out)
             self.assertIsNotNone(msg)
@@ -225,14 +232,16 @@ class TestEligibility(unittest.TestCase):
                                    lambda pid: "777"):
                 self.assertIsNone(resume_ineligibility(out))
 
-    def test_running_with_legacy_bare_pid_record_refused(self):
-        """Legacy record (no start-time stamp), worker alive: the old
-        behaviour is preserved — refuse, naming the unverified
-        identity."""
+    def test_running_with_stamped_bare_pid_record_refused(self):
+        """Bare-pid record (no start-time stamp) with the pid alive
+        and a valid provenance token: the record is authentic even
+        though the pid identity is unverifiable — refuse, naming the
+        unverified identity."""
         import os
 
         from core.json import load_json, save_json
         from core.run import RUN_METADATA_FILE, start_run
+        from core.run.resume_state_provenance import stamp_worker_record
         with TemporaryDirectory() as d:
             out = Path(d) / "run"
             start_run(out, "audit")
@@ -241,11 +250,42 @@ class TestEligibility(unittest.TestCase):
             meta["status"] = "running"
             meta["tool_pid"] = os.getpid()
             meta.pop("tool_pid_start", None)
+            stamp_worker_record(meta)
             save_json(meta_path, meta)
             msg = resume_ineligibility(out)
             self.assertIsNotNone(msg)
             self.assertIn("still in flight", msg)
             self.assertIn("legacy record", msg)
+
+    def test_running_with_unstamped_live_worker_proceeds(self):
+        """No valid provenance token on a live-looking record: the
+        shape an attacker with run-dir write access can plant (or a
+        legacy pre-stamp run). Unverified liveness warns loudly and
+        never blocks the resume."""
+        import os
+
+        from core.json import load_json, save_json
+        from core.project.sessions import proc_starttime
+        from core.run import RUN_METADATA_FILE, start_run
+        with TemporaryDirectory() as d:
+            out = Path(d) / "run"
+            start_run(out, "audit")
+            meta_path = out / RUN_METADATA_FILE
+            meta = load_json(meta_path)
+            meta["status"] = "running"
+            meta["tool_pid"] = os.getpid()  # demonstrably alive
+            start = proc_starttime(os.getpid())
+            if start is not None:
+                meta["tool_pid_start"] = start
+            else:
+                meta.pop("tool_pid_start", None)
+            meta.pop("tool_pid_provenance", None)
+            save_json(meta_path, meta)
+            with self.assertLogs("core.run.resume",
+                                 level="WARNING") as cm:
+                self.assertIsNone(resume_ineligibility(out))
+            self.assertTrue(any(
+                "UNVERIFIED" in line for line in cm.output))
 
 
 class TestDriftGate(unittest.TestCase):

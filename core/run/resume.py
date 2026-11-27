@@ -116,7 +116,12 @@ def resume_ineligibility(
       Worker liveness is the full identity check
       (:func:`core.run.metadata.worker_liveness_for_meta`): a stamped
       record needs a starttime match, pid<=1 is never live evidence,
-      and a legacy bare-pid record keeps the plain probe.
+      and a legacy bare-pid record keeps the plain probe. A live
+      verdict only REFUSES when the record's provenance token
+      verifies (:func:`core.run.resume_state_provenance
+      .verify_worker_record`) — an unverified record warns loudly
+      and never blocks (a planted pid in the writable run dir must
+      not be a standing denial of resume).
 
     ``completion_artifacts`` names the file(s) a genuinely completed
     run of this pipeline always leaves behind. ``completed`` with
@@ -139,6 +144,7 @@ def resume_ineligibility(
         reopen_run,
         worker_liveness_for_meta,
     )
+    from core.run.resume_state_provenance import verify_worker_record
 
     out_dir = Path(out_dir)
     meta = load_run_metadata(out_dir)
@@ -160,8 +166,22 @@ def resume_ineligibility(
             # segment against an in-flight run (double-driving the
             # work and the spend), so a live worker refuses BEFORE
             # reopen_run mutates anything; a dead or recycled-pid
-            # record proceeds as before.
+            # record proceeds as before. Only a provenance-verified
+            # record refuses (see the STATUS_RUNNING guard below for
+            # why an unverified one must not).
             alive, detail = worker_liveness_for_meta(meta)
+            if alive and not verify_worker_record(meta):
+                logger.warning(
+                    "run metadata reports a live worker (%s) but the "
+                    "record carries no valid provenance stamp (legacy "
+                    "run, foreign install, or a tampered run dir) — "
+                    "liveness is UNVERIFIED and never blocks a reopen. "
+                    "Proceeding; if the prior worker is genuinely "
+                    "still running, stop it first or this resume will "
+                    "double-drive the run.",
+                    detail,
+                )
+                alive = False
             if alive:
                 return (
                     f"run status is 'completed' with no {names} (a "
@@ -199,7 +219,28 @@ def resume_ineligibility(
         # permanent — PID 1 is always alive). The detail names what
         # was checked so the refusal is diagnosable against the
         # metadata.
+        #
+        # Only a provenance-verified record refuses
+        # (core.run.resume_state_provenance): the metadata lives in a
+        # run dir less-trusted code can write, and an unauthenticated
+        # alive record was a standing denial-of-resume (plant any
+        # long-lived pid). Unverified records (legacy pre-stamp runs,
+        # tampering) warn loudly and let the resume proceed — the
+        # in-lock gate in core.run.metadata.resume_run applies the
+        # same rule, so the two layers never disagree.
         alive, detail = worker_liveness_for_meta(meta)
+        if alive and not verify_worker_record(meta):
+            logger.warning(
+                "run metadata reports a live worker (%s) but the "
+                "record carries no valid provenance stamp (legacy "
+                "run, foreign install, or a tampered run dir) — "
+                "liveness is UNVERIFIED and never blocks resume. "
+                "Proceeding; if the prior worker is genuinely still "
+                "running, stop it first or this resume will "
+                "double-drive the run.",
+                detail,
+            )
+            alive = False
         if alive:
             return (
                 f"run is still in flight ({detail}) — resuming now "

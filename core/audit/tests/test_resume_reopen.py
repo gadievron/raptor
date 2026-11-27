@@ -71,6 +71,11 @@ def test_reopen_with_live_worker_refused_through_audit_binding(
     start = proc_starttime(os.getpid())
     if start is not None:
         meta["tool_pid_start"] = start
+    # A refusal needs a VERIFIED record: mint the provenance token a
+    # real writer attaches (an unstamped live record demotes to a
+    # warning and never blocks).
+    from core.run.resume_state_provenance import stamp_worker_record
+    stamp_worker_record(meta)
     meta_path.write_text(json.dumps(meta))
     err = resume_ineligibility(out, reopen=True)
     assert err is not None

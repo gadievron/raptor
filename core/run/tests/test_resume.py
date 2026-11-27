@@ -148,18 +148,23 @@ class TestEligibility(unittest.TestCase):
             msg = self._check(out, reopen=True)
             self.assertIn("never resumed", msg)
 
-    def _set_worker(self, out, tool_pid, tool_pid_start=...):
+    def _set_worker(self, out, tool_pid, tool_pid_start=...,
+                    stamp=False):
         """Rewrite ONLY the worker record (status untouched).
 
         Same stamp semantics as :meth:`_mark_running`:
         ``tool_pid_start=...`` (default) records the pid's real
         starttime (a coherent, live-if-the-pid-is identity); ``None``
         strips the stamp (legacy bare-pid record); any other value
-        models the recycled-pid mismatch.
+        models the recycled-pid mismatch. ``stamp=True`` mints the
+        provenance token a real writer attaches (the VERIFIED record
+        shape); the default models a record rewritten in the run dir
+        (planted or legacy — unverified either way).
         """
         from core.json import load_json, save_json
         from core.project.sessions import proc_starttime
         from core.run import RUN_METADATA_FILE
+        from core.run.resume_state_provenance import stamp_worker_record
         meta_path = Path(out) / RUN_METADATA_FILE
         meta = load_json(meta_path)
         meta["tool_pid"] = tool_pid
@@ -171,6 +176,10 @@ class TestEligibility(unittest.TestCase):
             meta.pop("tool_pid_start", None)
         else:
             meta["tool_pid_start"] = tool_pid_start
+        if stamp:
+            stamp_worker_record(meta)
+        else:
+            meta.pop("tool_pid_provenance", None)
         save_json(meta_path, meta)
 
     def _contradicted_completed_run(self, d):
@@ -197,7 +206,8 @@ class TestEligibility(unittest.TestCase):
             out = self._contradicted_completed_run(d)
             worker = subprocess.Popen(["sleep", "300"])
             try:
-                self._set_worker(out, worker.pid)  # live + coherent
+                # live + coherent + provenance-stamped (verified)
+                self._set_worker(out, worker.pid, stamp=True)
                 msg = self._check(out, reopen=True)
                 self.assertIsNotNone(msg)
                 self.assertIn("still alive", msg)
@@ -206,6 +216,31 @@ class TestEligibility(unittest.TestCase):
                 meta = load_json(out / RUN_METADATA_FILE)
                 self.assertEqual(meta["status"], "completed")
                 self.assertNotIn("reopens", meta.get("extra") or {})
+            finally:
+                worker.kill()
+                worker.wait()
+
+    def test_reopen_with_unverified_live_worker_proceeds(self):
+        """A live-looking record with NO valid provenance token is
+        exactly what an attacker with run-dir write access can plant
+        (a long-lived pid = permanent reopen denial). Unverified
+        liveness warns loudly and never blocks."""
+        import subprocess
+
+        from core.json import load_json
+        from core.run import RUN_METADATA_FILE
+        with TemporaryDirectory() as d:
+            out = self._contradicted_completed_run(d)
+            worker = subprocess.Popen(["sleep", "300"])
+            try:
+                self._set_worker(out, worker.pid)  # live, unstamped
+                with self.assertLogs("core.run.resume",
+                                     level="WARNING") as cm:
+                    self.assertIsNone(self._check(out, reopen=True))
+                self.assertTrue(any(
+                    "UNVERIFIED" in line for line in cm.output))
+                meta = load_json(out / RUN_METADATA_FILE)
+                self.assertEqual(meta["status"], "interrupted")
             finally:
                 worker.kill()
                 worker.wait()
@@ -240,14 +275,15 @@ class TestEligibility(unittest.TestCase):
             meta = load_json(out / RUN_METADATA_FILE)
             self.assertEqual(meta["status"], "interrupted")
 
-    def test_reopen_with_legacy_bare_pid_live_refused(self):
-        """Legacy record (no start-time stamp) with the pid alive:
-        the running-status guard refuses these (identity unverified,
-        err toward not double-driving) — the reopen path keeps the
-        same behaviour."""
+    def test_reopen_with_stamped_bare_pid_live_refused(self):
+        """Bare-pid record (no start-time stamp) with the pid alive,
+        carrying a valid provenance token: identity is unverified but
+        the RECORD is authentic — err toward not double-driving, same
+        as the running-status guard."""
         with TemporaryDirectory() as d:
             out = self._contradicted_completed_run(d)
-            self._set_worker(out, os.getpid(), tool_pid_start=None)
+            self._set_worker(out, os.getpid(), tool_pid_start=None,
+                             stamp=True)
             msg = self._check(out, reopen=True)
             self.assertIn("still alive", msg)
             self.assertIn("legacy record", msg)
@@ -260,17 +296,22 @@ class TestEligibility(unittest.TestCase):
             interrupt_run(out, "supervisor stop")
             self.assertIsNone(self._check(out))
 
-    def _mark_running(self, out, tool_pid, tool_pid_start=...):
+    def _mark_running(self, out, tool_pid, tool_pid_start=...,
+                      stamp=False):
         """Flip a started run to running with a chosen worker record.
 
         ``tool_pid_start=...`` (default) keeps the stamp COHERENT with
         the substituted pid — a mismatching stamp is the recycled-pid
         shape, which is deliberately not live. Pass an explicit value
         (or None to strip) to model the other record shapes.
+        ``stamp=True`` mints the provenance token a real writer
+        attaches (the VERIFIED record shape); the default models a
+        record rewritten in the run dir (planted or legacy).
         """
         from core.json import load_json, save_json
         from core.project.sessions import proc_starttime
         from core.run import RUN_METADATA_FILE
+        from core.run.resume_state_provenance import stamp_worker_record
         meta_path = Path(out) / RUN_METADATA_FILE
         meta = load_json(meta_path)
         meta["status"] = "running"
@@ -283,6 +324,10 @@ class TestEligibility(unittest.TestCase):
             meta.pop("tool_pid_start", None)
         else:
             meta["tool_pid_start"] = tool_pid_start
+        if stamp:
+            stamp_worker_record(meta)
+        else:
+            meta.pop("tool_pid_provenance", None)
         save_json(meta_path, meta)
 
     def test_running_with_live_worker_refused(self):
@@ -290,10 +335,50 @@ class TestEligibility(unittest.TestCase):
         with TemporaryDirectory() as d:
             out = Path(d) / "run"
             start_run(out, "example")
-            self._mark_running(out, os.getpid())  # demonstrably alive
+            # demonstrably alive + provenance-stamped (verified)
+            self._mark_running(out, os.getpid(), stamp=True)
             msg = self._check(out)
             self.assertIn("still in flight", msg)
             self.assertIn(str(os.getpid()), msg)
+
+    def test_running_with_unverified_live_worker_proceeds(self):
+        """Live pid, no valid provenance token: the plantable shape.
+        A planted long-lived pid must not be a permanent resume
+        denial — the advisory check warns loudly and proceeds."""
+        from core.run import start_run
+        with TemporaryDirectory() as d:
+            out = Path(d) / "run"
+            start_run(out, "example")
+            self._mark_running(out, os.getpid())  # alive, unstamped
+            with self.assertLogs("core.run.resume",
+                                 level="WARNING") as cm:
+                self.assertIsNone(self._check(out))
+            self.assertTrue(any(
+                "UNVERIFIED" in line for line in cm.output))
+
+    def test_running_with_tampered_stamp_proceeds(self):
+        """A token minted for one tuple does not cover a rewritten
+        one: re-pointing a stamped record at another live pid demotes
+        to unverified — proceed, never refuse, never error."""
+        from core.json import load_json, save_json
+        from core.run import RUN_METADATA_FILE, start_run
+        with TemporaryDirectory() as d:
+            out = Path(d) / "run"
+            start_run(out, "example")
+            self._mark_running(out, os.getpid(), stamp=True)
+            meta_path = out / RUN_METADATA_FILE
+            meta = load_json(meta_path)
+            # Keep the token, rewrite the tuple underneath it: drop
+            # the starttime so the record reads as a live bare-pid
+            # (a mismatching starttime would read as a recycled pid —
+            # not alive — and never reach the demote lane).
+            meta.pop("tool_pid_start", None)
+            save_json(meta_path, meta)
+            with self.assertLogs("core.run.resume",
+                                 level="WARNING") as cm:
+                self.assertIsNone(self._check(out))
+            self.assertTrue(any(
+                "UNVERIFIED" in line for line in cm.output))
 
     def test_running_with_init_worker_eligible(self):
         """The detached-launch incident shape: setsid/nohup reparented
@@ -334,15 +419,17 @@ class TestEligibility(unittest.TestCase):
                                    lambda pid: "777"):
                 self.assertIsNone(self._check(out))
 
-    def test_running_with_legacy_bare_pid_record_refused(self):
-        """Legacy record (no start-time stamp), worker alive: the old
-        behaviour is preserved — refuse, naming the unverified
-        identity."""
+    def test_running_with_stamped_bare_pid_record_refused(self):
+        """Bare-pid record (no start-time stamp) with the pid alive,
+        carrying a valid provenance token: the record is authentic
+        even though the pid identity is unverifiable — refuse, naming
+        the unverified identity."""
         from core.run import start_run
         with TemporaryDirectory() as d:
             out = Path(d) / "run"
             start_run(out, "example")
-            self._mark_running(out, os.getpid(), tool_pid_start=None)
+            self._mark_running(out, os.getpid(), tool_pid_start=None,
+                               stamp=True)
             msg = self._check(out)
             self.assertIn("still in flight", msg)
             self.assertIn("legacy record", msg)
@@ -382,7 +469,7 @@ class TestEligibility(unittest.TestCase):
             with mock.patch("core.run.metadata._PID1_NOTE_EMITTED",
                             False):
                 self.assertIsNone(resume_ineligibility(out, **kwargs))
-            self._mark_running(out, os.getpid())
+            self._mark_running(out, os.getpid(), stamp=True)
             msg = resume_ineligibility(out, **kwargs)
             self.assertIn("still in flight", msg)
             self.assertIn(str(os.getpid()), msg)

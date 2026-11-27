@@ -150,7 +150,45 @@ class TestResumeRun(unittest.TestCase):
         first resume stamps a live worker, a second resume_run on the
         still-``running`` metadata is refused inside the metadata lock
         (the advisory eligibility check runs long before the flip and
-        both racers can pass it)."""
+        both racers can pass it). The record carries the provenance
+        token a real writer mints — only a VERIFIED record refuses."""
+        import subprocess
+        import sys
+
+        from core.project.sessions import proc_starttime
+        from core.run.resume_state_provenance import stamp_worker_record
+
+        with TemporaryDirectory() as d:
+            out = Path(d) / "audit-run"
+            start_run(out, "audit")
+            worker = subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+            )
+            try:
+                meta_path = out / RUN_METADATA_FILE
+                meta = load_json(meta_path)
+                meta["tool_pid"] = worker.pid
+                start = proc_starttime(worker.pid)
+                if start is not None:
+                    meta["tool_pid_start"] = start
+                stamp_worker_record(meta)
+                save_json(meta_path, meta)
+                with self.assertRaises(ValueError) as ctx:
+                    resume_run(out)
+                self.assertIn("in flight", str(ctx.exception))
+                # The refused resume must not have mutated the record.
+                meta = load_json(meta_path)
+                self.assertEqual(meta.get("extra", {}).get("resumes"), None)
+            finally:
+                worker.kill()
+                worker.wait(timeout=10)
+
+    def test_resume_running_live_worker_without_stamp_proceeds(self):
+        """An UNVERIFIED live-worker record (legacy pre-stamp run, or
+        a pid planted into the writable run dir) must not block resume
+        forever — it demotes to a loud warning and the resume
+        proceeds. A planted long-lived pid was a standing denial of
+        resume when the bare record was trusted."""
         import subprocess
         import sys
 
@@ -169,16 +207,60 @@ class TestResumeRun(unittest.TestCase):
                 start = proc_starttime(worker.pid)
                 if start is not None:
                     meta["tool_pid_start"] = start
+                meta.pop("tool_pid_provenance", None)
                 save_json(meta_path, meta)
-                with self.assertRaises(ValueError) as ctx:
-                    resume_run(out)
-                self.assertIn("in flight", str(ctx.exception))
-                # The refused resume must not have mutated the record.
-                meta = load_json(meta_path)
-                self.assertEqual(meta.get("extra", {}).get("resumes"), None)
+                with self.assertLogs("core.run.metadata",
+                                     level="WARNING") as cm:
+                    self.assertEqual(resume_run(out), 2)
+                self.assertTrue(any(
+                    "UNVERIFIED" in line for line in cm.output))
             finally:
                 worker.kill()
                 worker.wait(timeout=10)
+
+    def test_resume_running_tampered_stamp_proceeds(self):
+        """A verified-then-rewritten record (the token no longer
+        matches the recorded tuple) is the tampering shape: demote,
+        never refuse — and never an error."""
+        import subprocess
+        import sys
+
+        from core.project.sessions import proc_starttime
+        from core.run.resume_state_provenance import stamp_worker_record
+
+        with TemporaryDirectory() as d:
+            out = Path(d) / "audit-run"
+            start_run(out, "audit")
+            worker = subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+            )
+            other = subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+            )
+            try:
+                meta_path = out / RUN_METADATA_FILE
+                meta = load_json(meta_path)
+                # Token minted for one live pid, record rewritten to
+                # point at ANOTHER live pid (the planted-pid shape).
+                meta["tool_pid"] = other.pid
+                start = proc_starttime(other.pid)
+                if start is not None:
+                    meta["tool_pid_start"] = start
+                stamp_worker_record(meta)
+                meta["tool_pid"] = worker.pid
+                start = proc_starttime(worker.pid)
+                if start is not None:
+                    meta["tool_pid_start"] = start
+                save_json(meta_path, meta)
+                with self.assertLogs("core.run.metadata",
+                                     level="WARNING") as cm:
+                    self.assertEqual(resume_run(out), 2)
+                self.assertTrue(any(
+                    "UNVERIFIED" in line for line in cm.output))
+            finally:
+                for proc in (worker, other):
+                    proc.kill()
+                    proc.wait(timeout=10)
 
     def test_resume_running_with_dead_worker_allowed(self):
         """The SIGKILL-recovery lane survives the live-worker guard: a
@@ -207,10 +289,12 @@ class TestResumeRun(unittest.TestCase):
     def test_resume_running_own_worker_stamp_allowed(self):
         """A detached orchestrator records ITSELF as the worker; its own
         re-entry must not be refused (it would wedge forever — its
-        recorded worker is alive by construction)."""
+        recorded worker is alive by construction). Stamped: the
+        self-pid exemption applies to VERIFIED records only."""
         import os
 
         from core.project.sessions import proc_starttime
+        from core.run.resume_state_provenance import stamp_worker_record
 
         with TemporaryDirectory() as d:
             out = Path(d) / "audit-run"
@@ -221,6 +305,7 @@ class TestResumeRun(unittest.TestCase):
             start = proc_starttime(os.getpid())
             if start is not None:
                 meta["tool_pid_start"] = start
+            stamp_worker_record(meta)
             save_json(meta_path, meta)
             self.assertEqual(resume_run(out), 2)
 

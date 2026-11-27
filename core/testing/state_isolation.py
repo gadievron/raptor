@@ -117,6 +117,15 @@ def pin_user_state_dirs(monkeypatch: "pytest.MonkeyPatch",
     # ``<base>/sessions.d``, ``.active`` inside the projects dir)
     # matches the attribute pins by construction.
     monkeypatch.setenv(registry_home.ENV_REGISTRY_HOME, str(base))
+    # Per-purpose MAC key files (core.security.mac_key consumers)
+    # resolve ``$XDG_DATA_HOME/raptor/<purpose>-mac.key`` lazily at
+    # stamp time — and a run START stamps (the worker-liveness
+    # provenance record, core.run.resume_state_provenance), so any
+    # test reaching the run lifecycle would otherwise mint a real key
+    # under ``~/.local/share/raptor``. Pin the whole XDG data home
+    # into scratch; suites that exercise key handling directly layer
+    # their own XDG pin innermost as before.
+    monkeypatch.setenv("XDG_DATA_HOME", str(base / "xdg-data"))
     monkeypatch.setattr(sessions, "_walk_session_pid", lambda: None)
     # Register absence too: entry points can write credentials directly.
     for name in (sessions.ENV_SESSION_PID, sessions.ENV_SESSION_TOKEN):

@@ -48,39 +48,56 @@ def audit_cli():
             yield mod
 
 
+def _stamped(cfg: dict, out_dir: Path) -> dict:
+    """The run-path persistence shape: cap stamped for *out_dir*."""
+    from core.run.resume_state_provenance import stamp_cost_cap
+    stamp_cost_cap(cfg, out_dir)
+    return cfg
+
+
 class TestResumeCostCap:
-    def test_no_override_keeps_original_cap(self, audit_cli):
+    def test_no_override_keeps_original_cap(self, audit_cli, tmp_path):
         assert audit_cli._resume_cost_cap(
-            None, {"max_cost_usd": 25.0}) == (25.0, False)
+            None, {"max_cost_usd": 25.0}, tmp_path) == (25.0, False)
 
-    def test_no_override_no_original_cap(self, audit_cli):
-        assert audit_cli._resume_cost_cap(None, {}) == (None, False)
-
-    def test_override_replaces_original_cap(self, audit_cli):
+    def test_no_override_no_original_cap(self, audit_cli, tmp_path,
+                                         capsys):
+        # An absent cap with no stamp is unverifiable "uncapped" — the
+        # exact rewrite shape (delete the key) — so it clamps to the
+        # conservative default instead of resuming uncapped.
         assert audit_cli._resume_cost_cap(
-            50.0, {"max_cost_usd": 10.0}) == (50.0, True)
+            None, {}, tmp_path) == (50.0, False)
+        assert "no valid provenance stamp" in capsys.readouterr().out
 
-    def test_override_on_uncapped_run_adds_a_cap(self, audit_cli):
-        assert audit_cli._resume_cost_cap(5.0, {}) == (5.0, True)
+    def test_override_replaces_original_cap(self, audit_cli, tmp_path):
+        assert audit_cli._resume_cost_cap(
+            50.0, {"max_cost_usd": 10.0}, tmp_path) == (50.0, True)
 
-    def test_zero_removes_the_cap(self, audit_cli):
+    def test_override_on_uncapped_run_adds_a_cap(self, audit_cli,
+                                                 tmp_path):
+        assert audit_cli._resume_cost_cap(5.0, {}, tmp_path) == (5.0, True)
+
+    def test_zero_removes_the_cap(self, audit_cli, tmp_path):
         # None is the "no cap" representation downstream; a literal
         # 0.0 cap would instead read as exhausted (finalize-only).
         assert audit_cli._resume_cost_cap(
-            0.0, {"max_cost_usd": 10.0}) == (None, True)
+            0.0, {"max_cost_usd": 10.0}, tmp_path) == (None, True)
 
-    def test_segment_budget_honors_the_override(self, audit_cli):
+    def test_segment_budget_honors_the_override(self, audit_cli,
+                                                tmp_path):
         # The config-assembly composition cmd_resume performs: the
         # segment's max_cost_usd is remaining_budget_usd(cap, booked)
         # with the override cap in force — a raised cap over booked
         # spend yields the raised remainder.
         cap, overridden = audit_cli._resume_cost_cap(
-            50.0, {"max_cost_usd": 10.0})
+            50.0, {"max_cost_usd": 10.0}, tmp_path)
         assert overridden
         assert remaining_budget_usd(cap, 30.0) == 20.0
 
-    def test_removed_cap_yields_uncapped_segment(self, audit_cli):
-        cap, _ = audit_cli._resume_cost_cap(0.0, {"max_cost_usd": 10.0})
+    def test_removed_cap_yields_uncapped_segment(self, audit_cli,
+                                                 tmp_path):
+        cap, _ = audit_cli._resume_cost_cap(
+            0.0, {"max_cost_usd": 10.0}, tmp_path)
         assert remaining_budget_usd(cap, 30.0) is None
 
 
@@ -151,19 +168,34 @@ class TestPersistedCapReadBack:
     @pytest.mark.parametrize(
         "poisoned", [float("nan"), float("inf"), float("-inf"), -5.0, "uncap"],
     )
-    def test_poisoned_persisted_cap_is_refused(self, audit_cli, poisoned):
+    def test_poisoned_persisted_cap_is_refused(self, audit_cli, poisoned,
+                                               tmp_path):
         with pytest.raises(ValueError, match="persisted max_cost_usd"):
-            audit_cli._resume_cost_cap(None, {"max_cost_usd": poisoned})
+            audit_cli._resume_cost_cap(
+                None, {"max_cost_usd": poisoned}, tmp_path)
 
-    def test_explicit_override_bypasses_a_poisoned_config(self, audit_cli):
+    @pytest.mark.parametrize(
+        "poisoned", [float("nan"), float("inf"), -5.0],
+    )
+    def test_poisoned_cap_is_refused_even_when_stamped(
+            self, audit_cli, poisoned, tmp_path):
+        # Validation precedes verification: a stamp proves WHO wrote
+        # the value, not that the value is sane.
+        cfg = _stamped({"max_cost_usd": poisoned}, tmp_path)
+        with pytest.raises(ValueError, match="persisted max_cost_usd"):
+            audit_cli._resume_cost_cap(None, cfg, tmp_path)
+
+    def test_explicit_override_bypasses_a_poisoned_config(self, audit_cli,
+                                                          tmp_path):
         # The documented escape hatch: --max-cost on the resume
         # invocation never consults the persisted value.
         assert audit_cli._resume_cost_cap(
-            12.0, {"max_cost_usd": float("nan")}) == (12.0, True)
+            12.0, {"max_cost_usd": float("nan")}, tmp_path) == (12.0, True)
 
-    def test_valid_persisted_cap_still_reads_back(self, audit_cli):
+    def test_valid_persisted_cap_still_reads_back(self, audit_cli,
+                                                  tmp_path):
         assert audit_cli._resume_cost_cap(
-            None, {"max_cost_usd": 25}) == (25.0, False)
+            None, {"max_cost_usd": 25}, tmp_path) == (25.0, False)
 
 
 @pytest.mark.slow
@@ -196,9 +228,24 @@ class TestZeroCapSemantics:
     0.0 would instead hit remaining_budget_usd's exhausted clamp.
     """
 
-    def test_legacy_persisted_zero_reads_back_uncapped(self, audit_cli):
+    def test_stamped_persisted_zero_reads_back_uncapped(self, audit_cli,
+                                                        tmp_path):
+        # The legacy-0 → uncapped mapping survives ONLY behind a valid
+        # provenance stamp: the run path genuinely persisted 0.
+        cfg = _stamped({"max_cost_usd": 0.0}, tmp_path)
         assert audit_cli._resume_cost_cap(
-            None, {"max_cost_usd": 0.0}) == (None, False)
+            None, cfg, tmp_path) == (None, False)
+
+    def test_unverified_persisted_zero_clamps(self, audit_cli, tmp_path,
+                                              capsys):
+        # Without a stamp, "0 = uncapped" is exactly the rewrite an
+        # attacker with run-dir write access would make — it clamps to
+        # the conservative default instead.
+        assert audit_cli._resume_cost_cap(
+            None, {"max_cost_usd": 0.0}, tmp_path) == (50.0, False)
+        out = capsys.readouterr().out
+        assert "0 (legacy uncapped)" in out
+        assert "no valid provenance stamp" in out
 
     @pytest.mark.slow
     def test_run_zero_cap_warns_uncapped(self, tmp_path: Path):
@@ -215,3 +262,79 @@ class TestZeroCapSemantics:
         assert cp.returncode == 1, cp.stderr
         assert "UNCAPPED" in cp.stderr
         assert "--max-cost 0 removes the cap" in cp.stderr
+
+
+class TestCapProvenance:
+    """The persisted cap is honored as-written only when its stamp
+    verifies for THIS run dir; every unverified shape — missing,
+    tampered, replayed into another run dir — degrades to the
+    conservative default (never an error, never uncapped).
+    """
+
+    def test_stamped_large_cap_honored(self, audit_cli, tmp_path, capsys):
+        cfg = _stamped({"max_cost_usd": 400.0}, tmp_path)
+        assert audit_cli._resume_cost_cap(
+            None, cfg, tmp_path) == (400.0, False)
+        assert capsys.readouterr().out == ""
+
+    def test_stamped_uncapped_honored(self, audit_cli, tmp_path, capsys):
+        cfg = _stamped({}, tmp_path)
+        assert audit_cli._resume_cost_cap(
+            None, cfg, tmp_path) == (None, False)
+        assert capsys.readouterr().out == ""
+
+    def test_tampered_value_clamps(self, audit_cli, tmp_path, capsys):
+        # Stamp minted over 10.0, value rewritten to 400.0: the token
+        # no longer covers the value — clamp, with the banner naming
+        # the remedy.
+        cfg = _stamped({"max_cost_usd": 10.0}, tmp_path)
+        cfg["max_cost_usd"] = 400.0
+        assert audit_cli._resume_cost_cap(
+            None, cfg, tmp_path) == (50.0, False)
+        out = capsys.readouterr().out
+        assert "$400.00" in out
+        assert "--max-cost" in out
+
+    def test_tampered_to_absent_clamps(self, audit_cli, tmp_path, capsys):
+        # Deleting the cap key does not verify either: the stamp binds
+        # the recorded VALUE, including "none".
+        cfg = _stamped({"max_cost_usd": 10.0}, tmp_path)
+        del cfg["max_cost_usd"]
+        assert audit_cli._resume_cost_cap(
+            None, cfg, tmp_path) == (50.0, False)
+        assert "none (uncapped)" in capsys.readouterr().out
+
+    def test_unverified_large_cap_clamps(self, audit_cli, tmp_path,
+                                         capsys):
+        assert audit_cli._resume_cost_cap(
+            None, {"max_cost_usd": 400.0}, tmp_path) == (50.0, False)
+        assert "no valid provenance stamp" in capsys.readouterr().out
+
+    def test_unverified_tight_cap_honored_silently(self, audit_cli,
+                                                   tmp_path, capsys):
+        # Lowering a budget gains an attacker nothing: an unverified
+        # cap at or under the default applies as-is, no banner.
+        assert audit_cli._resume_cost_cap(
+            None, {"max_cost_usd": 5.0}, tmp_path) == (5.0, False)
+        assert capsys.readouterr().out == ""
+
+    def test_stamp_is_bound_to_the_run_dir(self, audit_cli, tmp_path,
+                                           capsys):
+        # A stamped-uncapped config replayed into ANOTHER run dir is a
+        # durable budget grant — the binding makes it unverified there.
+        dir_a = tmp_path / "a"
+        dir_b = tmp_path / "b"
+        dir_a.mkdir()
+        dir_b.mkdir()
+        cfg = _stamped({}, dir_a)
+        assert audit_cli._resume_cost_cap(None, cfg, dir_a) == (None, False)
+        assert audit_cli._resume_cost_cap(None, cfg, dir_b) == (50.0, False)
+        assert "no valid provenance stamp" in capsys.readouterr().out
+
+    def test_cli_override_needs_no_stamp(self, audit_cli, tmp_path,
+                                         capsys):
+        # The operator's own flag is the escape hatch for every
+        # unverified shape, including uncapping.
+        assert audit_cli._resume_cost_cap(
+            0.0, {"max_cost_usd": 400.0}, tmp_path) == (None, True)
+        assert capsys.readouterr().out == ""

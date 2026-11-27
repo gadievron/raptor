@@ -246,7 +246,7 @@
     "core/audit/tests/test_resume_checklist_gate.py": "5eb35d16666a8184319d0dc22e510ae3d7386c71858f5a39c7d64da4f9e2374a",
     "core/audit/tests/test_resume_e2e.py": "eca1bfd6ba6f5936248ff669c78defc7e23b175d82fa25e0022ad050dc2884bd",
     "core/audit/tests/test_resume_journal_gate.py": "41e7a7382d01881bb1ce0e7ae679b1f2c80798ac41734fe4a53cfbd24794271b",
-    "core/audit/tests/test_resume_max_cost.py": "669e5a47e203a30b25732520ab9a32d21a0dadcbd4f6d51cd605d6e14fe2e463",
+    "core/audit/tests/test_resume_max_cost.py": "436a54c24a72abec4c84f1c4209c9634a4e011bb2728a71d120912fd43b5337b",
     "core/audit/tests/test_review_cli_toolruns.py": "ac2f0bc20b2e5c89bd22b9fdf73d3b18fb86ffa9b31454bf22f031311c62002e",
     "core/audit/tests/test_run_lock.py": "5172dbef1e22db4bef39d5377e737308c9ed9bb5ae1ec2209b9318a8ce6ee48d",
     "core/audit/tests/test_sanwit_channel.py": "94afd2a5eb8c856f221f1b251b5e8573ba3fbad3d61534692872f81ade2162f0",
@@ -438,7 +438,7 @@
     "core/run/tests/test_frida_wrapper_project_pin.py": "703bafff3787653601bbcc65944660f8c477bac7479874f4eb207a35a434b875",
     "core/run/tests/test_frida_wrapper_signals.py": "f74f17f0c81afe12cb887a4c9328b770665a4cbbba487cd82bd955077d688976",
     "core/run/tests/test_hook_finalize_precedence.py": "dd20928c4e85f57d7870be4c3ae6b23355703079446b862a555386e426ec0e8f",
-    "core/run/tests/test_interrupt_resume.py": "d4955852a44a5245d3d460cb858976f6051d7afa6880eba8dd585acd1d3a9ff9",
+    "core/run/tests/test_interrupt_resume.py": "da5bb95e67c2f243d58aa1106099d626c6d14129614cd6f3eba2d70023f219e3",
     "core/run/tests/test_launcher_import_paths.py": "f3c0f2becac9a9cae1dfec3385ad55b701fa5f5c4aaf41bf0d0bd511d14b7dbb",
     "core/run/tests/test_lifecycle_cost_gate.py": "c58a7297c91c671f7b24289f773837f4ecfc40a67620abf005d48b3d56ed5da4",
     "core/run/tests/test_lifecycle_hook.py": "cfd7d5fe583f283524fb14e071b90cda4bb70b294027ebdfd2d4320eeac99a33",
@@ -446,7 +446,7 @@
     "core/run/tests/test_parent_liveness.py": "378ed7a5ab742f38e45456a8256b74a93f557d117a4a4e26b11069cd2a21430f",
     "core/run/tests/test_provenance.py": "ab526a2fd059879b129ad827cb6059a1f2bd6a8e5286d0bc723cbfa729340761",
     "core/run/tests/test_readjudication_refresh_hook.py": "eb3d32b1fdd539772cdde8a77fa38f66279b81b3855d1fdb556bb7a26b3e16b6",
-    "core/run/tests/test_resume.py": "522e25fa2e8761ea37a4938025593100e097b2887afdb5ecbb1858e1e3d330eb",
+    "core/run/tests/test_resume.py": "6660385e73cdca259c1f2831a4ef5b806036c66f7a86d00f21b16f0b9a8eddd9",
     "core/run/tests/test_review_cli.py": "22582d66c51ae5b36b627ca782c1a4538823c347fc6b615215bbae1127a54dd1",
     "core/run/tests/test_review_cli_digest.py": "396ec3b8c1b813fdda360d2790ff25b3d22fbdc73bfe69e303ed99fea6eb7eff",
     "core/run/tests/test_review_cli_readjudication.py": "54bd172de3b82b26af9372c8ee0abb8a8ea66120dc919e4a71185e404f42f25f",
@@ -701,7 +701,7 @@
     "core/testing/signals.py": "5468df5267ff10f4895c23a8401f8f37368ddbbd7672f55aaea128a53ad0d749",
     "core/testing/sockets.py": "3c2866121070de8d5a7d469401ca8b4961faf1da7164613bbae3e47d56164c77",
     "core/testing/standalone_cli.py": "a00ff0c938adac88d0d0f2402abc7a121963ab69006b0a032efdcc503448c6c3",
-    "core/testing/state_isolation.py": "95f54d66b9986de9d8147cd8364931e33c82f19ddfbb7e23c7150fcdd7152f14",
+    "core/testing/state_isolation.py": "172febf13ea9228fd91554336b848619c9aa166d7f7d109591df85d4cd82b247",
     "core/testing/streams.py": "19b6db0179c7f81141e53626e5f0a825277f032aad8827498bcf9615281de03e",
     "core/testing/stress_state.py": "f2bf0ff504ebaf29500e50ace758293d1484d0f5e6227b421776eab86a4a6fcf",
     "core/testing/tempdirs.py": "120c4efe6675cd63ea11f1aa704808eb5b2f9a44e9a4672bd876563d80767f5e",
@@ -19157,6 +19157,22 @@
       "purpose": "Spawns a short sys.executable sleeper as the live recorded worker pid; resume_run must refuse the in-flight run without mutating its metadata. The child is killed and waited in the test's finally block."
     },
     {
+      "path": "core/run/tests/test_interrupt_resume.py",
+      "scope": "TestResumeRun.test_resume_running_live_worker_without_stamp_proceeds",
+      "signature": "1433c2f1da95102121ef95e755a920ec98615a7d45b5d8c55245b57301d04d81",
+      "count": 1,
+      "contract": "non-cli-probe",
+      "purpose": "Spawns a short sys.executable sleeper recorded as the live worker pid WITHOUT a provenance stamp; resume_run must demote the record to unverified liveness, warn, and proceed instead of refusing. The child is killed and waited in the test's finally block."
+    },
+    {
+      "path": "core/run/tests/test_interrupt_resume.py",
+      "scope": "TestResumeRun.test_resume_running_tampered_stamp_proceeds",
+      "signature": "1433c2f1da95102121ef95e755a920ec98615a7d45b5d8c55245b57301d04d81",
+      "count": 2,
+      "contract": "non-cli-probe",
+      "purpose": "Spawns two short sys.executable sleepers: one whose pid mints a valid worker stamp, and one recorded as the live worker pid under that mismatching token; resume_run must treat the token as unverified liveness and proceed. Both children are killed and waited in the test's finally block."
+    },
+    {
       "path": "core/run/tests/test_launcher_import_paths.py",
       "scope": "test_direct_cli_bootstraps_from_another_directory",
       "signature": "96f334eff5540d4e093ea109db25bf73b2772d2606951560312aa063dc0447a1",
@@ -19627,6 +19643,14 @@
       "count": 1,
       "contract": "non-cli-probe",
       "purpose": "core/run/tests/test_resume.py:TestEligibility.test_reopen_with_live_worker_refused: external tool or library/OS probe; exact command/environment source is pinned, and this category is not a claim of standalone launch isolation."
+    },
+    {
+      "path": "core/run/tests/test_resume.py",
+      "scope": "TestEligibility.test_reopen_with_unverified_live_worker_proceeds",
+      "signature": "99d6f6ca718a37eb0df351950ba12ec742b29a55832518a2efd239dd12de19e0",
+      "count": 1,
+      "contract": "non-cli-probe",
+      "purpose": "Spawns a short sys.executable sleeper recorded as a live worker with no provenance stamp; resume_ineligibility must demote the unverified record (warning, no refusal) rather than block reopen. The child is killed and waited in the test's finally block."
     },
     {
       "path": "core/run/tests/test_review_cli.py",

@@ -359,6 +359,14 @@ def _worker_stamp(session_bound: bool) -> dict[str, Any]:
     start = _sessions.proc_starttime(pid)
     if start is not None:
         stamp["tool_pid_start"] = start
+    # Authorship token over the (pid, starttime) tuple: the resume
+    # double-drive guard treats the recorded worker as load-bearing
+    # evidence, and the metadata file lives in a run dir less-trusted
+    # code can write. Unstamped records (no usable key, legacy runs)
+    # degrade on the read side — liveness then never blocks resume and
+    # never satisfies the guard's own-process exemption.
+    from core.run.resume_state_provenance import stamp_worker_record
+    stamp_worker_record(stamp)
     return stamp
 
 
@@ -1260,6 +1268,7 @@ def start_run(output_dir: Path, command: str,
         )
         if _prior_owner_live:
             for _k in ("session_pid", "tool_pid", "tool_pid_start",
+                       "tool_pid_provenance",
                        "session_start", "session_boot_id",
                        "session_pidns", "session_machine_id",
                        "session_id"):
@@ -2796,14 +2805,42 @@ def resume_run(output_dir: Path, note: str | None = None) -> int:
             # records ITSELF as the worker, and refusing its own
             # re-entry would wedge self-resume forever (its recorded
             # worker is alive by construction).
+            #
+            # The record only REFUSES when its provenance token
+            # verifies (core.run.resume_state_provenance): the
+            # metadata file lives in a run dir less-trusted code can
+            # write, and an unauthenticated record cut both ways — a
+            # planted long-lived pid blocked resume forever, a planted
+            # self-pid rode the own-process exemption. An unverified
+            # record (legacy pre-stamp runs, a foreign install's
+            # stamp, tampering) demotes: liveness is warned about but
+            # never blocks, and it NEVER satisfies the self-pid
+            # exemption's trusted-self claim.
             alive, detail = worker_liveness_for_meta(metadata)
-            if alive and metadata.get("tool_pid") != os.getpid():
-                msg = (
-                    f"run is still in flight ({detail}) — resuming now "
-                    "would double-drive it. Wait for it to stop, or "
-                    "kill it first."
+            if alive:
+                from core.run.resume_state_provenance import (
+                    verify_worker_record,
                 )
-                raise ValueError(msg)
+                if verify_worker_record(metadata):
+                    if metadata.get("tool_pid") != os.getpid():
+                        msg = (
+                            f"run is still in flight ({detail}) — "
+                            "resuming now would double-drive it. Wait "
+                            "for it to stop, or kill it first."
+                        )
+                        raise ValueError(msg)
+                else:
+                    logger.warning(
+                        "run metadata reports a live worker (%s) but "
+                        "the record carries no valid provenance stamp "
+                        "(legacy run, foreign install, or a tampered "
+                        "run dir) — liveness is UNVERIFIED and never "
+                        "blocks resume. Proceeding; if the prior "
+                        "worker is genuinely still running, stop it "
+                        "first or this resume will double-drive the "
+                        "run.",
+                        detail,
+                    )
         extra = metadata.get("extra") or {}
         resumes = extra.get("resumes")
         if not isinstance(resumes, list):
@@ -2839,6 +2876,7 @@ def resume_run(output_dir: Path, note: str | None = None) -> int:
         # posture, never segment 1's stamp paired with segment N's pid.
         metadata.pop("tool_pid", None)
         metadata.pop("tool_pid_start", None)
+        metadata.pop("tool_pid_provenance", None)
         metadata.update(_worker_stamp(session_bound=session_pid is not None))
         if session_pid is not None:
             metadata["session_pid"] = session_pid
