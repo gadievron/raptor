@@ -625,7 +625,7 @@
     "core/security/tests/test_cc_trust.py": "3efa41a46e96d91198c10db941d5f02eb5ee8e75e4b0ff780e0eebba5f1bc593",
     "core/security/tests/test_codeql_trust.py": "30db5ef0b28c76038336685209c4aa041642b04b1e6989890bc26c5f794eb3a0",
     "core/security/tests/test_credential_env.py": "4a3e275a4bc08ad7d02a6242a44f630c5ff6697973522084340c8fa0d9d7c7de",
-    "core/security/tests/test_credential_env_closure.py": "681137a7a6900e2e114721d39c8e516b75655dd51b53b421bf72afef584883fc",
+    "core/security/tests/test_credential_env_closure.py": "8f761daf1a67a2b44d6e685e2d47fa3c87c31163583f44fa33a8f37962828cbd",
     "core/security/tests/test_fetch_anchor_append.py": "002bd4567a7723fb6bfb1b3d640cf5e0a4d46f9ba6f5bd1bc1e00b9de036523f",
     "core/security/tests/test_launch_scratch.py": "b54617565538e357d33524dd58576d29319e35b85ad739ceb39f066ea92f9a9b",
     "core/security/tests/test_launcher_env_strip.py": "a39acc6d713e7247f1a9b937590a2fe462bc8e52f1ca75efa61f9c4c7a2ee792",

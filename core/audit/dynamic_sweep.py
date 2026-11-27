@@ -837,45 +837,62 @@ def _harness_generic(_func: str, _source: str, _file_path: str) -> str:
     )
 
 
+# Degraded-install fallback allowlist: the names this module's
+# subprocess children (compiler + harness runs) actually need, mirrored
+# from the ambient-kept core of RaptorConfig.SAFE_ENV_ALLOWLIST. The
+# fallback exists precisely because importing core.config FAILED, so it
+# must carry its own literal copy; a cross-check test pins it as a
+# subset of the primary allowlist so the two cannot drift apart.
+# Deliberately NOT mirrored: TMPDIR (the primary treats ambient TMPDIR
+# as dangerous and only injects a launcher-owned replacement, which the
+# degraded leg cannot derive — children fall back to /tmp instead).
+_FALLBACK_ENV_ALLOWLIST = frozenset({
+    "PATH",                              # tool lookup (gcc, python3)
+    "HOME", "SHELL", "PWD",              # home/session, same as primary
+    "USER", "LOGNAME",                   # identity
+    "LANG", "LANGUAGE", "LC_ALL",        # locale
+    "TERM",                              # terminal capabilities
+    "TZ",                                # time zone
+})
+# Locale sub-variables, ENUMERATED (POSIX categories plus the glibc
+# extensions) rather than mirroring the primary's open LC_ prefix. The
+# primary can keep the prefix family because its credential-shape sweep
+# drops secrets that ride it (LC_DB_PASSWORD, LC_BROKER_API_KEY); the
+# degraded leg cannot assume that vocabulary imports — a broken install
+# is exactly why it runs — so an open prefix here would carry ambient
+# LC_-named secrets into the harness child. With every kept name a
+# fixed literal, no ambient secret can ride the fallback at all.
+_FALLBACK_LOCALE_ENV = frozenset({
+    "LC_ADDRESS", "LC_COLLATE", "LC_CTYPE", "LC_IDENTIFICATION",
+    "LC_MEASUREMENT", "LC_MESSAGES", "LC_MONETARY", "LC_NAME",
+    "LC_NUMERIC", "LC_PAPER", "LC_TELEPHONE", "LC_TIME",
+})
+
+
 def _get_safe_env() -> dict[str, str]:
     """Get a sanitised environment for subprocess execution."""
     try:
         from core.config import RaptorConfig
         env = RaptorConfig.get_safe_env()
     except (ImportError, AttributeError):
-        env = dict(os.environ)
-        for key in ("TERMINAL", "EDITOR", "VISUAL", "BROWSER", "PAGER"):
-            env.pop(key, None)
-        # Degraded-fallback belt: this branch hands the child a
-        # full-environ copy, so at minimum drop the credential-env
-        # family (the canonical vocabulary is stdlib-only and imports
-        # even where core.config cannot; guard anyway — this fallback
-        # exists precisely for broken-install conditions).
-        try:
-            from core.security.credential_env import (
-                CREDENTIAL_ENV_FAMILY,
-                is_credential_env_pattern_member,
-                is_credential_shaped,
-            )
-        except ImportError:
-            pass
-        else:
-            for key in CREDENTIAL_ENV_FAMILY:
-                env.pop(key, None)
-            # Pattern members (CARGO_TARGET_<triple>_RUNNER-shaped
-            # names) have no enumerable spelling — exact-name pops
-            # cannot reach them, so sweep the survivors by predicate.
-            # Likewise credential-SHAPED names (*_API_KEY/*_API_TOKEN
-            # and the broader secret-shape vocabulary): the primary
-            # get_safe_env drops them, and the degraded fallback must
-            # not leak what the healthy path withholds.
-            for key in [
-                k for k in env
-                if is_credential_env_pattern_member(k)
-                or is_credential_shaped(k)
-                or k.endswith(("_API_KEY", "_API_TOKEN"))
-            ]:
-                env.pop(key)
+        # Degraded leg (broken install): same CONTRACT as the primary —
+        # an allowlist, never a predicate deny-list. A full-environ
+        # copy minus known-bad shapes still leaked every secret whose
+        # name the predicates did not recognise (DATABASE_URL, bespoke
+        # spellings) into the child.
+        logger.warning(
+            "dynamic_sweep: core.config unavailable — using the "
+            "degraded minimal env allowlist for harness subprocesses"
+        )
+        # No credential sweep needed on this leg: every kept name is a
+        # fixed literal from the two frozensets above (the locale
+        # family is enumerated, not an open prefix), so there is no
+        # name shape an ambient secret could ride.
+        env = {
+            key: value for key, value in os.environ.items()
+            if key in _FALLBACK_ENV_ALLOWLIST
+            or key in _FALLBACK_LOCALE_ENV
+        }
     env["ASAN_OPTIONS"] = "detect_leaks=1:abort_on_error=1:handle_segv=0"
     # abort_on_error=1 is load-bearing for the signal-grade sanitizer
     # classification: halt_on_error alone makes UBSan STOP (exit 1,

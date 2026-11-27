@@ -373,8 +373,12 @@ _CONSUMER_MODULES = (
     "core/config/__init__.py",
     "core/security/cc_trust.py",
     "core/llm/cc_adapter.py",
+    # core/audit/dynamic_sweep.py left this set when its degraded
+    # env fallback became a closed literal allowlist: every kept
+    # name is a fixed non-credential constant, so the module no
+    # longer filters by credential-family names and has no
+    # vocabulary to import.
     "packages/codeql/database_manager.py",
-    "core/audit/dynamic_sweep.py",
 )
 
 _COMMENT_RE = re.compile(r"#.*$", re.MULTILINE)

@@ -693,6 +693,16 @@
     "count": 10,
     "kind": "alternation"
   },
+  "core/audit/dynamic_sweep.py::_FALLBACK_ENV_ALLOWLIST": {
+    "count": 11,
+    "kind": "literal",
+    "note": "degraded-install env allowlist: the minimal ambient names the harness fallback keeps when core.config cannot be imported. A deliberate literal copy of the primary SAFE_ENV_ALLOWLIST core (the fallback exists precisely because the import failed); a regression test pins it as a subset of the primary so the two cannot drift apart. Environment-variable names, not a learned API/function vocabulary."
+  },
+  "core/audit/dynamic_sweep.py::_FALLBACK_LOCALE_ENV": {
+    "count": 12,
+    "kind": "literal",
+    "note": "degraded-install locale allowlist: the enumerated POSIX/glibc locale categories the harness env fallback keeps in place of the primary's open LC_ prefix (the prefix is only safe under the primary's credential-shape sweep, which the degraded leg cannot assume imports). A closed OS-defined category set pinned against the primary's prefixes by a regression test \u2014 environment-variable names, not a learned API/function vocabulary."
+  },
   "core/audit/edge_obligations.py::build_edge_obligations": {
     "count": 10,
     "kind": "literal",

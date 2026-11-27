@@ -395,10 +395,12 @@ class TestHarnessContainment:
 
 
 class TestGetSafeEnvDegradedFallback:
-    """The broken-install fallback hands the child a full-environ copy
-    minus the credential-env vocabulary. Pattern members have no
-    enumerable spelling, so the fallback must sweep by predicate, not
-    only by exact-name pops."""
+    """The broken-install fallback is an ALLOWLIST mirroring the
+    primary get_safe_env contract: only a literal minimal name set
+    (plus the ENUMERATED locale categories — never an open LC_ prefix)
+    survives into the child. A deny-list fallback leaked every secret
+    whose name its predicates did not recognise (DATABASE_URL, bespoke
+    spellings)."""
 
     def _degraded_env(self, monkeypatch):
         import sys
@@ -413,34 +415,88 @@ class TestGetSafeEnvDegradedFallback:
         from core.audit.dynamic_sweep import _get_safe_env
         return _get_safe_env()
 
-    def test_fallback_drops_family_and_pattern_members(self, monkeypatch):
+    def test_fallback_is_an_allowlist(self, monkeypatch):
+        # Exec-capable names and credential vocabulary never survive.
         monkeypatch.setenv("GIT_ASKPASS", "/tmp/steal.sh")
         monkeypatch.setenv(
             "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER", "/tmp/evil",
         )
         monkeypatch.setenv("BUNDLE_BUILD__NOKOGIRI", "-fplugin=/tmp/e.so")
-        monkeypatch.setenv("MY_LEGITIMATE_VAR", "kept")
+        monkeypatch.setenv("EXAMPLEVENDOR_API_KEY", "sentinel")
+        monkeypatch.setenv("SOME_SERVICE_PASSWORD", "sentinel")
+        # NOT credential-shaped and on no deny-list — exactly the leak
+        # class only an allowlist stops.
+        monkeypatch.setenv("DATABASE_URL", "postgres://u:hunter2@db/x")
+        monkeypatch.setenv("MY_BESPOKE_CONNSTRING", "hunter2")
+        # Unknown-but-benign names drop too: allowlist, not deny-list.
+        monkeypatch.setenv("MY_LEGITIMATE_VAR", "dropped-anyway")
         env = self._degraded_env(monkeypatch)
         assert "GIT_ASKPASS" not in env
         assert "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER" not in env
         assert "BUNDLE_BUILD__NOKOGIRI" not in env
-        assert env.get("MY_LEGITIMATE_VAR") == "kept"
+        assert "EXAMPLEVENDOR_API_KEY" not in env
+        assert "SOME_SERVICE_PASSWORD" not in env
+        assert "DATABASE_URL" not in env
+        assert "MY_BESPOKE_CONNSTRING" not in env
+        assert "MY_LEGITIMATE_VAR" not in env
         # The fallback's own sanitizer knobs still land.
         assert "ASAN_OPTIONS" in env
 
-    def test_fallback_drops_credential_shaped_names(self, monkeypatch):
-        # The primary get_safe_env withholds generic *_API_KEY /
-        # *_API_TOKEN spellings and the broader credential-SHAPED
-        # vocabulary; the degraded fallback must not leak what the
-        # healthy path withholds.
-        monkeypatch.setenv("EXAMPLEVENDOR_API_KEY", "sentinel")
-        monkeypatch.setenv("EXAMPLEVENDOR_API_TOKEN", "sentinel")
-        monkeypatch.setenv("SOME_SERVICE_PASSWORD", "sentinel")
-        # Negative control: a documented settings knob the shape
-        # vocabulary exempts must survive the sweep.
-        monkeypatch.setenv("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "4096")
+    def test_fallback_keeps_the_minimal_tool_set(self, monkeypatch):
+        monkeypatch.setenv("PATH", "/usr/bin")
+        monkeypatch.setenv("HOME", "/home/x")
+        monkeypatch.setenv("LANG", "C.UTF-8")
+        monkeypatch.setenv("LC_CTYPE", "C.UTF-8")
         env = self._degraded_env(monkeypatch)
-        assert "EXAMPLEVENDOR_API_KEY" not in env
-        assert "EXAMPLEVENDOR_API_TOKEN" not in env
-        assert "SOME_SERVICE_PASSWORD" not in env
-        assert env.get("CLAUDE_CODE_MAX_OUTPUT_TOKENS") == "4096"
+        assert env.get("PATH") == "/usr/bin"
+        assert env.get("HOME") == "/home/x"
+        assert env.get("LANG") == "C.UTF-8"
+        assert env.get("LC_CTYPE") == "C.UTF-8"
+
+    def test_fallback_drops_lc_named_secrets(self, monkeypatch):
+        # The locale family is ENUMERATED, never an open LC_ prefix:
+        # the primary's prefix is safe only because its credential-shape
+        # sweep backstops it, and that vocabulary may not import on the
+        # broken-install leg. LC_BESPOKE_CONNSTRING is the proof case —
+        # no shape predicate recognises it, only enumeration stops it.
+        monkeypatch.setenv("LC_BROKER_API_KEY", "sentinel")
+        monkeypatch.setenv("LC_VENDOR_API_TOKEN", "sentinel")
+        monkeypatch.setenv("LC_BESPOKE_CONNSTRING", "hunter2")
+        monkeypatch.setenv("LC_MESSAGES", "C.UTF-8")
+        env = self._degraded_env(monkeypatch)
+        assert "LC_BROKER_API_KEY" not in env
+        assert "LC_VENDOR_API_TOKEN" not in env
+        assert "LC_BESPOKE_CONNSTRING" not in env
+        assert env.get("LC_MESSAGES") == "C.UTF-8"
+
+    def test_fallback_allowlist_is_subset_of_primary(self):
+        # The fallback carries its own literal copy (it exists because
+        # the core.config import FAILED); this pin stops the two
+        # allowlists drifting apart silently. Ambient TMPDIR is
+        # deliberately absent from both (the primary blocklists it and
+        # injects a launcher-owned replacement instead — unavailable on
+        # the degraded leg).
+        from core.audit.dynamic_sweep import (
+            _FALLBACK_ENV_ALLOWLIST,
+            _FALLBACK_LOCALE_ENV,
+        )
+        from core.config import RaptorConfig
+
+        assert _FALLBACK_ENV_ALLOWLIST <= RaptorConfig.SAFE_ENV_ALLOWLIST
+        # The enumerated locale names ride the primary's LC_ prefix
+        # family rather than its literal allowlist: every one must
+        # match a primary prefix (the primary would keep it too), and
+        # none may carry a shape the primary's credential sweep exists
+        # to stop (the enumeration IS the fallback's substitute for
+        # that sweep).
+        assert all(
+            name.startswith(RaptorConfig.SAFE_ENV_PREFIXES)
+            for name in _FALLBACK_LOCALE_ENV)
+        assert "TMPDIR" not in _FALLBACK_ENV_ALLOWLIST
+        assert not ((_FALLBACK_ENV_ALLOWLIST | _FALLBACK_LOCALE_ENV)
+                    & RaptorConfig.DANGEROUS_ENV_VARS)
+
+    def test_fallback_is_loud(self, monkeypatch, caplog):
+        with caplog.at_level("WARNING", logger="core.audit.dynamic_sweep"):
+            self._degraded_env(monkeypatch)
+        assert "degraded minimal env allowlist" in caplog.text
