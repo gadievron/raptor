@@ -106,7 +106,21 @@ def open_graph_readonly(path: Path) -> sqlite3.Connection:
     changed none of the queried tables or columns.
     """
     path = Path(path)
-    conn = sqlite3.connect(f"file:{quote(str(path))}?mode=ro", uri=True)
+    try:
+        conn = sqlite3.connect(f"file:{quote(str(path))}?mode=ro", uri=True)
+    except sqlite3.OperationalError as exc:
+        # The one way a read-only open loses to a plain writable
+        # connect: a WAL store whose writer died before checkpointing,
+        # sitting in an unwritable directory — sqlite needs to create
+        # the -shm / recover the -wal and mode=ro forbids both. Name
+        # the recovery path instead of a bare "unable to open".
+        if path.with_name(path.name + "-wal").exists():
+            msg = (f"cannot open {path} read-only: a write-ahead log "
+                   f"({path.name}-wal) is pending recovery. Open the "
+                   "store writable once to checkpoint it, or copy the "
+                   "db and -wal files to writable storage first")
+            raise RuntimeError(msg) from exc
+        raise
     try:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout=5000")
