@@ -2182,7 +2182,13 @@ class ProjectManager:
                         bind_session(None)
                     return None
             return name
-        if state == "none":
+        if state in ("none", "legacy"):
+            # "legacy": the binding names a project legal under the old
+            # name grammar only — authoritatively projectless, like
+            # bound-to-none (session_binding already logged the
+            # operator-facing migration hint). Never symlink
+            # fallthrough: a cleared-or-unloadable binding must not
+            # silently steer the session at another layer's project.
             return None
 
         active_link = self.projects_dir / ".active"

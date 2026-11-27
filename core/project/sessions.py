@@ -145,6 +145,25 @@ ENV_SESSION_TOKEN = "RAPTOR_SESSION_TOKEN"
 #: them as path-shaped.
 _NAME_RE = re.compile(r"\A(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._-]{0,63}(?<!\.)\Z")
 
+#: The OLD legal grammar (pre-tightening: no length cap, '..' sequences
+#: and trailing dots allowed). A binding written for a then-legal name
+#: is LEGACY data, not corruption — readers must degrade it to
+#: projectless WITH a distinct classification, never lump it with
+#: garbage (see session_binding). Kept consistent with the project
+#: layer's legacy-tolerant removal lookup
+#: (ProjectManager._load_for_removal): the charset alone already
+#: excludes separators, NUL, control characters and bare dot forms, so
+#: any match here is a single safe path component.
+_LEGACY_NAME_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]*\Z")
+
+
+def is_legacy_project_name(name: str) -> bool:
+    """True for a name legal under the OLD grammar but not the current
+    one — rendering surfaces use this to tell "legacy binding" apart
+    from garbage/corruption."""
+    return (bool(name) and not _NAME_RE.match(name)
+            and _LEGACY_NAME_RE.match(name) is not None)
+
 #: The full v2 key list, shared by both writers (the bash seeder in
 #: bin/raptor mirrors this order). Unknown keys are dropped on rewrite
 #: BY DESIGN — the list is the schema.
@@ -785,6 +804,12 @@ def session_binding(pid: int | None = None) -> tuple[str | None, str]:
     * ``"none"``     — v2 entry carries the bound-to-none sentinel, OR a
       v2 entry is corrupt/invalid (fail toward projectless, never
       toward another layer's project).
+    * ``"legacy"``   — v2 entry names a project that was legal under the
+      OLD name grammar but is not any more (a live session spanning an
+      upgrade). The name is returned for DISPLAY; consumers treat the
+      session as authoritatively projectless — like ``"none"``, never
+      symlink fallthrough — but surface the name so the operator can
+      migrate it (``/project rename`` or ``/project delete``).
     * ``"advisory"`` — v1 (unversioned) entry: pre-series session;
       symlink layer applies.
     * ``"absent"``   — no session, no entry, foreign entry, or identity
@@ -815,6 +840,20 @@ def session_binding(pid: int | None = None) -> tuple[str | None, str]:
     if name == NONE_SENTINEL:
         return None, "none"
     if not name or not _NAME_RE.match(name):
+        if name and _LEGACY_NAME_RE.match(name):
+            # Legal under the old grammar: operator-era data from a
+            # pre-tightening writer, not corruption. Still degrades to
+            # projectless (the project can no longer be loaded under
+            # the new rules) but with its own classification so the
+            # rendering surfaces can tell the operator what happened.
+            # The legacy charset ([A-Za-z0-9._-]) carries no control
+            # characters, so %r renders it faithfully.
+            logger.warning(
+                "sessions: binding for pid %d names legacy project %r "
+                "— no longer a valid name; treating as projectless. "
+                "Rename or delete it via /project rename|delete.",
+                pid, name)
+            return name, "legacy"
         logger.warning(
             "sessions: corrupt binding for pid %d (%r) — treating as "
             "authoritatively projectless", pid, name)

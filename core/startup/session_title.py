@@ -20,8 +20,13 @@ def _context() -> tuple[str | None, str | None] | None:
     if pid is None:
         return None
     project, state = sessions.session_binding(pid)
-    if state not in {'bound', 'none'}:
+    if state not in {'bound', 'none', 'legacy'}:
         return None
+    if state == 'legacy':
+        # A legacy-grammar binding is authoritatively projectless: the name
+        # is returned for /project display and operator migration only, and
+        # must not title the session as if the project were loadable.
+        project = None
     if project is None:
         # Projectless work still has a session-owned run ledger. Its target is
         # display metadata only: never use it to bind a project or authorize work.

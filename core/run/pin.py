@@ -223,7 +223,10 @@ def resolve_pin_for_start() -> tuple[str | None, str]:
             "pin: session binding names missing project %r — "
             "authoritatively projectless for this run", name)
         return None, "session"
-    if state == "none":
+    if state in ("none", "legacy"):
+        # "legacy": binding names a project legal only under the old
+        # name grammar — authoritatively projectless, same as
+        # bound-to-none (session_binding logs the migration hint).
         return None, "session"
 
     # advisory / absent → symlink layer (with the machine-expiry vet

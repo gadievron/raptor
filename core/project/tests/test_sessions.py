@@ -409,6 +409,50 @@ class SessionBindingTest(_RegistryCase):
         self.assertEqual(sessions.session_binding(pid=os.getpid()),
                          (None, "none"))
 
+    def _write_v2_binding(self, project: str):
+        self.sessions_dir.mkdir(parents=True, exist_ok=True)
+        stamp = sessions._identity_for(os.getpid())
+        (self.sessions_dir / str(os.getpid())).write_text(
+            f"v=2\nproject={project}\nsince=x\n"
+            + "".join(f"{k}={v}\n" for k, v in stamp.items()),
+            encoding="utf-8")
+
+    def test_legacy_shaped_binding_is_legacy_not_corrupt(self):
+        """A binding written for a then-legal name (old grammar: no
+        length cap, '..' sequences, trailing dots) classifies as
+        "legacy" and returns the name for display — never silently
+        lumped with corruption."""
+        for name in ("proj..legacy", "trailing.", "a" * 70):
+            with self.subTest(name=name):
+                self._write_v2_binding(name)
+                with self.assertLogs("core.project.sessions",
+                                     level="WARNING") as cm:
+                    self.assertEqual(
+                        sessions.session_binding(pid=os.getpid()),
+                        (name, "legacy"))
+                self.assertTrue(
+                    any("legacy" in msg for msg in cm.output))
+
+    def test_garbage_binding_stays_corrupt_none(self):
+        """Names illegal under BOTH grammars (separators, whitespace,
+        control chars, bare dot forms) keep the corrupt handling:
+        authoritative none, no name returned."""
+        for name in ("a/b", "..", "a b", "a\x01b"):
+            with self.subTest(name=name):
+                self._write_v2_binding(name)
+                self.assertEqual(
+                    sessions.session_binding(pid=os.getpid()),
+                    (None, "none"))
+
+    def test_is_legacy_project_name_predicate(self):
+        self.assertTrue(sessions.is_legacy_project_name("proj..legacy"))
+        self.assertTrue(sessions.is_legacy_project_name("a" * 70))
+        self.assertTrue(sessions.is_legacy_project_name("trailing."))
+        self.assertFalse(sessions.is_legacy_project_name("myapp"))
+        self.assertFalse(sessions.is_legacy_project_name("a/b"))
+        self.assertFalse(sessions.is_legacy_project_name(""))
+        self.assertFalse(sessions.is_legacy_project_name("-"))
+
     @unittest.skipUnless(sys.platform == "linux", "starttime identity")
     def test_identity_mismatch_is_absent(self):
         sessions.record_session("myapp", pid=os.getpid())
@@ -752,6 +796,38 @@ class UseCommandAwarenessTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertNotIn("also active", out)
 
+    def _write_legacy_binding(self, project: str):
+        self.sessions_dir.mkdir(parents=True, exist_ok=True)
+        stamp = sessions._identity_for(self.FAKE_SELF)
+        (self.sessions_dir / str(self.FAKE_SELF)).write_text(
+            f"v=2\nproject={project}\nsince=x\n"
+            + "".join(f"{k}={v}\n" for k, v in stamp.items()),
+            encoding="utf-8")
+
+    def test_sessions_surfaces_legacy_binding(self):
+        self._write_legacy_binding("proj..legacy")
+        code, out, _ = self._run("sessions")
+        self.assertEqual(code, 0)
+        self.assertIn("legacy project 'proj..legacy'", out)
+        self.assertIn("rename or delete", out.lower())
+
+    def test_use_report_surfaces_legacy_binding(self):
+        self._write_legacy_binding("proj..legacy")
+        code, out, _ = self._run("use")
+        self.assertEqual(code, 0)
+        self.assertIn("Session project: none", out)
+        self.assertIn("legacy project 'proj..legacy'", out)
+
+    def test_status_surfaces_legacy_binding(self):
+        # No bookmark: resolution must land on "no project" plus the
+        # legacy note, never on another layer's project.
+        (self.projects_dir / ".active").unlink(missing_ok=True)
+        self._write_legacy_binding("proj..legacy")
+        code, out, _ = self._run("status")
+        self.assertEqual(code, 0)
+        self.assertIn("legacy project 'proj..legacy'", out)
+        self.assertIn("No project specified", out)
+
     def test_use_none_binds_sentinel_and_keeps_bookmark(self):
         """In-session `/project none` is a session-only clear: the entry
         binds the `-` sentinel (authoritatively projectless) and the
@@ -938,6 +1014,18 @@ class LayeredChokepointTest(unittest.TestCase):
     def test_no_binding_falls_to_bookmark_in_both(self):
         self.assertEqual(self.mgr.get_active(), "bookmark-proj")
         self.assertEqual(self.startup.get_active_name(), "bookmark-proj")
+
+    def test_legacy_binding_never_falls_through(self):
+        """A legacy-grammar binding degrades to projectless in BOTH
+        chokepoints — never to the bookmark layer's project."""
+        self.sessions_dir.mkdir(parents=True, exist_ok=True)
+        stamp = sessions._identity_for(os.getpid())
+        (self.sessions_dir / str(os.getpid())).write_text(
+            "v=2\nproject=legacy..name\nsince=x\n"
+            + "".join(f"{k}={v}\n" for k, v in stamp.items()),
+            encoding="utf-8")
+        self.assertIsNone(self.mgr.get_active())
+        self.assertIsNone(self.startup.get_active_name())
 
     def test_stale_binding_never_falls_through(self):
         self.mgr.create("doomed", str(Path(self._tmp.name) / "code"),

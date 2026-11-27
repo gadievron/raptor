@@ -1252,6 +1252,9 @@ def main() -> None:
         elif args.subcommand == "status":
             name = args.name or _get_active_project()
             if not name:
+                note = _legacy_binding_note()
+                if note:
+                    print(note)
                 print("No project specified. Use: raptor project status <name>")
                 return
             p = mgr.load(name)  # type: ignore[assignment]
@@ -1345,6 +1348,14 @@ def main() -> None:
                         print(f"Session project: {binding}")
                 elif state == "none":
                     print("Session project: none (explicitly cleared)")
+                elif state == "legacy":
+                    # Legacy-grammar names carry no control chars by
+                    # construction; sanitise anyway — display surface.
+                    print(f"Session project: none (binding names legacy "
+                          f"project "
+                          f"'{sanitise_for_terminal(binding or '', max_len=80)}'"
+                          f" — no longer a valid name; rename or delete "
+                          f"it via 'raptor project rename|delete')")
                 elif resolve_session_pid() is not None:
                     print("Session project: (follows the last-activated "
                           "default — no binding recorded)")
@@ -1424,7 +1435,8 @@ def main() -> None:
                       f"'{p.name}'.")
             elif in_session:
                 was = (prev_binding if prev_state == "bound"
-                       else "none" if prev_state == "none" else "unset")
+                       else "none" if prev_state in ("none", "legacy")
+                       else "unset")
                 print(f"Session now on '{p.name}' (was: {was}). "
                       f"Last-activated default updated — new sessions "
                       f"will start on '{p.name}'.")
@@ -1955,6 +1967,23 @@ def _print_layer_header(mgr, name: str) -> None:
         pass
 
 
+def _legacy_binding_note() -> str | None:
+    """Migration hint when THIS session's binding names a project legal
+    only under the old name grammar, else None. Decoration only —
+    resolution already degraded the binding to projectless."""
+    try:
+        from .sessions import session_binding
+        name, state = session_binding()
+    except Exception:  # noqa: BLE001 — note is decoration, never fatal
+        return None
+    if state != "legacy" or not name:
+        return None
+    return (f"Session binding names legacy project "
+            f"'{sanitise_for_terminal(name, max_len=80)}' — no longer a "
+            f"valid name; this session runs projectless. Rename or "
+            f"delete it via 'raptor project rename|delete'.")
+
+
 def _print_sessions(mgr) -> None:
     """Live/stale/foreign session rows with their bindings."""
     from core.project import sessions as _sessions
@@ -1967,7 +1996,8 @@ def _print_sessions(mgr) -> None:
     for pid in sorted(entries):
         fields = entries[pid]
         state = fields.get("_state", "live")
-        project = fields.get("project") or "?"
+        raw_project = str(fields.get("project") or "?")
+        project = raw_project
         if project == "-":
             project = "(none — explicitly cleared)"
         label = {"advisory": "advisory (v1)",
@@ -1976,8 +2006,17 @@ def _print_sessions(mgr) -> None:
                  "live": "live"}.get(state, state)
         since = sanitise_for_terminal(
             str(fields.get("since") or "unknown"), max_len=32)
-        project = sanitise_for_terminal(str(project), max_len=40)
+        project = sanitise_for_terminal(project, max_len=40)
         print(f"{pid:>9}  {label:<22} {project:<24} {since}")
+        if _sessions.is_legacy_project_name(raw_project):
+            # Pre-tightening binding: readers degrade it to
+            # projectless (see session_binding) — tell the operator
+            # instead of letting the row look healthy.
+            print(f"{'':>9}  note: binding names legacy project "
+                  f"'{sanitise_for_terminal(raw_project, max_len=80)}' "
+                  f"— no longer a valid name; the session runs "
+                  f"projectless. Rename or delete it via "
+                  f"'raptor project rename|delete'.")
     bookmark = _read_bookmark(mgr)
     print(f"Last-activated default: {bookmark or '(none)'}")
 

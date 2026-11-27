@@ -121,7 +121,10 @@ def get_active_name():
         if _expired_light(name):
             return None
         return name
-    if state == "none":
+    if state in ("none", "legacy"):
+        # "legacy": binding names a project legal only under the old
+        # name grammar — authoritatively projectless, same answer
+        # get_active() gives (the chokepoints must agree).
         return None
     try:
         target = os.readlink(_active_link())

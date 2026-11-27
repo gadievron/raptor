@@ -376,3 +376,29 @@ def test_help_does_not_read_hook_input_or_state(flag, monkeypatch, capsys):
     assert 'usage:' in output.out
     assert 'Examples:' in output.out
     assert output.err == ''
+
+
+def test_legacy_binding_titles_as_projectless_not_silence(tmp_path, monkeypatch):
+    monkeypatch.setenv('RAPTOR_REGISTRY_HOME', str(tmp_path / 'registry'))
+    pid = os.getpid()
+    monkeypatch.setattr(sessions, '_comm', lambda process: 'claude')
+    sessions.record_session('alpha', pid=pid, token='a' * 64)
+    entry_path = sessions._sessions_dir() / str(pid)
+    entry = sessions._parse_entry(entry_path)
+    monkeypatch.setenv(sessions.ENV_SESSION_PID, str(pid))
+    monkeypatch.setenv(sessions.ENV_SESSION_TOKEN, entry['token'])
+    # Rewrite the binding to a name legal only under the OLD grammar
+    # (trailing dot). session_binding classifies it "legacy": projectless
+    # with the name kept for display — the title hook must behave exactly
+    # like bound-to-none, not go silent.
+    legacy = 'alpha.'
+    assert sessions.is_legacy_project_name(legacy)
+    lines = entry_path.read_text().splitlines()
+    entry_path.write_text('\n'.join(
+        f'project={legacy}' if line.startswith('project=') else line
+        for line in lines) + '\n')
+    assert sessions.session_binding(pid) == (legacy, 'legacy')
+    monkeypatch.setenv('RAPTOR_SESSION_TARGET', '/targets/standalone')
+    assert hook._context() == (None, '/targets/standalone')
+    monkeypatch.delenv('RAPTOR_SESSION_TARGET')
+    assert hook._context() == (None, None)
