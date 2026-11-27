@@ -21,6 +21,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import ModuleType
 
 from typing import TypedDict
 
@@ -2244,48 +2245,98 @@ class DatabaseManager:
                     cached=False,
                 )
             held.close()
-            result = sandbox_run(
-                temporary_command(cmd),  # type: ignore[arg-type]
-                block_network=True,
-                cwd=working_dir,
-                env=env,
-                env_caller_filtered=True,
-                # target/output engage the mount namespace: without them
-                # sanitise_host_fingerprint silently no-ops (identity
-                # surfaces stay host-real) and the seccomp filter keeps
-                # AF_UNIX blocked, which kills Python >= 3.14 extractors
-                # (multiprocessing forkserver needs a unix socket).
-                # target= is always a READ-ONLY mount. Traced builds
-                # instead carry the source as an out-of-view writable
-                # bind via writable_paths above; output= is the PER-CALL
-                # workspace (DB target, CodeQL lock files, sandbox HOME)
-                # — never the shared cache slot, so a traced build can't
-                # touch canonical DBs, metadata or sibling stagings.
-                target=None if executes_build else str(repo_path),
-                output=str(staging_work),
-                tool_paths=sandbox_tool_paths,
-                **build_policy,
-                # Audit JSONL home (only used when --audit is engaged).
-                # Traced builds use an isolated HOME and a DB-output
-                # CodeQL cache, without the operator's configuration.
-                audit_run_dir=str(audit_run_dir) if audit_run_dir else None,
-                capture_output=True,
-                text=True,
-                timeout=RaptorConfig.CODEQL_TIMEOUT,
-                # `codeql database create` invokes the target repo's
-                # autobuild / --command build, which is where target-
-                # supplied build scripts execute. Sanitise identity
-                # surfaces so anti-analysis-aware build tooling can't
-                # detect the analysis environment.
-                #
-                # cpu_count=HOST_CPU_COUNT preserves real parallelism
-                # for Make/Maven/Gradle — the default cpu_count=4 would
-                # serialise to 4 threads regardless of host count and
-                # cause ~8x build slowdown on 32-core CI hosts,
-                # pushing long builds past CODEQL_TIMEOUT.
-                sanitise_host_fingerprint=True,
-                cpu_count=HOST_CPU_COUNT,
-            )
+            # Traced/autobuild creates run repo-controlled build
+            # scripts with a write grant on the repo tree
+            # (writable_paths above). A binary that build writes — or
+            # overwrites in place — is git-untracked, so a LATER run's
+            # binary-oracle auto-detect would grant it full
+            # absent-suppression authority (the consent marker
+            # authorizes executing the build, not evidence authority).
+            # Snapshot the oracle's candidate universe around the
+            # build and persist the content delta to the build ledger;
+            # auto-detect consults it cross-run. Post-capture sits in
+            # a finally: failed and timed-out builds may still have
+            # written binaries before dying.
+            _build_ledger: ModuleType | None = None
+            _ledger_pre: dict[str, str] | None = None
+            if executes_build:
+                from core.analysis import binary_build_ledger
+                _build_ledger = binary_build_ledger
+                _ledger_pre = binary_build_ledger.snapshot_repo_binaries(
+                    repo_path)
+            try:
+                result = sandbox_run(
+                    temporary_command(cmd),  # type: ignore[arg-type]
+                    block_network=True,
+                    cwd=working_dir,
+                    env=env,
+                    env_caller_filtered=True,
+                    # target/output engage the mount namespace: without
+                    # them sanitise_host_fingerprint silently no-ops
+                    # (identity surfaces stay host-real) and the seccomp
+                    # filter keeps AF_UNIX blocked, which kills Python
+                    # >= 3.14 extractors (multiprocessing forkserver
+                    # needs a unix socket).
+                    # target= is always a READ-ONLY mount. Traced builds
+                    # instead carry the source as an out-of-view
+                    # writable bind via writable_paths above; output= is
+                    # the PER-CALL workspace (DB target, CodeQL lock
+                    # files, sandbox HOME) — never the shared cache
+                    # slot, so a traced build can't touch canonical DBs,
+                    # metadata or sibling stagings.
+                    target=None if executes_build else str(repo_path),
+                    output=str(staging_work),
+                    tool_paths=sandbox_tool_paths,
+                    **build_policy,
+                    # Audit JSONL home (only used when --audit is
+                    # engaged). Traced builds use an isolated HOME and a
+                    # DB-output CodeQL cache, without the operator's
+                    # configuration.
+                    audit_run_dir=str(audit_run_dir) if audit_run_dir else None,
+                    capture_output=True,
+                    text=True,
+                    timeout=RaptorConfig.CODEQL_TIMEOUT,
+                    # `codeql database create` invokes the target repo's
+                    # autobuild / --command build, which is where
+                    # target-supplied build scripts execute. Sanitise
+                    # identity surfaces so anti-analysis-aware build
+                    # tooling can't detect the analysis environment.
+                    #
+                    # cpu_count=HOST_CPU_COUNT preserves real
+                    # parallelism for Make/Maven/Gradle — the default
+                    # cpu_count=4 would serialise to 4 threads
+                    # regardless of host count and cause ~8x build
+                    # slowdown on 32-core CI hosts, pushing long builds
+                    # past CODEQL_TIMEOUT.
+                    sanitise_host_fingerprint=True,
+                    cpu_count=HOST_CPU_COUNT,
+                )
+            finally:
+                # Orphaned-build-child window: a build descendant that
+                # outlived sandbox_run could write a binary AFTER the
+                # post-build snapshot below, dodging the ledger. The
+                # sandbox already closes that on both containment
+                # tiers before run() returns — the mount-ns tier runs
+                # the payload under unshare(CLONE_NEWPID) (namespace
+                # cascade: no descendant survives the direct child),
+                # and the Landlock-only tier's PR_SET_CHILD_SUBREAPER
+                # sweeper SIGKILL-sweeps orphans at teardown
+                # (core/sandbox/preexec.py), with run() waiting on the
+                # sweeper. Residual: the bare-subprocess degrade tier,
+                # and a straggler surviving the sweeper's grace
+                # deadline. A binary written in that window is
+                # untracked and PERSISTS past this capture: the next
+                # run's pre-build snapshot then sees it as an
+                # untracked pre-carrier and exempts it, so the miss is
+                # durable, not self-healing. Accepted: those tiers
+                # already concede process-tree containment itself, and
+                # the ledger is a cross-run narrowing, not the trust
+                # boundary.
+                if _build_ledger is not None:
+                    _build_ledger.record_build_delta(
+                        repo_path, _ledger_pre,
+                        _build_ledger.snapshot_repo_binaries(repo_path),
+                    )
 
             success = result.returncode == 0
 

@@ -166,46 +166,7 @@ def detect_binaries(
     if not target_root.is_dir():
         return []
 
-    raw: list[_Candidate] = []
-    # Expand the literal build-dir list with Rust cross-target globs
-    # (``target/x86_64-unknown-linux-gnu/release`` etc.). Glob is
-    # cheap — single readdir on ``target/`` — and avoids enumerating
-    # every Rust triple in the literal list.
-    expanded_dirs: list[str] = list(_BUILD_DIRS)
-    for pattern in _RUST_TARGET_GLOBS:
-        for hit in target_root.glob(pattern):
-            if hit.is_dir():
-                rel = hit.relative_to(target_root)
-                expanded_dirs.append(str(rel))
-
-    # Search the build dirs AND the target root itself at top-level
-    # only — autotools-style builds (zlib, libsodium) emit binaries
-    # in the source tree, not in a separate ``build/``. Top-level-
-    # only scan keeps the walk cheap and avoids picking up test
-    # binaries scattered through the tree.
-    for build_dir_rel in (".", *expanded_dirs):
-        build_dir = (target_root if build_dir_rel == "."
-                     else target_root / build_dir_rel)
-        if not build_dir.is_dir():
-            continue
-        # Top-level of target_root: only direct children (no recursion).
-        # Deeper build dirs: walk recursively up to _MAX_WALK_DEPTH.
-        walker = (build_dir.iterdir() if build_dir_rel == "."
-                  else _walk_capped(build_dir))
-        for p in walker:
-            if not p.is_file():
-                continue
-            cand = _classify_candidate(p)
-            if cand is None:
-                continue
-            # Cheap 4-byte magic check: name/mode heuristics let
-            # non-ELF files through (+x scripts without a known
-            # suffix, ``lib*.so`` GNU-ld linker scripts). Rejecting
-            # them here avoids a readelf subprocess per text file AND
-            # keeps them out of the provenance-gate warning below.
-            if not _is_elf(cand.path):
-                continue
-            raw.append(cand)
+    raw: list[_Candidate] = _elf_candidates(target_root)
 
     # Provenance / trust gate BEFORE the DWARF probe: a repo-committed
     # (possibly attacker-planted) ELF should never reach readelf's
@@ -243,6 +204,87 @@ def detect_binaries(
         0 if c.kind == "library" else 1, str(c.path),
     ))
     return [c.path for c in deduped[:max_results]]
+
+
+def _elf_candidates(target_root: Path) -> list[_Candidate]:
+    """Enumerate every ELF candidate in the auto-detect search
+    universe (build dirs + Rust cross-target globs + the source root's
+    top level), pre-provenance and pre-DWARF-probe. Shared by
+    :func:`detect_binaries` and :func:`elf_candidate_paths` so the
+    traced-build ledger snapshots the SAME universe auto-detect will
+    consult — a divergence here would let a build-written binary land
+    outside the capture while inside the detection.
+    """
+    raw: list[_Candidate] = []
+    # Expand the literal build-dir list with Rust cross-target globs
+    # (``target/x86_64-unknown-linux-gnu/release`` etc.). Glob is
+    # cheap — single readdir on ``target/`` — and avoids enumerating
+    # every Rust triple in the literal list.
+    expanded_dirs: list[str] = list(_BUILD_DIRS)
+    for pattern in _RUST_TARGET_GLOBS:
+        for hit in target_root.glob(pattern):
+            if hit.is_dir():
+                rel = hit.relative_to(target_root)
+                expanded_dirs.append(str(rel))
+
+    # Search the build dirs AND the target root itself at top-level
+    # only — autotools-style builds (zlib, libsodium) emit binaries
+    # in the source tree, not in a separate ``build/``. Top-level-
+    # only scan keeps the walk cheap and avoids picking up test
+    # binaries scattered through the tree.
+    for build_dir_rel in (".", *expanded_dirs):
+        build_dir = (target_root if build_dir_rel == "."
+                     else target_root / build_dir_rel)
+        if not build_dir.is_dir():
+            continue
+        # Top-level of target_root: only direct children (no recursion).
+        # Deeper build dirs: walk recursively up to _MAX_WALK_DEPTH.
+        walker = (build_dir.iterdir() if build_dir_rel == "."
+                  else _walk_capped(build_dir))
+        for p in walker:
+            if not p.is_file():
+                continue
+            cand = _classify_candidate(p)
+            if cand is None:
+                continue
+            # Cheap 4-byte magic check: name/mode heuristics let
+            # non-ELF files through (+x scripts without a known
+            # suffix, ``lib*.so`` GNU-ld linker scripts). Rejecting
+            # them here avoids a readelf subprocess per text file AND
+            # keeps them out of the provenance-gate warning in the
+            # CLI consumer.
+            if not _is_elf(cand.path):
+                continue
+            raw.append(cand)
+    return raw
+
+
+def elf_candidate_paths(target_root: Path) -> list[Path] | None:
+    """The auto-detect candidate universe as raw paths — every ELF the
+    walk would consider, with NO DWARF probe, provenance filter,
+    target-kind filter, or result cap applied.
+
+    The traced-build ledger (:mod:`core.analysis.binary_build_ledger`)
+    snapshots this around build execution: filters would open capture
+    gaps (the next run's target kind or provenance verdict is unknown
+    at capture time), and the DWARF probe costs one sandboxed readelf
+    per file for a question content hashing doesn't ask.
+
+    Returns ``None`` when the universe cannot be enumerated (the
+    ledger then records capture-incomplete, fail-closed); an existing
+    but empty universe is ``[]``.
+    """
+    target_root = Path(target_root)
+    if not target_root.is_dir():
+        return []
+    try:
+        return [c.path for c in _elf_candidates(target_root)]
+    except OSError:
+        logger.warning(
+            "binary_oracle_autodetect: candidate enumeration failed "
+            "under %s", target_root, exc_info=True,
+        )
+        return None
 
 
 def _walk_capped(root: Path):

@@ -645,6 +645,59 @@ def _envbuild_out_dir() -> Path:
     return tmp
 
 
+def _flag_build_produced(
+    repo: Path, candidates: list[Path], no_suppress_out: list,
+) -> None:
+    """Withhold ``absent``-suppression authority from auto-detected
+    *candidates* a traced build produced.
+
+    Traced builds run repo-controlled scripts with a write grant on
+    the repo tree; a binary they write (or overwrite) is git-untracked
+    and would otherwise pass the locally-built provenance filter with
+    full suppression authority on the next run. The persistent build
+    ledger (:mod:`core.analysis.binary_build_ledger`) records the
+    content hashes those builds produced; matching candidates ride the
+    existing no-suppression channel — the same downgrade the stripped-
+    binary and guessed-env-build paths use, so verdicts still enrich
+    at hint tier but ``absent`` never hard-suppresses off them, and
+    consumers need no new states. An unverifiable ledger flags EVERY
+    candidate (fail-closed, never an error); an absent ledger flags
+    none (no traced build captured — the honest migration window:
+    binaries planted before the ledger existed are invisible to it).
+    *candidates* excludes operator-declared paths — ``--binary`` /
+    ``/project binary add`` keep full authority even when
+    ledger-listed (operator ownership, same doctrine as the
+    provenance-drop consent).
+    """
+    if not candidates:
+        return
+    from core.analysis.binary_build_ledger import (
+        build_produced_candidates,
+    )
+    flagged, ledger_reason = build_produced_candidates(repo, candidates)
+    if not flagged:
+        return
+    no_suppress_out.extend(str(p) for p in flagged)
+    why = (
+        f"the build ledger for this target cannot be verified "
+        f"({ledger_reason}), so auto-detected binaries are unproven"
+        if ledger_reason else
+        "their content was produced by a traced build (repo-controlled "
+        "build scripts ran with a repo write grant)"
+    )
+    # Candidate names come from walking the scanned repo —
+    # attacker-chosen bytes; escape before logging.
+    logger.warning(
+        "binary-oracle: %d auto-detected binary(s) demoted — %s. "
+        "Verdicts still enrich, but absent will not suppress off them. "
+        "Use --binary <path> to assert trust for a run, or "
+        "/project binary add <path> to persist: %s",
+        len(flagged), why,
+        ", ".join(escape_nonprintable(str(p)) for p in flagged[:3])
+        + ("..." if len(flagged) > 3 else ""),
+    )
+
+
 def resolve_binary_paths(args, repo: Path, target_kind: str,
                          parser=None,
                          no_suppress_out: list | None = None,
@@ -691,6 +744,14 @@ def resolve_binary_paths(args, repo: Path, target_kind: str,
     explicit_auto = bool(getattr(args, "binary_auto", False))
     opted_out = bool(getattr(args, "no_binary_oracle", False))
 
+    # Normalise the out-channels so the downgrade bookkeeping below is
+    # unconditional — a caller that doesn't collect them must not also
+    # disable the checks that feed them.
+    if no_suppress_out is None:
+        no_suppress_out = []
+    if declared_out is None:
+        declared_out = []
+
     if opted_out:
         if explicit_binary or explicit_auto:
             logger.warning(
@@ -711,9 +772,12 @@ def resolve_binary_paths(args, repo: Path, target_kind: str,
     # (--binary-auto) OR when no --binary was supplied (default-on).
     # Default-on uses the softer "nothing found" message.
     should_autodetect = explicit_auto or not explicit_binary
+    auto_detected: list[Path] = []
     if should_autodetect:
         for p in _autodetect_binaries(
                 repo, target_kind, explicit=explicit_auto):
+            if str(p) not in seen:
+                auto_detected.append(p)
             seen.setdefault(str(p), True)
 
     _out = getattr(args, "out", None)
@@ -742,6 +806,22 @@ def resolve_binary_paths(args, repo: Path, target_kind: str,
     if proj_name and added:
         print(f"--project '{proj_name}' contributes {added} binary(s) "
               f"from /project binary store.")
+
+    # Traced-build provenance gate: an auto-detected binary whose
+    # content a traced build produced (per the persistent build
+    # ledger) loses absent-suppression authority — the build trust
+    # marker authorized executing the build, not evidence authority.
+    # Runs AFTER the project layer so an operator assertion (explicit
+    # --binary, /project binary add) wins even for ledger-listed
+    # content: both land in declared_out, and declared paths are
+    # exempt here.
+    if auto_detected:
+        _declared = set(declared_out)
+        _flag_build_produced(
+            repo,
+            [p for p in auto_detected if str(p) not in _declared],
+            no_suppress_out,
+        )
 
     if not seen:
         # NOTHING resolved from any source: build a debug binary on

@@ -105,6 +105,21 @@ hard-suppress); /validate's demoter clamps attack-path proximity; /understand
   silently steer `absent` verdicts toward suppressing real findings.
   Operator can bypass via explicit `--binary <path>` when they know a
   tracked binary is trustworthy.
+- Traced-build ledger: traced/autobuild CodeQL creates run repo-controlled
+  build scripts with a write grant on the repo tree, so a hostile build can
+  write (or overwrite in place) a git-untracked debug ELF that the next run's
+  auto-detect would otherwise trust as locally-built. The build seam snapshots
+  auto-detect's candidate universe around every traced build and persists the
+  content-hash delta to a per-repo ledger under RAPTOR's own data dir
+  (`$XDG_DATA_HOME/raptor/build-ledger/`, outside every build write grant).
+  Auto-detect consults it: a hash-matched candidate is demoted — verdicts
+  still enrich, but `absent` never hard-suppresses off it — with a loud
+  accounting line naming the remedies (`--binary <path>` to assert trust for
+  a run, `/project binary add <path>` to persist). Explicit operator
+  assertions always keep full authority even when ledger-listed. A corrupt or
+  unverifiable ledger fail-closes suppression for all auto-detected
+  candidates (never errors the run); an absent ledger means no traced build
+  has been captured for the repo and behaviour is unchanged.
 - Source-coverage floor (≥5% of project source names matched, min 3 matched,
   kicks in at ≥8 project names) — a planted ELF unrelated to source gets
   dropped with a loud warning rather than driving every source function to

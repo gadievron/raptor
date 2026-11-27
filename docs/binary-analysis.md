@@ -399,6 +399,29 @@ ahead of the DWARF probe, non-ELF candidates are rejected on the magic
 bytes, and the probe itself runs inside the sandbox -- a planted binary
 is never parsed at all.
 
+### Traced-Build Ledger
+
+Git provenance cannot see binaries written by the build itself: traced
+and autobuild CodeQL database creation runs the repo's own build
+scripts with a write grant on the repo tree, and anything those scripts
+write (or overwrite in place) is git-untracked. The build seam
+therefore snapshots the auto-detect candidate universe around every
+traced build and records the content-hash delta in a per-repo ledger
+under RAPTOR's own data directory
+(`$XDG_DATA_HOME/raptor/build-ledger/` — outside every build write
+grant). Auto-detect consults the ledger on later runs: a candidate
+whose content hash matches is demoted with a loud accounting line —
+its verdicts still enrich, but `absent` never hard-suppresses off it.
+The build trust marker consented to executing the build, not to the
+build's outputs becoming suppression evidence.
+
+Explicit operator assertions win: a ledger-listed binary passed via
+`--binary <path>` or persisted with `/project binary add` keeps full
+authority. A corrupt or unverifiable ledger fail-closes suppression
+for every auto-detected candidate (the run itself never errors); an
+absent ledger means no traced build has been captured for the repo and
+behaviour is unchanged.
+
 ### Source-Coverage Floor
 
 A source-coverage floor (at least 5% of project source names matched,
