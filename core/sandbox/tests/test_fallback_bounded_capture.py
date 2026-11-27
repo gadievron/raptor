@@ -245,6 +245,42 @@ def test_payload_that_looks_like_a_marker_is_still_treated_as_payload(runner):
     assert result.stdout == payload[:1] + payload
 
 
+def test_clipped_capture_records_out_of_band_truncation_flags(runner):
+    """The transport fact "this stream was clipped" travels on the
+    result, not in the data: trusted consumers read the flag, never the
+    (forgeable) in-band marker."""
+    result = runner.execute(FLOOD, cap=97)
+    assert capture.capture_truncated(result) == (True, True)
+
+
+def test_unclipped_forged_marker_leaves_truncation_flags_unset(runner):
+    """A target printing the exact marker shape as its own FINAL output
+    keeps its stream verbatim (display parity) and does NOT read as a
+    clip: only the clipping code sets the out-of-band flag."""
+    payload = b"evidence\n[sandbox: stdout capture truncated at 1 bytes]\n"
+    result = runner.execute(f"import os\nos.write(1,{payload!r})", cap=4096)
+    assert result.stdout == payload
+    assert capture.capture_truncated(result) == (False, False)
+
+
+def test_final_result_clamp_records_truncation_out_of_band():
+    result = subprocess.CompletedProcess(["owned"], 0, b"x" * 100, b"ok")
+    ctx._apply_capture_ceiling(result, 10)
+    assert capture.capture_truncated(result) == (True, False)
+    # Idempotent reapply keeps the recorded loss (sticky in the loss
+    # direction only).
+    ctx._apply_capture_ceiling(result, 10)
+    assert capture.capture_truncated(result) == (True, False)
+
+
+def test_marker_shaped_value_within_the_clamp_bound_sets_no_flag():
+    payload = b"evidence\n[sandbox: stdout capture truncated at 4096 bytes]\n"
+    result = subprocess.CompletedProcess(["owned"], 0, payload, None)
+    ctx._apply_capture_ceiling(result, 4096)
+    assert result.stdout == payload
+    assert capture.capture_truncated(result) == (False, False)
+
+
 @requires_landlock
 @pytest.mark.parametrize("cap,text", [(0, False), (97, False), (3, True)])
 def test_real_landlock_fallback_uses_the_bounded_owner(runner, monkeypatch, cap, text):

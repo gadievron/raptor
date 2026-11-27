@@ -518,6 +518,10 @@ def _spawn_frida_cli(cmd: list[str], env: dict[str, str], timeout: int) -> tuple
     try:
         capture = BoundedCommunicator(_MAX_LOG_BYTES)
         capture.attach(proc)
+        # No clip-fact consumer here (a clipped session log is simply
+        # parsed as far as it goes). A future consumer must read
+        # capture.truncated_flags() — the in-band marker is
+        # display-only and target-forgeable.
         stdout, _stderr = capture.communicate(timeout=timeout)
     finally:
         if proc.poll() is None:

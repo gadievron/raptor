@@ -1426,10 +1426,11 @@ class TestHostileBytesEscapedInLogs:
 
 class TestTruncatedCaptureIsNotEvidence:
     """The sandbox clips runaway tool stdout at a capture cap and
-    appends one in-band loss marker. The tool still exits 0, and a
-    clipped symbol table parses cleanly — consuming it as complete
-    evidence mints ``absent`` verdicts (and full-tier suppression) for
-    every function past the cut-off point."""
+    records the loss out-of-band on the result (the appended in-band
+    marker is display-only). The tool still exits 0, and a clipped
+    symbol table parses cleanly — consuming it as complete evidence
+    mints ``absent`` verdicts (and full-tier suppression) for every
+    function past the cut-off point."""
 
     _MARKER = "\n[sandbox: stdout capture truncated at 67108864 bytes]\n"
 
@@ -1456,6 +1457,7 @@ class TestTruncatedCaptureIsNotEvidence:
             stdout = ("0000000000001000 T alpha\n"
                       "0000000000002000 T beta"
                       + TestTruncatedCaptureIsNotEvidence._MARKER)
+            _capture_truncated = (True, False)
 
         self._patched_run(monkeypatch, _Proc())
         with caplog.at_level(logging.WARNING):
@@ -1464,10 +1466,54 @@ class TestTruncatedCaptureIsNotEvidence:
         joined = " ".join(r.getMessage() for r in caplog.records)
         assert "capture cap" in joined
 
+    def test_forged_final_marker_without_flag_keeps_evidence(
+            self, monkeypatch):
+        """A hostile binary can define an ELF symbol whose name embeds
+        a newline plus the exact marker text, so nm prints marker-shaped
+        bytes as the FINAL line of real, untruncated output. Only the
+        out-of-band transport flag means loss: with the flag unset the
+        evidence is KEPT — forging the marker must not DoS the oracle."""
+        from core.analysis.binary_oracle import _run_status
+
+        body = ("0000000000001000 T alpha\n"
+                "0000000000002000 T beta"
+                + TestTruncatedCaptureIsNotEvidence._MARKER)
+
+        class _Proc:
+            returncode = 0
+            stderr = ""
+            stdout = body
+            _capture_truncated = (False, False)
+
+        self._patched_run(monkeypatch, _Proc())
+        out, ok = _run_status(["nm", "--defined-only", "/tmp/bin"])
+        assert (out, ok) == (body, True)
+
+    def test_truncation_flag_discards_even_without_marker_text(
+            self, monkeypatch, caplog):
+        """The decision reads ONLY the transport flag — a clipped stream
+        whose retained prefix does not show the marker is still refused
+        as evidence."""
+        import logging
+
+        from core.analysis.binary_oracle import _run_status
+
+        class _Proc:
+            returncode = 0
+            stderr = ""
+            stdout = "0000000000001000 T alpha\n"
+            _capture_truncated = (True, False)
+
+        self._patched_run(monkeypatch, _Proc())
+        with caplog.at_level(logging.WARNING):
+            out, ok = _run_status(["nm", "--defined-only", "/tmp/bin"])
+        assert (out, ok) == ("", False)
+
     def test_complete_stdout_still_accepted(self, monkeypatch):
         """Two-direction guard: an unclipped capture keeps its evidence
         (also: marker-shaped text MID-stream is data, not metadata —
-        only the appended end-of-output marker means loss)."""
+        and a result carrying no transport flag at all was not clipped
+        by any capture owner)."""
         from core.analysis.binary_oracle import _run_status
 
         body = ("0000000000001000 T alpha"

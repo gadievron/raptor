@@ -81,6 +81,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
 
 from . import _pathpin, state
+from ._capture import record_truncation as _record_truncation
 from ._exec_signals import restore_exec_signals
 from ._stdio import preserve_output_sources as _preserve_output_sources
 from ._stdio import preserve_stdin_source as _preserve_stdin_source
@@ -4959,4 +4960,10 @@ def run_sandboxed(
         # The parent can decode the retained prefix using its selected codec
         # before formatting loss, without interpreting target-printed markers.
         cp._capture_encoding_limits = (_capture_cap, _truncated[1], _truncated[2])  # type: ignore[attr-defined]
+    if _capture_any:
+        # Out-of-band transport fact for trusted consumers: the appended
+        # in-band marker is display-only — target output can imitate its
+        # final-line shape (e.g. an ELF symbol name echoed by nm), so no
+        # decision may be parsed from the data stream.
+        _record_truncation(cp, stdout=_truncated[1], stderr=_truncated[2])
     return cp

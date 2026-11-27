@@ -46,7 +46,12 @@ from ._fake_home import prepare_home as _prepare_fake_home
 from ._pathpin import canonical_bind_path
 from . import seccomp as _seccomp
 from . import state
-from ._capture import BoundedCommunicator, decode_captured_result, limit_result
+from ._capture import (
+    BoundedCommunicator,
+    decode_captured_result,
+    limit_result,
+    record_truncation,
+)
 
 # mount.py retained for its standalone tests; no longer imported from
 # context — mount-ns goes through core.sandbox._spawn / mount_ns.
@@ -555,6 +560,8 @@ def _run_teardown_first_timeout(
         result = subprocess.CompletedProcess(cmd, proc.returncode, out, err)
         if bounded is not None:
             setattr(result, "_capture_limit_snapshot", (bounded.cap, out, err))
+            clipped_out, clipped_err = bounded.truncated_flags()
+            record_truncation(result, stdout=clipped_out, stderr=clipped_err)
         if check:
             result.check_returncode()
         _close_teardown_streams(proc)

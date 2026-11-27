@@ -127,15 +127,6 @@ def _run(argv: list[str], timeout: int = 60,
 # accumulating unbounded hostile-ELF tool output in memory.
 _INSPECT_CAPTURE_BYTES = 64 * 1024 * 1024
 
-# The sandbox annotates a clipped capture with one explicit in-band loss
-# marker appended after the retained prefix
-# (``core.sandbox._capture.clipped_output``; the namespaced native lane
-# emits the identical byte shape). Anchored at end-of-output: the marker
-# is always the final thing appended to a clipped stream.
-_TRUNCATED_STDOUT = re.compile(
-    r"\n\[sandbox: stdout capture truncated at \d+ bytes\]\n\Z")
-
-
 def _run_status(argv: list[str], timeout: int = 60,
                 binary: Path | str | None = None) -> tuple[str, bool]:
     """Like :func:`_run` but also reports whether the tool COMPLETED
@@ -145,6 +136,7 @@ def _run_status(argv: list[str], timeout: int = 60,
     plain-``nm`` fallback) can distinguish the two."""
     # Lazy import — keep the classifier independently importable in
     # unit tests that stub the sandbox module.
+    from core.sandbox import capture_truncated
     from core.sandbox import run as _sandbox_run
     from core.binary._inspection_policy import inspection_command, inspection_options
     from core.security.env_sanitisation import subprocess_tmpdir
@@ -189,13 +181,19 @@ def _run_status(argv: list[str], timeout: int = 60,
             escape_nonprintable((proc.stderr or "")[:200]))
         return "", False
     stdout = proc.stdout or ""
-    if _TRUNCATED_STDOUT.search(stdout):
+    if capture_truncated(proc)[0]:
         # rc==0 with a clipped capture: the TOOL completed, but the
         # evidence stream did not. A clipped symbol table / DWARF dump
         # parses cleanly, so consuming it as complete would mint
         # verdicts from partial evidence — a function past the cut-off
         # point looks ``absent``. Same treatment as the non-zero-rc
         # partial-output path above: no evidence from this tool.
+        # The clip fact is read out-of-band (the sandbox result's
+        # transport flag), never from the stream: the in-band marker is
+        # display-only, and a hostile ELF can print marker-shaped bytes
+        # as its own final line (a symbol name embedding a newline plus
+        # the marker text, echoed by nm) to forge "truncated" and DoS
+        # real evidence.
         logger.warning(
             "binary_oracle: %s stdout hit the sandbox capture cap on "
             "%s — discarding partial output",

@@ -58,7 +58,7 @@ from core.git.clone import (
     safe_git_readonly_command,
 )
 from core.json import dumps_artifact, load_json
-from core.sandbox._capture import BoundedCommunicator
+from core.sandbox._capture import BoundedCommunicator, record_truncation
 
 #: Shipped pack location (the taxonomy loads it at import).
 PACK_PATH = (
@@ -223,7 +223,13 @@ def _run_git(
         proc.kill()
         proc.wait()
         raise
-    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
+    result = subprocess.CompletedProcess(argv, proc.returncode, out, err)
+    # Clip facts ride the result OUT OF BAND (readable via
+    # core.sandbox.capture_truncated): the in-band marker is
+    # display-only, and the repo controls the stream it sits in.
+    out_t, err_t = capture.truncated_flags()
+    record_truncation(result, stdout=out_t, stderr=err_t)
+    return result
 
 
 def _validate_max_commits(max_commits: int) -> None:

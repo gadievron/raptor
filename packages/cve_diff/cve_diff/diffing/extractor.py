@@ -54,7 +54,7 @@ def _run_git_bounded(
     carries an explicit truncation marker. ``TimeoutExpired`` kills the
     child and propagates, matching ``subprocess.run`` semantics.
     """
-    from core.sandbox._capture import BoundedCommunicator
+    from core.sandbox._capture import BoundedCommunicator, record_truncation
 
     proc = subprocess.Popen(
         cmd,
@@ -70,7 +70,13 @@ def _run_git_bounded(
         proc.kill()
         proc.wait()
         raise
-    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+    result = subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+    # Clip facts ride the result OUT OF BAND (readable via
+    # core.sandbox.capture_truncated): the in-band marker is
+    # display-only, and the repo controls the stream it sits in.
+    out_t, err_t = capture.truncated_flags()
+    record_truncation(result, stdout=out_t, stderr=err_t)
+    return result
 
 
 def _slug_of(url: str) -> str | None:

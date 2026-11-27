@@ -89,6 +89,15 @@ def test_marker_looking_target_text_is_not_metadata(monkeypatch, tmp_path):
     text = _marker('stdout', 1)
     result = _execute(monkeypatch, tmp_path, encoding='utf-8', cap=100, stdout=text.encode())
     assert result.stdout == text
+    # A forged final-line marker is data; the out-of-band transport
+    # flags stay unset, so evidence consumers keep the stream.
+    assert _capture.capture_truncated(result) == (False, False)
+
+
+def test_truncation_flags_travel_out_of_band(monkeypatch, tmp_path):
+    result = _execute(monkeypatch, tmp_path, encoding='utf-8', cap=3,
+                      stdout='é🦕tail'.encode())
+    assert _capture.capture_truncated(result) == (True, False)
 
 
 def test_setup_status_remains_prior_to_codec(monkeypatch, tmp_path):
@@ -111,6 +120,22 @@ def test_native_metadata_uses_effective_cap_and_parent_loss_flags():
     assert len(writes) == 1
     expected = ast.parse('(_capture_cap, _truncated[1], _truncated[2])', mode='eval').body
     assert ast.dump(writes[0].value) == ast.dump(expected)
+
+
+def test_native_lane_records_out_of_band_truncation_flags():
+    """The native parent itself records the transport-clip facts (text
+    mode included — it has no _capture_encoding_limits handoff), from
+    its own loss flags, never from stream content."""
+    source = Path(__file__).parents[1] / '_spawn.py'
+    tree = ast.parse(source.read_text())
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Name)
+             and node.func.id == '_record_truncation']
+    assert len(calls) == 1
+    expected = ast.parse(
+        '_record_truncation(cp, stdout=_truncated[1], stderr=_truncated[2])',
+        mode='eval').body
+    assert ast.dump(calls[0]) == ast.dump(expected)
 
 
 @pytest.mark.parametrize('cap', [10, 1], ids=['complete', 'truncated'])

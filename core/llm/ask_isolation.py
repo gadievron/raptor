@@ -155,6 +155,10 @@ def run_isolated_ask(model: ModelConfig, prompt: str, system_prompt: str | None,
             receiver.close()
             send_catalog(sender, prepared.public)
             capture.attach(proc)
+            # No clip-fact consumer here: a clipped worker response
+            # fails decode_ask_response anyway. A future consumer must
+            # read capture.truncated_flags() — the in-band marker is
+            # display-only.
             out, _err = capture.communicate(input=request, timeout=model.timeout + 15)
             if proc.returncode != 0:
                 raise IsolatedAskError("Keyless ask worker failed; no direct-auth fallback was attempted")

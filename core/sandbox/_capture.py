@@ -6,17 +6,46 @@ import errno
 import os
 import subprocess
 import time
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
 
 from ._pipe_poll import ready_fds
 
 _CHUNK_SIZE = 65536
 
 
-def clipped_output(value, cap: int, label: str, *, truncated: bool = False):
-    """Keep a byte-bounded prefix and append one explicit loss marker."""
+def record_truncation(result: Any, *, stdout: bool = False,
+                      stderr: bool = False) -> None:
+    """OR transport-truncation facts for (stdout, stderr) onto *result*.
+
+    Sticky in the loss direction only: once an owner records that a
+    stream was clipped, no later clamp (which may see an already-bounded
+    value) can clear it.
+    """
+    prior = getattr(result, "_capture_truncated", (False, False))
+    result._capture_truncated = (bool(prior[0]) or bool(stdout),
+                                 bool(prior[1]) or bool(stderr))
+
+
+def capture_truncated(result: Any) -> tuple[bool, bool]:
+    """``(stdout_clipped, stderr_clipped)`` transport facts for *result*.
+
+    The in-band ``[sandbox: ... capture truncated at N bytes]`` marker is
+    display-only: a target can print marker-shaped bytes as its own final
+    output (e.g. via an ELF symbol name that nm echoes), so a trusted
+    decision must never parse the data stream for it. Only the clipping
+    code sets this flag; a result without it was not clipped by any
+    capture owner.
+    """
+    flags = getattr(result, "_capture_truncated", None)
+    if flags is None:
+        return (False, False)
+    return (bool(flags[0]), bool(flags[1]))
+
+
+def _clip(value, cap: int, label: str, *, truncated: bool = False):
+    """``(bounded value, data lost?)`` — prefix plus one loss marker."""
     if value is None:
-        return None
+        return None, False
     if isinstance(value, bytes):
         overflow = len(value) > cap
         prefix = value[:cap]
@@ -25,9 +54,16 @@ def clipped_output(value, cap: int, label: str, *, truncated: bool = False):
         overflow = len(value) > cap or len(raw) > cap
         prefix = raw[:cap].decode("utf-8", errors="ignore") if overflow else value
     if not (truncated or overflow):
-        return value
+        return value, False
     marker = f"\n[sandbox: {label} capture truncated at {cap} bytes]\n"
-    return prefix + (marker.encode("ascii") if isinstance(prefix, bytes) else marker)
+    clipped = prefix + (marker.encode("ascii") if isinstance(prefix, bytes)
+                        else marker)
+    return clipped, True
+
+
+def clipped_output(value, cap: int, label: str, *, truncated: bool = False):
+    """Keep a byte-bounded prefix and append one explicit loss marker."""
+    return _clip(value, cap, label, truncated=truncated)[0]
 
 
 def limit_result(result, cap: int) -> None:
@@ -47,8 +83,11 @@ def limit_result(result, cap: int) -> None:
     if (getattr(result, "_capture_limit_snapshot", None) == snapshot
             and within_bound(result.stdout, "stdout") and within_bound(result.stderr, "stderr")):
         return
+    lost = {}
     for label in ("stdout", "stderr"):
-        setattr(result, label, clipped_output(getattr(result, label), cap, label))
+        value, lost[label] = _clip(getattr(result, label), cap, label)
+        setattr(result, label, value)
+    record_truncation(result, stdout=lost["stdout"], stderr=lost["stderr"])
     result._capture_limit_snapshot = (cap, result.stdout, result.stderr)
 
 
@@ -95,6 +134,7 @@ def decode_captured_result(result, encoding: str, errors: str) -> None:
             value = clipped_output(value, cap, label, truncated=truncated)
         setattr(result, label, value)
     if limits is not None:
+        record_truncation(result, stdout=bool(limits[1]), stderr=bool(limits[2]))
         result._capture_limit_snapshot = (limits[0], result.stdout, result.stderr)
 
 
@@ -156,6 +196,13 @@ class BoundedCommunicator:
         room = max(0, self.cap - len(buf))
         buf.extend(chunk[:room])
         self._truncated[label] |= len(chunk) > room
+
+    def truncated_flags(self) -> tuple[bool, bool]:
+        """``(stdout, stderr)`` transport-clip facts; absent streams are
+        False. The result owner records these out-of-band
+        (:func:`record_truncation`) — the appended marker is display-only."""
+        return (self._truncated.get("stdout", False),
+                self._truncated.get("stderr", False))
 
     def outputs(self, *, text: bool = False):
         values: list[bytes | str | None] = []

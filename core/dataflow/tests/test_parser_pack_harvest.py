@@ -255,6 +255,11 @@ def test_run_git_retains_a_bounded_marked_prefix(
     assert "capture truncated at 4096 bytes" in proc.stdout
     # Bounded prefix + one marker line — nothing like the 200 kB blob.
     assert len(proc.stdout.encode("utf-8")) <= 4096 + 100
+    # The clip fact also rides the result OUT OF BAND: the in-band
+    # marker sits in a repo-controlled stream (forgeable), so any
+    # consumer of the fact must read it off the result object.
+    from core.sandbox import capture_truncated
+    assert capture_truncated(proc) == (True, False)
 
 
 def test_harvest_dispatch_requires_an_input():

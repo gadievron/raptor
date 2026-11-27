@@ -698,6 +698,7 @@ Related shared helpers (core.security):
 # Keeping them at the package level preserves backward compatibility while
 # the real definitions live in focused submodules.
 from . import state as _state
+from ._capture import capture_truncated
 from .cli import (
     add_cli_args,
     apply_cli_args,
@@ -812,6 +813,9 @@ __all__ = [
     # CLI surface
     "add_cli_args",
     "apply_cli_args",
+    # Out-of-band capture-truncation facts (the in-band marker is
+    # display-only; trusted decisions read this flag)
+    "capture_truncated",
     "check_child_unix_sockets_available",
     "check_landlock_available",
     "check_mount_available",

@@ -50,3 +50,26 @@ def test_extract_diff_produces_text(tmp_path: Path) -> None:
     assert "int a = 2;" in bundle.diff_text
     assert bundle.files_changed == 1
     assert bundle.bytes_size == len(bundle.diff_text.encode("utf-8"))
+
+
+def test_run_git_bounded_records_clip_out_of_band(tmp_path: Path) -> None:
+    # The clip fact must ride the CompletedProcess OUT OF BAND
+    # (core.sandbox.capture_truncated): the in-band marker sits in a
+    # repo-controlled stream, so a hostile repo can forge it — any
+    # consumer of the fact needs the flag on the result object.
+    from core.sandbox import capture_truncated
+    from cve_diff.diffing.extractor import _run_git_bounded
+
+    _before, after = _init_two_commit_repo(tmp_path)
+    clipped = _run_git_bounded(
+        ["git", "-C", str(tmp_path), "show", after],
+        timeout_s=15, cap_bytes=16,
+    )
+    assert clipped.returncode == 0
+    assert capture_truncated(clipped) == (True, False)
+    whole = _run_git_bounded(
+        ["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+        timeout_s=15, cap_bytes=1 << 20,
+    )
+    assert whole.returncode == 0
+    assert capture_truncated(whole) == (False, False)
