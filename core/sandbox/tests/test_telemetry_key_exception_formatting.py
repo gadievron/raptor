@@ -1,6 +1,7 @@
 """Telemetry key cleanup diagnostics preserve primary failures and descriptors."""
 
 import errno
+import fcntl
 import os
 from types import ModuleType
 
@@ -53,7 +54,13 @@ def install_faults(monkeypatch, request, owned, original, secondary, route):
     request.addfinalizer(finish)
 
     def open_fd(*args, **kwargs):
-        fd = os.open(*args, **kwargs)
+        raw = os.open(*args, **kwargs)
+        # Park the descriptor in a high, otherwise-unused range. The
+        # closed-descriptor probe (fstat -> EBADF) would otherwise race
+        # with lowest-free-fd reuse: emitting the cleanup warning can
+        # lazily open a log file that claims the just-closed number.
+        fd = fcntl.fcntl(raw, fcntl.F_DUPFD_CLOEXEC, 512)
+        os.close(raw)
         active.add(fd)
         opened.append(fd)
         return fd
