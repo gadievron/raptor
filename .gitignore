@@ -58,3 +58,10 @@ core/audit/corpus/replay-cases/
 # Corpus labels remain private; publish only the directory placeholder.
 /core/audit/corpus/labels/*
 !/core/audit/corpus/labels/.gitkeep
+
+# raptor-studio test venv (local only — not checked in)
+.venv-studio/
+packages/studio/__pycache__/
+packages/studio/**/__pycache__/
+packages/studio/.pytest_cache/
+packages/studio/**/.pytest_cache/
