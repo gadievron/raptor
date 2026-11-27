@@ -909,6 +909,7 @@ def run_rule(
                 _parse_results(partial_stdout, rule_name, nonce=nonce, diagnostics=errors)
                 + _parse_results(partial_stderr, rule_name, nonce=nonce, diagnostics=errors)
             )
+            _sort_parallel_matches(partial_matches, jobs)
             return SpatchResult(
                 rule=rule_name, rule_path=str(rule),
                 matches=partial_matches,
@@ -936,6 +937,7 @@ def run_rule(
             _parse_results(proc.stdout, rule_name, nonce=nonce, diagnostics=errors)
             + _parse_results(proc.stderr, rule_name, nonce=nonce, diagnostics=errors)
         )
+        _sort_parallel_matches(matches, jobs)
 
         # Engine failure must never read as verified silence: a
         # nonzero exit whose stderr matches none of the known
@@ -1514,6 +1516,26 @@ def _demux_batch_matches(
     if unassigned and diagnostics is not None:
         diagnostics.append(f"Coccinelle batch has {unassigned} match(es) with unassigned rule identities")
     return by_rule
+
+
+def _sort_parallel_matches(matches: list[SpatchMatch], jobs: int) -> None:
+    """Restore a stable match order after a ``--jobs`` run.
+
+    spatch's parmap workers interleave their COCCIRESULT lines
+    nondeterministically, so two identical ``--jobs N`` runs emit the
+    same match SET in different orders — which would flow through to
+    SARIF ``results[]`` ordering and break diff-based or golden-file
+    consumers. Serial runs keep spatch's native (input-file) order
+    untouched: it is already deterministic and downstream consumers
+    pin it.
+    """
+    if jobs and jobs > 1:
+        # The full dedup key: anything less (e.g. omitting message)
+        # leaves same-position multi-message matches ordered by the
+        # nondeterministic interleave sort stability preserves.
+        matches.sort(key=lambda m: (m.file, m.line, m.column,
+                                    m.line_end, m.column_end,
+                                    m.rule, m.message))
 
 
 def _dedup_matches(matches: list[SpatchMatch]) -> list[SpatchMatch]:

@@ -3891,3 +3891,30 @@ def test_mixed_exclusion_preserves_progress_indices(tmp_path, monkeypatch):
     assert seen == ['b_kept']
     assert [r.rule for r in results] == ['b_kept']
     assert progress == [(1, 2, 'b_kept')]
+
+
+def test_parallel_match_sort_is_deterministic_and_serial_order_untouched():
+    from packages.coccinelle.runner import _sort_parallel_matches
+
+    def mk(file, line, message='m'):
+        return SpatchMatch(file=file, line=line, rule='r', message=message)
+
+    interleave_a = [mk('b.c', 2), mk('a.c', 9), mk('a.c', 1, 'x'), mk('a.c', 1, 'w')]
+    interleave_b = list(reversed(interleave_a))
+
+    # Serial (jobs <= 1): spatch's native order is deterministic and
+    # downstream consumers pin it — the sort must not touch it.
+    untouched = list(interleave_a)
+    _sort_parallel_matches(untouched, 0)
+    assert untouched == interleave_a
+    _sort_parallel_matches(untouched, 1)
+    assert untouched == interleave_a
+
+    # Parallel: two interleavings of the same match set converge on one
+    # order, including the same-position multi-message pair.
+    _sort_parallel_matches(interleave_a, 8)
+    _sort_parallel_matches(interleave_b, 8)
+    assert interleave_a == interleave_b
+    assert [(m.file, m.line, m.message) for m in interleave_a] == [
+        ('a.c', 1, 'w'), ('a.c', 1, 'x'), ('a.c', 9, 'm'), ('b.c', 2, 'm'),
+    ]
