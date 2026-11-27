@@ -564,9 +564,10 @@ def _strip_rust_crate_hash(name: str) -> str:
 # projections nest two or three levels (``<<Foo as Trait>::Bar>::m``);
 # anything deeper is a degenerate or hostile linkage name. Bounding the
 # peel (a) keeps total work linear-ish instead of quadratic on
-# multi-megabyte names and (b) documents the stop condition — past the
-# cap the name is returned as-is, which at worst misaligns ONE lookup
-# form (an enrichment miss, never a crash).
+# multi-megabyte names and (b) documents the stop condition — at the
+# cap the loop stops and the name as peeled so far (not the original)
+# is returned, which at worst misaligns ONE lookup form (an enrichment
+# miss, never a crash).
 _MAX_IMPL_BLOCK_DEPTH = 32
 
 
