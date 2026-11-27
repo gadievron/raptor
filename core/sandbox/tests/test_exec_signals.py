@@ -15,6 +15,17 @@ pytestmark = [pytest.mark.slow, pytest.mark.linux_native, requires_landlock,
 COMMAND = ['/bin/sh', '-c', 'printf before; kill -s PIPE "$$"; printf after']
 
 
+def _target_stderr(result) -> bytes:
+    # The sandbox shares the captured stderr with its own environment
+    # diagnostics (e.g. the locked-/etc bind fallback notice emitted
+    # inside container runtimes), always prefixed "sandbox: ". The
+    # signal contract under test is about TARGET-authored output only,
+    # so drop the sandbox's lines to keep the assertion hermetic on
+    # hosts where those diagnostics fire.
+    return b''.join(line + b'\n' for line in result.stderr.splitlines()
+                    if not line.startswith(b'sandbox: '))
+
+
 @pytest.fixture(params=[pytest.param('namespace', marks=[requires_mount, requires_userns]), 'audit'])
 def execution(tmp_path, request):
     target, output = tmp_path / 'target', tmp_path / 'output'
@@ -58,7 +69,7 @@ def test_child_sigpipe_disposition_preserves_subprocess_contract(execution, sett
         assert signal.getsignal(signal.SIGPIPE) == before
     assert actual.returncode == (0 if setting is False else -signal.SIGPIPE), actual.stderr
     assert actual.stdout == (b'beforeafter' if setting is False else b'before')
-    assert actual.stderr == b''
+    assert _target_stderr(actual) == b''
 
 
 @pytest.mark.parametrize('restore', [True, False], ids=['restore', 'preserve'])
