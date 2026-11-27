@@ -319,6 +319,7 @@
     "core/coverage/tests/test_record_subdir_policy.py": "8e30e88c855b2cc3c789dbe6d59c73a78d205afb41df2814fc1a8999cc5a23aa",
     "core/coverage/tests/test_review_cli_project_dir.py": "7e9eab014bd097a75e343001fd7a4775d80c4181efa9b5a7557ed564525bb47e",
     "core/coverage/tests/test_run_attribution.py": "7de28c618b4901f115e881680a505a6f12f8276ac93decda953aba7edefa4dc1",
+    "core/coverage/tests/test_rust_inventory_workflow.py": "0517d148bbe76ad784b99fffac0178b297b8c1244f35c59cc1e6c6259b298823",
     "core/coverage/tests/test_scanner_overlay_views.py": "79ee7d57bcbd72a3db7a407d26f09dd884b53b3567aa1579d37137d8180cb7c0",
     "core/coverage/tests/test_store.py": "b065e31c6754395eb273ee97aac4d7f5455f1a9014bd79f5d001eff5a9eb2225",
     "core/coverage/tests/test_store_budget.py": "d5309fc89a011266f50f44e8f3119eec32240e534f6f00664c03aa80b3d82a34",
@@ -50821,6 +50822,142 @@
       "count": 1,
       "contract": "owned-in-process",
       "purpose": "Loads the sandbox wrapper in process with a stubbed sandbox and owned display streams; restores argv, environment, module patches, sys.path and root logging state. No real child or native sandbox is exercised."
+    },
+    {
+      "path": "core/coverage/tests/test_rust_inventory_workflow.py",
+      "scope": "_build_checklist_cli",
+      "signature": "0e4818ef3f92083f4893915de99eb2af7d9e252c03eb46ed06c98ae3e0341199",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "Builds the real Rust checklist through a fresh unpublished CLI loader with scoped sys.argv and sys.path; pytest owns the trust marker, target, output and scratch lifetime."
+    },
+    {
+      "path": "core/coverage/tests/test_rust_inventory_workflow.py",
+      "scope": "_build_checklist_cli",
+      "signature": "f288a7e4629178635b744a4783b9e4d142bba5670a188656a952f2aaa0afca9a",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "Builds the real Rust checklist through a fresh unpublished CLI loader with scoped sys.argv and sys.path; pytest owns the trust marker, target, output and scratch lifetime."
+    },
+    {
+      "path": "core/coverage/tests/test_rust_inventory_workflow.py",
+      "scope": "test_rust_cli_marks_preserve_examination_review_and_gap_identity",
+      "signature": "c5be69676cd1182590b4fda64e37eb61c8049237edbffe522f4b6d88675b300a",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "Builds the real Rust checklist through a fresh unpublished CLI loader with scoped sys.argv and sys.path; pytest owns the trust marker, target, output and scratch lifetime."
+    },
+    {
+      "path": "core/coverage/tests/test_rust_inventory_workflow.py",
+      "scope": "test_rust_cli_marks_preserve_examination_review_and_gap_identity",
+      "signature": "5b49aba009e07b497d5cc44f961813dbdc12ee4b28656fe6deb5d5972d1913ac",
+      "count": 1,
+      "contract": "standalone",
+      "purpose": "Exercises Rust map-grade marking or gaps through run_standalone_cli, sharing only the per-test signing directory while owning child home, scratch and captured streams."
+    },
+    {
+      "path": "core/coverage/tests/test_rust_inventory_workflow.py",
+      "scope": "test_rust_cli_marks_preserve_examination_review_and_gap_identity",
+      "signature": "524b2b690a486086c114ad9c6c8a7edea0100d5b2348cf1a7fa30aab0b6a9736",
+      "count": 2,
+      "contract": "standalone",
+      "purpose": "Exercises Rust map-grade marking or gaps through run_standalone_cli, sharing only the per-test signing directory while owning child home, scratch and captured streams."
+    },
+    {
+      "path": "core/coverage/tests/test_rust_inventory_workflow.py",
+      "scope": "test_rust_cli_marks_preserve_examination_review_and_gap_identity",
+      "signature": "e08b2aeeab273f72afda16ad3cebef785f621acd3c0231fa06fda7876ff6b244",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "Exercises Rust mark or withdrawal through the documented in-process operator-context seam; the shared helper restores invocation context, argv and streams, using per-test signing keys and scratch state."
+    },
+    {
+      "path": "core/coverage/tests/test_rust_inventory_workflow.py",
+      "scope": "test_rust_cli_marks_preserve_examination_review_and_gap_identity",
+      "signature": "7eabec749e6d8d123a71074e405d96d00bd8e99fbf26fa35fb9331f28e3d071c",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "Exercises Rust mark or withdrawal through the documented in-process operator-context seam; the shared helper restores invocation context, argv and streams, using per-test signing keys and scratch state."
+    },
+    {
+      "path": "core/coverage/tests/test_rust_inventory_workflow.py",
+      "scope": "test_method_review_does_not_credit_same_line_trait_or_changed_layout",
+      "signature": "c5be69676cd1182590b4fda64e37eb61c8049237edbffe522f4b6d88675b300a",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "Builds the real Rust checklist through a fresh unpublished CLI loader with scoped sys.argv and sys.path; pytest owns the trust marker, target, output and scratch lifetime."
+    },
+    {
+      "path": "core/coverage/tests/test_rust_inventory_workflow.py",
+      "scope": "test_method_review_does_not_credit_same_line_trait_or_changed_layout",
+      "signature": "fc12af5a0fe00fb0fd3fca797daa2264106f35eb708095727aaecc266139b37e",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "Exercises Rust mark or withdrawal through the documented in-process operator-context seam; the shared helper restores invocation context, argv and streams, using per-test signing keys and scratch state."
+    },
+    {
+      "path": "core/coverage/tests/test_rust_inventory_workflow.py",
+      "scope": "test_method_review_does_not_credit_same_line_trait_or_changed_layout",
+      "signature": "590686d761b9e7e956207d1a1f0f9a5ecc07666828ac816946824a243a411e13",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "Exercises Rust mark or withdrawal through the documented in-process operator-context seam; the shared helper restores invocation context, argv and streams, using per-test signing keys and scratch state."
+    },
+    {
+      "path": "core/coverage/tests/test_rust_inventory_workflow.py",
+      "scope": "test_later_cross_run_withdrawal_wins_independent_of_directory_order",
+      "signature": "c5be69676cd1182590b4fda64e37eb61c8049237edbffe522f4b6d88675b300a",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "Builds the real Rust checklist through a fresh unpublished CLI loader with scoped sys.argv and sys.path; pytest owns the trust marker, target, output and scratch lifetime."
+    },
+    {
+      "path": "core/coverage/tests/test_rust_inventory_workflow.py",
+      "scope": "test_later_cross_run_withdrawal_wins_independent_of_directory_order",
+      "signature": "6a836b7062d0bdc6e9d6846de81783250a2f2125a7b4b97dd5a9f2eb05dc0c4d",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "Exercises Rust mark or withdrawal through the documented in-process operator-context seam; the shared helper restores invocation context, argv and streams, using per-test signing keys and scratch state."
+    },
+    {
+      "path": "core/coverage/tests/test_rust_inventory_workflow.py",
+      "scope": "test_later_cross_run_withdrawal_wins_independent_of_directory_order",
+      "signature": "5e51f5c16aaeba287867e9aed0f1c1845c5f1707e0a7a618badca8970e0af669",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "Exercises Rust mark or withdrawal through the documented in-process operator-context seam; the shared helper restores invocation context, argv and streams, using per-test signing keys and scratch state."
+    },
+    {
+      "path": "core/coverage/tests/test_rust_inventory_workflow.py",
+      "scope": "test_later_cross_run_withdrawal_wins_independent_of_directory_order",
+      "signature": "e9b5abd1e1551e4b96a62fb7267bc78bd28b0730896639271b7d5478521521a0",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "Exercises Rust mark or withdrawal through the documented in-process operator-context seam; the shared helper restores invocation context, argv and streams, using per-test signing keys and scratch state."
+    },
+    {
+      "path": "core/coverage/tests/test_rust_inventory_workflow.py",
+      "scope": "test_later_cross_run_withdrawal_wins_independent_of_directory_order",
+      "signature": "187aea526cb5d7b894f90b30a38a2124b03c979a0b8f6b0eddc3fd60d39e576d",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "Exercises Rust mark or withdrawal through the documented in-process operator-context seam; the shared helper restores invocation context, argv and streams, using per-test signing keys and scratch state."
+    },
+    {
+      "path": "core/coverage/tests/test_rust_inventory_workflow.py",
+      "scope": "test_equal_time_signed_mark_withdrawal_is_ambiguous_in_either_order",
+      "signature": "c5be69676cd1182590b4fda64e37eb61c8049237edbffe522f4b6d88675b300a",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "Builds the real Rust checklist through a fresh unpublished CLI loader with scoped sys.argv and sys.path; pytest owns the trust marker, target, output and scratch lifetime."
+    },
+    {
+      "path": "core/coverage/tests/test_rust_inventory_workflow.py",
+      "scope": "test_equal_time_signed_mark_withdrawal_is_ambiguous_in_either_order",
+      "signature": "6a836b7062d0bdc6e9d6846de81783250a2f2125a7b4b97dd5a9f2eb05dc0c4d",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "Exercises Rust mark or withdrawal through the documented in-process operator-context seam; the shared helper restores invocation context, argv and streams, using per-test signing keys and scratch state."
     }
   ],
   "shell_routers": {
