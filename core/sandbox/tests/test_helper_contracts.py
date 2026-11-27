@@ -604,6 +604,25 @@ class TestGidmapAllowContract:
             "dirfd, never by re-resolving the numeric PID"
         )
 
+    def test_trusted_owner_binds_to_the_executing_inode(self) -> None:
+        """Source contract for the invoker-identity gate: the trusted
+        owner uid comes from fstat() of an O_PATH handle on
+        /proc/self/exe — the kernel resolves the magic link straight to
+        the EXECUTING inode. A readlink()-then-stat-by-pathname
+        sequence reintroduces the window in which the directory entry
+        can be swapped (hardlink + RENAME_EXCHANGE in a directory the
+        attacker can write) so the gate validates against a different
+        file's owner than the inode actually running under the setcap
+        grant."""
+        src = (HELPERS_SRC / "raptor-gidmap-allow.c").read_text()
+        assert '"/proc/self/exe", O_PATH | O_CLOEXEC' in src
+        assert "fstat(" in src
+        assert 'readlink("/proc/self/exe"' not in src, (
+            "the trusted-owner check must fstat the executing inode via "
+            "an O_PATH fd on /proc/self/exe, never readlink and then "
+            "stat the returned pathname"
+        )
+
     def test_validation_passes_on_own_namespace(self, built: Path) -> None:
         """The RAPTOR call shape (one triple, own gid, self-created
         userns) must clear every contract check. Without CAP_SETGID the

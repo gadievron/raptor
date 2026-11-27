@@ -308,24 +308,37 @@ static int collect_invoker_gids(gid_t **out, size_t *n_out) {
 
 /* The trusted uid is this binary's own owner — the operator who applied
  * the capability grant (mirrors raptor-coord-launcher's trusted-path
- * rule). Resolved via /proc/self/exe so the check binds to the file
- * actually executing, not to an argv[0] spelling. */
+ * rule). Resolved by fstat() of an O_PATH handle on /proc/self/exe:
+ * the kernel resolves that magic link straight to the EXECUTING inode,
+ * so the check binds to the file actually running — not to an argv[0]
+ * spelling, and not to whatever a pathname lookup finds at the moment
+ * of the stat. A readlink()-then-stat-by-pathname sequence left a
+ * window in which the directory entry could be swapped (hardlink +
+ * RENAME_EXCHANGE in a directory the attacker can write) for a file
+ * with a different owner while the original inode — and its setcap
+ * grant — kept executing; the gate would then validate the invoker
+ * against the swapped file's owner. */
 static int trusted_owner_uid(uid_t *out, char *err, size_t errsz) {
-    char self_exe[PATH_MAX];
-    ssize_t linklen = readlink("/proc/self/exe", self_exe,
-                               sizeof self_exe - 1);
-    if (linklen <= 0 || linklen >= (ssize_t)(sizeof self_exe - 1)) {
+    int fd = open("/proc/self/exe", O_PATH | O_CLOEXEC);
+    if (fd < 0) {
         snprintf(err, errsz,
-                 "invoker identity: cannot resolve /proc/self/exe: %s",
+                 "invoker identity: cannot open /proc/self/exe: %s",
                  strerror(errno));
         return -1;
     }
-    self_exe[linklen] = '\0';
     struct stat st;
-    if (stat(self_exe, &st) != 0 || !S_ISREG(st.st_mode)) {
+    int rc = fstat(fd, &st);
+    int saved = errno;
+    close(fd);
+    if (rc != 0) {
         snprintf(err, errsz,
-                 "invoker identity: %s is not a stat-able regular file",
-                 self_exe);
+                 "invoker identity: cannot fstat /proc/self/exe: %s",
+                 strerror(saved));
+        return -1;
+    }
+    if (!S_ISREG(st.st_mode)) {
+        snprintf(err, errsz,
+                 "invoker identity: /proc/self/exe is not a regular file");
         return -1;
     }
     *out = st.st_uid;
@@ -334,8 +347,9 @@ static int trusted_owner_uid(uid_t *out, char *err, size_t errsz) {
 
 
 int main(int argc, char **argv) {
-    /* Sized like the sibling launcher's: refusal messages may embed a
-     * PATH_MAX path (trusted_owner_uid). */
+    /* Sized like the sibling launcher's: refusal messages may embed
+     * caller-supplied argv strings (validate_mapping_args); snprintf
+     * truncates anything longer. */
     char err[2 * PATH_MAX];
 
     /* INVOKER IDENTITY (contract item 4): only the binary's owner (or

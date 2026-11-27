@@ -534,7 +534,7 @@
     "core/sandbox/tests/test_fork_safe_warn_sites.py": "6a3e89f49804616f32c89fc33ef6695b78f20f1e20cd5936ea4a615babfef0bf",
     "core/sandbox/tests/test_fork_warning_filter.py": "dafcf4c59c8170e85dc65f49bda2dfb34b7a97f4746995f5fe43708d934df28c",
     "core/sandbox/tests/test_fresh_procfs_contract.py": "ce10863bb9bb246895e36976cbe9cb831e5008ede85de22c305e0ebdfdcfd7f6",
-    "core/sandbox/tests/test_helper_contracts.py": "b1661b5eb6475632b15414a6f09cdb0fa5fd340c611a73c74012c9d8d6e22bba",
+    "core/sandbox/tests/test_helper_contracts.py": "3b913b2e63f31c5957e81e63ca2a4d46c0826639d6e26cfeaf215d481197d0ae",
     "core/sandbox/tests/test_host_response_reliability.py": "90ea3f674153adfda518ce06b1cca8aac720681a362b265ac5ffa3fc2a88ab18",
     "core/sandbox/tests/test_host_startup_cleanup.py": "aafcab09f34f0ed7d39623afac1ffcd087d1f41b8898949c03fc313108fac0fb",
     "core/sandbox/tests/test_job_budget_acceptance.py": "e558e40414b388de69e6c00798dd1bcbadc63de433679367fd99ede02618b1c1",
