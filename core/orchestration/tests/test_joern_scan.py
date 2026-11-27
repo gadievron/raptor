@@ -678,5 +678,107 @@ class TestPhaseDegraded(unittest.TestCase):
         self.assertIsNone(metrics["sarif"])
 
 
+class TestConcurrencyGate(unittest.TestCase):
+    """joern_concurrency_gate — RAM-budget governor for the overlap lane.
+
+    All inputs injected; no tuning/psutil probing happens in these tests.
+    """
+
+    def _gate(self, **kw):
+        from core.orchestration.joern_scan import joern_concurrency_gate
+        base = dict(codeql_running=True, total_ram_mb=32768,
+                    codeql_ram_mb=8192, joern_heap_mb=8192)
+        base.update(kw)
+        return joern_concurrency_gate(**base)
+
+    def test_default_auto_shape_allows_overlap(self):
+        # Shipped auto tuning: 25% RAM each => 50% total, inside the
+        # 75% budget. The gate must admit this shape or the overlap
+        # lane would never run on an untouched install.
+        allowed, reason = self._gate()
+        self.assertTrue(allowed)
+        self.assertIn("within", reason)
+
+    def test_max_profile_shape_keeps_serial(self):
+        # raptor-tune max: 50% RAM each => 100% total. Concurrent
+        # JVMs at that shape can OOM-kill a swapless host; the gate
+        # must refuse and keep the serial ordering.
+        allowed, reason = self._gate(codeql_ram_mb=16384,
+                                     joern_heap_mb=16384)
+        self.assertFalse(allowed)
+        self.assertIn("serial ordering kept", reason)
+
+    def test_fraction_boundary_is_inclusive(self):
+        # 4 GB host with clamped floors: 2048 + 1024 = 3072 is
+        # exactly 75% of 4096 and must be admitted (<=, not <);
+        # one MB over must be refused.
+        allowed, _ = self._gate(total_ram_mb=4096, codeql_ram_mb=2048,
+                                joern_heap_mb=1024)
+        self.assertTrue(allowed)
+        refused, reason = self._gate(total_ram_mb=4096, codeql_ram_mb=2048,
+                                     joern_heap_mb=1025)
+        self.assertFalse(refused)
+        self.assertIn("serial ordering kept", reason)
+
+    def test_codeql_not_running_counts_joern_only(self):
+        # With no CodeQL child, only the Joern heap claims budget.
+        allowed, _ = self._gate(codeql_running=False, total_ram_mb=4096,
+                                codeql_ram_mb=4096, joern_heap_mb=2048)
+        self.assertTrue(allowed)
+
+    def test_unknown_ram_keeps_serial(self):
+        allowed, reason = self._gate(total_ram_mb=0)
+        self.assertFalse(allowed)
+        self.assertIn("serial ordering kept", reason)
+
+    def test_tuning_failure_fails_toward_serial(self):
+        from unittest.mock import patch
+        with patch("core.tuning.get_tuning",
+                   side_effect=RuntimeError("boom")):
+            allowed, reason = self._gate(codeql_ram_mb=None)
+        self.assertFalse(allowed)
+        self.assertIn("serial ordering kept", reason)
+
+
+class TestAgenticOverlapWiring(unittest.TestCase):
+    """Pin the phase-ordering contracts in raptor_agentic.py.
+
+    The explicit --joern-scan lane must start before scanner
+    collection and must not consume CodeQL coverage; the auto-enable
+    path must still wait for CodeQL results. Source-level assertions
+    keep these contracts pinned without running the full pipeline.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        path = (Path(__file__).resolve().parents[3]
+                / "raptor_agentic.py")
+        cls.source = path.read_text(encoding="utf-8")
+
+    def test_explicit_lane_starts_before_collection(self):
+        start = self.source.index('_BackgroundPhase("joern-scan"')
+        collect = self.source.index("# ---- Collect Semgrep results ----")
+        self.assertLess(start, collect)
+
+    def test_explicit_lane_decision_takes_no_coverage(self):
+        begin = self.source.index("# Explicit --joern-scan lane")
+        end = self.source.index('_BackgroundPhase("joern-scan"')
+        block = self.source[begin:end]
+        self.assertIn("requested=True", block)
+        self.assertNotIn("codeql_covered_languages", block)
+
+    def test_explicit_lane_is_resource_gated(self):
+        begin = self.source.index("# Explicit --joern-scan lane")
+        end = self.source.index('_BackgroundPhase("joern-scan"')
+        self.assertIn("joern_concurrency_gate", self.source[begin:end])
+
+    def test_auto_enable_still_waits_for_codeql_coverage(self):
+        coverage_use = self.source.index(
+            "codeql_covered_languages=_codeql_covered")
+        codeql_collect = self.source.index(
+            "# ---- Collect CodeQL results ----")
+        self.assertGreater(coverage_use, codeql_collect)
+
+
 if __name__ == "__main__":
     unittest.main()

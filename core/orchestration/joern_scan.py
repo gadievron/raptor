@@ -822,3 +822,68 @@ def run_joern_scan_phase(
     outcome.sarif_path = sarif_path
     outcome.finding_count = len(results)
     return outcome
+
+
+#: Fraction of total system RAM the two big JVM budgets (CodeQL ``-M``
+#: plus the Joern ``-Xmx``) may jointly claim before an explicitly
+#: requested Joern scan keeps the serial post-CodeQL ordering instead
+#: of overlapping the CodeQL subprocess. Both directions matter:
+#: lower (e.g. 0.5) would re-serialise the shipped auto tuning — each
+#: budget derives at ~25% of RAM, so the pair sums to ~50%, and the
+#: default install is exactly where the overlap is meant to pay —
+#: while higher (e.g. 0.9) would admit the ``raptor-tune max`` profile
+#: (each budget at ~50% of RAM, the pair at ~100%) beside the
+#: already-running Semgrep scan, the co-residency that OOM-kills on
+#: swapless hosts. ``-Xmx``/``-M`` are ceilings, not reservations, so
+#: the sum overstates typical concurrent RSS — the margin is the
+#: point: the gate must stay safe when both engines genuinely grow
+#: into their budgets on a large target.
+_CONCURRENT_JVM_RAM_FRACTION = 0.75
+
+
+def joern_concurrency_gate(
+    *,
+    codeql_running: bool,
+    total_ram_mb: int | None = None,
+    codeql_ram_mb: int | None = None,
+    joern_heap_mb: int | None = None,
+) -> tuple[bool, str]:
+    """Whether an explicit Joern scan may overlap the CodeQL phase.
+
+    Consulted only for the ``--joern-scan`` lane (the auto-enable rule
+    needs CodeQL's per-language coverage and therefore always runs
+    after collection). Budgets default to the resolved central tuning
+    (``codeql_ram_mb`` / ``joern_heap_mb``) and live RAM detection;
+    tests inject values. Any resolution failure answers ``False`` —
+    the serial ordering is always correct, so the gate fails toward
+    it.
+
+    Returns ``(allowed, reason)``; the reason is a module-authored
+    constant-shaped string suitable for logs.
+    """
+    try:
+        if total_ram_mb is None or codeql_ram_mb is None or joern_heap_mb is None:
+            from core.tuning import _detect_total_ram_mb, get_tuning
+            tuning = get_tuning()
+            if total_ram_mb is None:
+                total_ram_mb = _detect_total_ram_mb()
+            if codeql_ram_mb is None:
+                codeql_ram_mb = tuning.codeql_ram_mb
+            if joern_heap_mb is None:
+                joern_heap_mb = tuning.joern_heap_mb
+    except Exception:  # noqa: BLE001 — tuning failure must not pick the risky ordering
+        logger.debug("joern concurrency gate: tuning resolution failed",
+                     exc_info=True)
+        return False, "tuning resolution failed (serial ordering kept)"
+    if total_ram_mb <= 0:
+        return False, "total RAM unknown (serial ordering kept)"
+    claimed_mb = joern_heap_mb + (codeql_ram_mb if codeql_running else 0)
+    budget_mb = int(total_ram_mb * _CONCURRENT_JVM_RAM_FRACTION)
+    if claimed_mb > budget_mb:
+        return False, (
+            f"JVM budgets {claimed_mb} MB exceed {budget_mb} MB"
+            f" ({_CONCURRENT_JVM_RAM_FRACTION:.0%} of {total_ram_mb} MB RAM)"
+            " — serial ordering kept")
+    return True, (
+        f"JVM budgets {claimed_mb} MB within {budget_mb} MB"
+        f" ({_CONCURRENT_JVM_RAM_FRACTION:.0%} of {total_ram_mb} MB RAM)")

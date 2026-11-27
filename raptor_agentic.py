@@ -24,7 +24,7 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 from collections.abc import Callable
-from typing import NoReturn
+from typing import Generic, NoReturn, TypeVar, cast
 
 # Add the repo root to sys.path. resolve() first: invoked through a
 # symlink (or relatively on interpreters that don't absolutise
@@ -1450,6 +1450,150 @@ class _PipeDrainer:
         return (
             "".join(self._chunks["stdout"]),
             "".join(self._chunks["stderr"]),
+        )
+
+
+_PhaseResultT = TypeVar("_PhaseResultT")
+
+
+class _BackgroundPhase(Generic[_PhaseResultT]):
+    """Run one blocking, print-free phase callable on a worker thread.
+
+    Companion to :class:`_PipeDrainer` for scan-phase overlap: phases
+    with no data dependency on the pattern scanners (explicit Joern
+    scan, mechanical SCA, the OpenAnt scan subprocess) start beside
+    the scanner children and are consumed at each phase's ORIGINAL
+    collection point on the main thread. The callable must not print —
+    every progress line, metric write and failure classification
+    happens at collection, so operator output ordering and failure
+    semantics match the serial pipeline exactly (an exception raised
+    by the callable is re-raised verbatim from :meth:`result` inside
+    the phase's existing try/except).
+
+    Threads are intentionally non-daemon: a deliberate abort joins via
+    :func:`_join_scan_lanes`, and any other exit path falls back to
+    the interpreter's non-daemon join — either way a lane's
+    subprocesses finish and are reaped, never orphaned (each lane's
+    own timeouts bound the wait).
+
+    ``overlap=False`` defers the lane instead: the callable runs
+    synchronously on the calling thread at :meth:`result` — the
+    shipped serial ordering, with the collection point's output and
+    failure surfaces unchanged. Used when a traced CodeQL build will
+    MUTATE the target tree while the scanners run: the lanes read that
+    same tree, and overlapping them with the build makes their
+    verdicts depend on mid-build tree state.
+    """
+
+    def __init__(self, name: str, fn: Callable[[], _PhaseResultT], *,
+                 overlap: bool = True) -> None:
+        self.name = name
+        self._fn = fn
+        self._result: _PhaseResultT | None = None
+        self._exc: BaseException | None = None
+        self._thread: threading.Thread | None = None
+        if overlap:
+            self._thread = threading.Thread(
+                target=self._run, name=f"phase-{name}", daemon=False)
+            # Only a threaded lane registers for interrupt reaping: a
+            # deferred lane holds no thread or subprocess until
+            # result() runs the callable inline on the main thread,
+            # where an interrupt propagates through it directly.
+            _ACTIVE_SCAN_LANES.append(self)
+            self._thread.start()
+
+    def _run(self) -> None:
+        try:
+            self._result = self._fn()
+        except BaseException as exc:  # noqa: BLE001 — re-raised verbatim at the collection point
+            self._exc = exc
+
+    def done(self) -> bool:
+        # A deferred lane holds no thread and nothing to reap: it is
+        # "done" for abort purposes (its work simply never happens).
+        return self._thread is None or not self._thread.is_alive()
+
+    def join(self) -> None:
+        if self._thread is None:
+            return
+        self._thread.join()
+        # Completed join: the lane no longer needs interrupt reaping.
+        with contextlib.suppress(ValueError):
+            _ACTIVE_SCAN_LANES.remove(self)
+
+    def result(self) -> _PhaseResultT:
+        if self._thread is None:
+            # Deferred lane: the phase runs HERE, at its original
+            # collection point, exactly as the serial pipeline did.
+            self._run()
+        else:
+            self.join()
+        if self._exc is not None:
+            raise self._exc
+        # The exception-free join above proves _fn returned; None here
+        # can only mean _fn itself returned None, which the cast keeps.
+        return cast("_PhaseResultT", self._result)
+
+
+#: Every live _BackgroundPhase, registered at construction and pruned
+#: after a COMPLETED join (an interrupted join keeps the lane listed —
+#: it still needs reaping). Construction, joins and the interrupt reap
+#: all happen on the main thread, so no lock is needed. Consumed by
+#: :func:`_reap_scan_lanes_on_interrupt` in the ``_cli_entry``
+#: KeyboardInterrupt arm: the in-pipeline joins only cover aborts the
+#: collection region raises itself; a Ctrl-C can land anywhere.
+_ACTIVE_SCAN_LANES: list["_BackgroundPhase"] = []
+
+
+def _join_scan_lanes(phases: list["_BackgroundPhase"]) -> None:
+    """Deliberate-abort discipline for the concurrent scan lanes.
+
+    Called before a raise/exit out of the scanner-collection region so
+    a failing scanner never orphans a concurrent lane's subprocesses.
+    Results are deliberately NOT consumed — the abort wins; lanes that
+    already finished join instantly.
+
+    Interrupt-safe: a KeyboardInterrupt landing inside one lane's join
+    must not abandon the lanes after it, so the tail is joined in a
+    ``finally`` before the interrupt propagates (each lane's own
+    timeouts bound every wait, exactly as on the uninterrupted path).
+    """
+    if not phases:
+        return
+    phase = phases[0]
+    try:
+        if not phase.done():
+            print(f"[*] waiting for the concurrent {phase.name} lane to"
+                  " finish before aborting...", file=sys.stderr)
+        phase.join()
+    finally:
+        _join_scan_lanes(phases[1:])
+
+
+def _reap_scan_lanes_on_interrupt() -> None:
+    """Join still-live scan lanes after a Ctrl-C aborts the pipeline.
+
+    The collection-region ``_join_scan_lanes`` calls only cover aborts
+    raised by the region itself; an operator interrupt can surface
+    anywhere between a lane's start and its collection point. Joining
+    here (bounded by each lane's own subprocess timeouts) reaps the
+    lane subprocesses before the 130 exit. A SECOND interrupt during
+    this wait is swallowed with a loud abandonment notice — the exit
+    code stays 130 and the interpreter's non-daemon thread join at
+    exit remains the final backstop.
+    """
+    lanes = list(_ACTIVE_SCAN_LANES)
+    if not lanes:
+        return
+    try:
+        _join_scan_lanes(lanes)
+    except KeyboardInterrupt:
+        print(
+            "[!] second interrupt — abandoning the wait for the "
+            "concurrent scan lanes; the interpreter still joins their "
+            "threads at exit, so expect a pause while their "
+            "subprocesses finish.",
+            file=sys.stderr,
         )
 
 
@@ -3725,6 +3869,185 @@ def main() -> int:
         )
         codeql_drain = _PipeDrainer(codeql_proc)
 
+    # ---- Concurrent phase lanes ----
+    # Phases with no data dependency on the pattern scanners start
+    # here, beside the scanner children, and are consumed at each
+    # phase's ORIGINAL position below (see _BackgroundPhase: lanes
+    # compute silently; every print and failure classification stays
+    # at the collection point, so output ordering and error surfaces
+    # match the serial pipeline).
+    #
+    # Determinism gate: traced/commanded CodeQL extraction EXECUTES the
+    # repo's build (the codeql agent opts a language into build-mode
+    # extraction when traced-build consent or a build command is set),
+    # and that build MUTATES the target tree while the codeql child
+    # runs. The lanes read that same tree (Joern's CPG build, SCA's
+    # manifest reads, OpenAnt's scan), so overlapping them with the
+    # build lets them observe mid-build state — half-written manifests,
+    # transient build artifacts — making their verdicts nondeterministic
+    # run to run. The build actor already controls tree content, so
+    # this is a consistency property, not a trust boundary; the lanes
+    # defer to their original collection points (post-collection,
+    # settled tree) whenever the run will execute a build.
+    _overlap_scan_lanes = not (run_codeql and bool(
+        args.traced_build or args.build_command))
+    _scan_lanes: list[_BackgroundPhase] = []
+
+    # Explicit --joern-scan lane: the explicit decision consumes no
+    # CodeQL coverage (requested short-circuits the auto rule), so the
+    # phase can overlap CodeQL collection instead of waiting for it.
+    # The auto-enable path keeps the post-collection ordering in
+    # PHASE 1a below — it reads the per-language coverage this run
+    # achieved. Overlap is resource-gated: a second full-size JVM
+    # beside CodeQL and Semgrep is refused on constrained tuning
+    # profiles (joern_concurrency_gate), keeping the serial ordering.
+    _joern_bg: _BackgroundPhase | None = None
+    _joern_bg_decision = None
+    if (getattr(args, "joern_scan", False) and not skip_scan
+            and not _openant_only):
+        try:
+            from core.orchestration.joern_scan import (
+                joern_concurrency_gate,
+                joern_scan_decision,
+                run_joern_scan_phase,
+            )
+            _joern_bg_decision = joern_scan_decision(
+                requested=True,
+                disabled=getattr(args, "no_joern_scan", False),
+                skip_scan=skip_scan,
+                openant_only=_openant_only,
+                target_path=original_repo_path,
+            )
+            if _joern_bg_decision.run:
+                if _overlap_scan_lanes:
+                    _joern_allowed, _joern_gate_reason = (
+                        joern_concurrency_gate(
+                            codeql_running=bool(run_codeql)))
+                else:
+                    # Unlike SCA/OpenAnt there is no deferred lane
+                    # here: the serial phase below re-decides from
+                    # scratch and keeps its post-collection ordering.
+                    _joern_allowed = False
+                    _joern_gate_reason = (
+                        "traced build mutates the target tree while"
+                        " the scanners run")
+                if _joern_allowed:
+                    print("\n[*] Starting Joern CPG scan (concurrent"
+                          " with the scanners)...")
+
+                    def _joern_lane(
+                        _target: Path = original_repo_path,
+                        _out: Path = out_dir,
+                    ):
+                        return run_joern_scan_phase(_target, _out)
+
+                    _joern_bg = _BackgroundPhase("joern-scan", _joern_lane)
+                    _scan_lanes.append(_joern_bg)
+                else:
+                    logger.info("joern scan overlap refused: %s",
+                                _joern_gate_reason)
+                    _joern_bg_decision = None
+            else:
+                # The serial phase below re-decides and reports the
+                # skip with its normal surface.
+                _joern_bg_decision = None
+        except Exception:
+            # Never lose the phase to a failed early start — the
+            # serial phase below recomputes the decision from scratch.
+            logger.debug("concurrent joern start failed; the serial"
+                         " phase will run", exc_info=True)
+            _joern_bg = None
+            _joern_bg_decision = None
+
+    # Mechanical SCA lane: SCA reads only the target tree and the
+    # network vulnerability feeds and writes only <run>/sca — zero
+    # data dependency on the scanners — so its sandboxed subprocess
+    # overlaps them. Parsing, printing and failure accounting stay at
+    # PHASE 1b below.
+    _sca_bg: _BackgroundPhase | None = None
+    sca_out = out_dir / "sca"
+    try:
+        from packages.sca.agent import _find_sca_agent, run_sca_subprocess
+        sca_agent = _find_sca_agent()
+    except ImportError:
+        sca_agent = None
+    run_mechanical_sca = _should_run_mechanical_sca(sca_agent, args.sca)
+    if run_mechanical_sca and sca_agent is not None:
+        if _overlap_scan_lanes:
+            print("\n[*] Starting SCA (concurrent with the scanners)...")
+
+        def _sca_lane(
+            _agent: Path = sca_agent,
+            _target: Path = original_repo_path,
+            _out: Path = sca_out,
+            _sandbox: tuple[str, ...] = tuple(sandbox_passthrough),
+        ):
+            # Route via sandbox egress proxy so SCA's HTTP calls are
+            # hostname-allowlisted when --sandbox is active. The
+            # allowlist is SCA_ALLOWED_HOSTS (vuln feeds + registries
+            # + archives).
+            return run_sca_subprocess(
+                _agent, _target, _out, sandbox_args=list(_sandbox))
+
+        _sca_bg = _BackgroundPhase("sca", _sca_lane,
+                                   overlap=_overlap_scan_lanes)
+        _scan_lanes.append(_sca_bg)
+
+    # OpenAnt lane: the LLM scan has no input dependency on
+    # Semgrep/CodeQL — only its SARIF-dedup step consumes scan output
+    # — so the scan subprocess overlaps the scanners. Dedup and all
+    # result processing stay at PHASE 1b below, where the scan outputs
+    # exist. Config build rides inside the lane so a not-configured
+    # RuntimeError surfaces at collection with its original
+    # classification.
+    _openant_bg: _BackgroundPhase | None = None
+    if _openant_enabled:
+        if _overlap_scan_lanes:
+            print("\n[*] Starting OpenAnt semantic scan (concurrent with"
+                  " the scanners)...")
+
+        def _openant_lane(
+            _args=args,
+            _root: Path = script_root,
+            _target: Path = original_repo_path,
+            _out: Path = out_dir,
+        ):
+            from packages.openant import get_config, run_openant_scan
+            from packages.openant.config import OpenAntConfig
+
+            if getattr(_args, "openant_core", None):
+                _gate_prov = getattr(_args, "openant_gate_provenance", None)
+                oa_config = OpenAntConfig(
+                    core_path=Path(_args.openant_core),
+                    gate_provenance=_gate_prov,
+                    expect_clean_pinned=(
+                        (_gate_prov or {}).get("consent")
+                        == "clean-pinned"),
+                )
+            else:
+                oa_config = get_config(raptor_dir=_root)
+            oa_config.model = getattr(_args, "openant_model", "sonnet")
+            oa_config.level = getattr(_args, "openant_level", "reachable")
+            oa_config.gateway_budget_usd = getattr(
+                _args, "openant_gateway_budget", None)
+            oa_config.direct_credential_consent = bool(getattr(
+                _args, "openant_expose_api_key_to_child", False))
+            _oa_timeout = getattr(_args, "openant_timeout_seconds", None)
+            if _oa_timeout is not None:
+                oa_config.timeout_seconds = _oa_timeout
+            oa_out = _out / "openant_scan"
+            oa_out.mkdir(exist_ok=True)
+            oa_result = run_openant_scan(
+                repo_path=str(_target),
+                out_dir=str(oa_out),
+                config=oa_config,
+            )
+            return oa_config, oa_result
+
+        _openant_bg = _BackgroundPhase("openant", _openant_lane,
+                                       overlap=_overlap_scan_lanes)
+        _scan_lanes.append(_openant_bg)
+
     # ---- Collect Semgrep results ----
     if semgrep_proc:
         try:
@@ -3780,6 +4103,7 @@ def main() -> int:
             except Exception as e:  # noqa: BLE001
                 logger.warning("failed to write semgrep timeout marker: %s", e)
             if not run_codeql:
+                _join_scan_lanes(_scan_lanes)
                 _fail_run_and_exit(
                     out_dir,
                     f"Semgrep scan timed out ({args.phase_timeout}s)",
@@ -3796,6 +4120,7 @@ def main() -> int:
                     codeql_proc.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     pass
+            _join_scan_lanes(_scan_lanes)
             msg = (
                 "the semgrep scan subprocess reported the sandbox could not "
                 f"engage (exit {SANDBOX_ENGAGE_EXIT_CODE}); see its output above"
@@ -3857,6 +4182,7 @@ def main() -> int:
             except Exception as e:  # noqa: BLE001
                 logger.warning("failed to write semgrep failure marker: %s", e)
             if not run_codeql:
+                _join_scan_lanes(_scan_lanes)
                 _fail_run_and_exit(out_dir, f"Semgrep scan failed (exit code {rc})")
 
     # ---- Collect CodeQL results ----
@@ -3888,6 +4214,7 @@ def main() -> int:
         if rc == SANDBOX_ENGAGE_EXIT_CODE:
             # CodeQL subprocess reported the sandbox could not engage —
             # abort loud rather than continuing with partial findings.
+            _join_scan_lanes(_scan_lanes)
             msg = (
                 "the codeql scan subprocess reported the sandbox could not "
                 f"engage (exit {SANDBOX_ENGAGE_EXIT_CODE}); see its output above"
@@ -3913,6 +4240,7 @@ def main() -> int:
             logger.warning("CodeQL scan failed - rc=%d", rc)
             if args.codeql_only:
                 print("✗ CodeQL-only mode failed", file=sys.stderr)
+                _join_scan_lanes(_scan_lanes)
                 _fail_run_and_exit(out_dir, "CodeQL-only mode failed")
         else:
             codeql_out_dir = out_dir / "codeql"
@@ -3948,29 +4276,40 @@ def main() -> int:
             joern_scan_decision,
             run_joern_scan_phase,
         )
-        # Coverage means an ANALYSIS completed, not that CodeQL merely
-        # detected the language: on a mixed repo whose cpp database
-        # build fails (the unbuildable-target case this phase exists
-        # for) the run still exits 0 with "cpp" in languages_detected.
-        _codeql_analyses = codeql_metrics.get("analyses_completed") or {}
-        _codeql_covered = frozenset(
-            lang for lang, analysis in _codeql_analyses.items()
-            if isinstance(analysis, dict) and analysis.get("success"))
-        _joern_decision = joern_scan_decision(
-            requested=getattr(args, "joern_scan", False),
-            disabled=getattr(args, "no_joern_scan", False),
-            skip_scan=skip_scan,
-            openant_only=_openant_only,
-            target_path=original_repo_path,
-            codeql_covered_languages=_codeql_covered,
-        )
+        if _joern_bg is not None and _joern_bg_decision is not None:
+            # Explicit-request lane already running (started beside
+            # the scanners above) — its decision consumed no CodeQL
+            # coverage, so the early and late decisions are identical.
+            _joern_decision = _joern_bg_decision
+        else:
+            # Coverage means an ANALYSIS completed, not that CodeQL merely
+            # detected the language: on a mixed repo whose cpp database
+            # build fails (the unbuildable-target case this phase exists
+            # for) the run still exits 0 with "cpp" in languages_detected.
+            _codeql_analyses = codeql_metrics.get("analyses_completed") or {}
+            _codeql_covered = frozenset(
+                lang for lang, analysis in _codeql_analyses.items()
+                if isinstance(analysis, dict) and analysis.get("success"))
+            _joern_decision = joern_scan_decision(
+                requested=getattr(args, "joern_scan", False),
+                disabled=getattr(args, "no_joern_scan", False),
+                skip_scan=skip_scan,
+                openant_only=_openant_only,
+                target_path=original_repo_path,
+                codeql_covered_languages=_codeql_covered,
+            )
         # Decision reasons are module-authored constants, but every
         # value this writer prints goes through the terminal chokepoint.
         _joern_reason = sanitise_for_terminal(_joern_decision.reason,
                                               max_len=300)
         if _joern_decision.run:
-            print(f"\n[*] Running Joern CPG scan ({_joern_reason})...")
-            joern_outcome = run_joern_scan_phase(original_repo_path, out_dir)
+            if _joern_bg is not None:
+                print(f"\n[*] Collecting Joern CPG scan ({_joern_reason})...")
+                joern_outcome = _joern_bg.result()
+            else:
+                print(f"\n[*] Running Joern CPG scan ({_joern_reason})...")
+                joern_outcome = run_joern_scan_phase(
+                    original_repo_path, out_dir)
             joern_scan_metrics = joern_outcome.metrics()
             joern_findings_count = joern_outcome.finding_count
             if joern_outcome.sarif_path is not None:
@@ -4009,15 +4348,10 @@ def main() -> int:
     # ========================================================================
     # PHASE 1b: SOFTWARE COMPOSITION ANALYSIS
     # ========================================================================
+    # Agent discovery and the mechanical-run decision happened at the
+    # lane-launch site above (run_mechanical_sca / sca_agent / sca_out /
+    # _sca_bg); this block is the collection point.
     sca_metrics = {}
-    sca_out = out_dir / "sca"
-    try:
-        from packages.sca.agent import _find_sca_agent, run_sca_subprocess
-        sca_agent = _find_sca_agent()
-    except ImportError:
-        sca_agent = None
-
-    run_mechanical_sca = _should_run_mechanical_sca(sca_agent, args.sca)
     if sca_agent and not run_mechanical_sca:
         # Deferred: the opt-in deep SCA phase (PHASE 1b below) analyses
         # the same dependency set with LLM review + triage. Running the
@@ -4025,21 +4359,16 @@ def main() -> int:
         # double-count dependency findings.
         sca_findings_count = 0
         logger.info("--sca set — deferring dependency analysis to the deep SCA phase")
-    elif run_mechanical_sca:
+    elif run_mechanical_sca and _sca_bg is not None:
         print("\n" + "=" * 70)
         print("SOFTWARE COMPOSITION ANALYSIS")
         print("=" * 70)
-        print("\n[*] Running SCA (dependencies, supply chain, reachability)...")
+        print("\n[*] Collecting SCA (dependencies, supply chain, reachability)...")
         try:
-            # Route via sandbox egress proxy so SCA's HTTP calls are
-            # hostname-allowlisted when --sandbox is active. The allowlist
-            # is SCA_ALLOWED_HOSTS (vuln feeds + registries + archives).
-            rc, sca_stdout, sca_stderr = run_sca_subprocess(
-                sca_agent,
-                original_repo_path,
-                sca_out,
-                sandbox_args=sandbox_passthrough,
-            )
+            # The sandboxed subprocess ran concurrently with the
+            # scanners (_sca_bg lane above); a lane exception re-raises
+            # here so the failure surface below is unchanged.
+            rc, sca_stdout, sca_stderr = _sca_bg.result()
             safe_stderr = ""
             if sca_stderr:
                 safe_stderr = _persist_redacted_sca_stderr(
@@ -4136,43 +4465,24 @@ def main() -> int:
     # run whose only possible finding source was OpenAnt cannot end as
     # if the target scanned clean.
     openant_hard_error = ""
-    if _openant_enabled:
+    if _openant_enabled and _openant_bg is not None:
         try:
-            from packages.openant import get_config, run_openant_scan, translate_pipeline_output, deduplicate_with_sarif
-            from packages.openant.config import OpenAntConfig
+            from packages.openant import (
+                deduplicate_with_sarif,
+                translate_pipeline_output,
+            )
 
-            if getattr(args, "openant_core", None):
-                _gate_prov = getattr(args, "openant_gate_provenance", None)
-                oa_config = OpenAntConfig(
-                    core_path=Path(args.openant_core),
-                    gate_provenance=_gate_prov,
-                    expect_clean_pinned=(
-                        (_gate_prov or {}).get("consent")
-                        == "clean-pinned"),
-                )
-            else:
-                oa_config = get_config(raptor_dir=script_root)
-            oa_config.model = getattr(args, "openant_model", "sonnet")
-            oa_config.level = getattr(args, "openant_level", "reachable")
-            oa_config.gateway_budget_usd = getattr(
-                args, "openant_gateway_budget", None)
-            oa_config.direct_credential_consent = bool(getattr(
-                args, "openant_expose_api_key_to_child", False))
-            _oa_timeout = getattr(args, "openant_timeout_seconds", None)
-            if _oa_timeout is not None:
-                oa_config.timeout_seconds = _oa_timeout
+            # The scan subprocess ran concurrently with the scanners
+            # (_openant_lane above — config build included, so a
+            # not-configured RuntimeError re-raises HERE, before the
+            # banner, keeping its original pre-banner surface). Only
+            # the SARIF-dedup below consumes scan output.
+            oa_out = out_dir / "openant_scan"
+            oa_config, oa_result = _openant_bg.result()
 
             print("\n" + "=" * 70)
             print("OPENANT SEMANTIC SCAN")
             print("=" * 70)
-
-            oa_out = out_dir / "openant_scan"
-            oa_out.mkdir(exist_ok=True)
-            oa_result = run_openant_scan(
-                repo_path=str(original_repo_path),
-                out_dir=str(oa_out),
-                config=oa_config,
-            )
             # Provenance travels to THIS run's report too — the
             # standalone workflow already records it, and dropping it
             # here left /agentic output with no record of which
@@ -6374,6 +6684,11 @@ def _cli_entry() -> NoReturn:
         sys.exit(SANDBOX_ENGAGE_EXIT_CODE)
     except KeyboardInterrupt:
         print("\n\nInterrupted by user", file=sys.stderr)
+        # Reap concurrent scan lanes FIRST: the interrupt may have
+        # unwound past the collection region's own join calls, leaving
+        # lane subprocesses running. Bounded by the lanes' timeouts;
+        # a second Ctrl-C abandons the wait (loud, exit still 130).
+        _reap_scan_lanes_on_interrupt()
         _backstop_lifecycle("cancelled", "")
         sys.exit(130)
     except SystemExit as e:
