@@ -1774,14 +1774,22 @@ def test_parser_uses_the_runtime_in_its_toolchain_identity(tmp_path, monkeypatch
     assert f"JAVA_HOME={tmp_path / 'jdk'}" in command
 
 
-def test_scratch_command_places_extra_env_before_the_command(tmp_path, monkeypatch):
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+def test_scratch_command_places_extra_env_before_the_command(tmp_path, monkeypatch, platform):
     from packages.joern import prereqs, runner
-    monkeypatch.setattr(prereqs, "_java_path", lambda: None)
+    patch_module_attribute(monkeypatch, runner, "sys", "platform", platform)
+    home = tmp_path / "jdk"
+    (home / "bin").mkdir(parents=True)
+    (home / "release").write_text("JDK fixture")
+    java = str(home / "bin/java")
+    monkeypatch.setattr(prereqs, "_java_path", lambda: java)
     command = runner._jvm_scratch_command(
         ["joern-parse"], tmp_path,
         extra_env=("DOTNET_EnableWriteXorExecute=0",))
     wx = command.index("DOTNET_EnableWriteXorExecute=0")
     assert wx < command.index("joern-parse")
+    assert command.index(f"JAVACMD={java}") < wx
+    assert command.index(f"JAVA_HOME={home}") < wx
     assert command[0] == "/usr/bin/env"
 
 
