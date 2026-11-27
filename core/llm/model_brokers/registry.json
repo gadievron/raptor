@@ -63,6 +63,12 @@
       "api_path": "/openai/v1"
     },
     {
+      "name": "llmtr",
+      "auth_scheme": "Bearer",
+      "upstream_base_url": "https://llmtr.com",
+      "api_path": "/v1"
+    },
+    {
       "name": "openrouter",
       "auth_scheme": "Bearer",
       "upstream_base_url": "https://openrouter.ai",
