@@ -43,9 +43,10 @@ Both records bind to the ABSOLUTE run dir they are persisted under:
   conservative default (``--max-cost`` on the resume invocation is
   the documented remedy).
 
-Failure policy is demote-never-error: no usable key → the state
-persists unstamped, and readers degrade exactly as they do for legacy
-pre-stamp records (liveness demotes to unverified-never-blocks; the
+Failure policy is demote-never-error: no usable key — or a run-dir
+path that cannot be resolved at mint/verify time — → the state
+persists unstamped (or verifies False), and readers degrade exactly
+as they do for legacy pre-stamp records (liveness demotes to unverified-never-blocks; the
 cost cap clamps to the conservative default). An unverified record
 must never satisfy a trust-granting branch (the resume guard's
 self-pid exemption, the legacy uncapped-cap mapping).
@@ -203,7 +204,12 @@ def stamp_worker_record(record: dict[str, Any], out_dir: Path) -> None:
     record.pop(WORKER_PROVENANCE_KEY, None)
     if record.get("tool_pid") is None:
         return
-    token = _mint(_worker_fields(record, out_dir))
+    try:
+        token = _mint(_worker_fields(record, out_dir))
+    except OSError:
+        # Unresolvable run dir (e.g. a relative path with a vanished
+        # cwd): persist unstamped — demote-never-error.
+        return
     if token:
         record[WORKER_PROVENANCE_KEY] = token
 
@@ -229,9 +235,22 @@ def verify_worker_record(record: Mapping[str, Any], out_dir: Path) -> bool:
     token = record.get(WORKER_PROVENANCE_KEY)
     if not token:
         return False
-    if _verify(_worker_fields(record, out_dir), token):
+    try:
+        if _verify(_worker_fields(record, out_dir), token):
+            return True
+    except OSError:
+        # Unresolvable run dir: the bound check cannot be computed —
+        # degrade, never error.
+        return False
+    if _verify(_worker_fields(record), token):
+        # Visible on purpose: once no pre-upgrade worker is left, a
+        # legacy match is a replayed pre-binding token.
+        logger.info(
+            "resume-state provenance: worker token for %s verified via "
+            "the legacy unbound (pre-run-binding) encoding", out_dir,
+        )
         return True
-    return _verify(_worker_fields(record), token)
+    return False
 
 
 _unverified_reported_dirs: set[str] = set()
@@ -298,7 +317,12 @@ def stamp_cost_cap(config: dict[str, Any], out_dir: Path) -> None:
     key → the config persists unstamped and resume applies the
     conservative-default clamp."""
     config.pop(COST_CAP_PROVENANCE_KEY, None)
-    token = _mint(_cost_cap_fields(config.get("max_cost_usd"), out_dir))
+    try:
+        token = _mint(_cost_cap_fields(config.get("max_cost_usd"), out_dir))
+    except OSError:
+        # Unresolvable run dir: persist unstamped — the reader clamps
+        # to the conservative default (demote-never-error).
+        return
     if token:
         config[COST_CAP_PROVENANCE_KEY] = token
 
@@ -313,8 +337,11 @@ def verify_cost_cap(config: Mapping[str, Any], out_dir: Path) -> bool:
     token = config.get(COST_CAP_PROVENANCE_KEY)
     if not token:
         return False
-    return _verify(
-        _cost_cap_fields(config.get("max_cost_usd"), out_dir), token)
+    try:
+        return _verify(
+            _cost_cap_fields(config.get("max_cost_usd"), out_dir), token)
+    except OSError:
+        return False
 
 
 __all__ = [

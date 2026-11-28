@@ -189,6 +189,53 @@ class TestCostCap:
         assert not rsp.verify_cost_cap(cfg, tmp_path)
 
 
+class TestUnresolvableRunDir:
+    """A run-dir path that cannot be resolved demotes, never errors."""
+
+    import contextlib
+    import os
+
+    @contextlib.contextmanager
+    def _vanished_cwd(self, tmp_path: Path):
+        # Path("rel").resolve() needs the cwd; a vanished cwd makes it
+        # raise OSError — the one deterministic resolve failure on
+        # Linux.
+        import os
+        gone = tmp_path / "gone"
+        gone.mkdir()
+        prev = os.getcwd()
+        os.chdir(gone)
+        gone.rmdir()
+        try:
+            yield Path("relative-run")
+        finally:
+            os.chdir(prev)
+
+    def test_stamp_worker_persists_unstamped(self, tmp_path: Path):
+        record = {"tool_pid": 4242, "tool_pid_start": "123456"}
+        with self._vanished_cwd(tmp_path) as rel:
+            rsp.stamp_worker_record(record, rel)
+        assert rsp.WORKER_PROVENANCE_KEY not in record
+
+    def test_verify_worker_degrades_false(self, tmp_path: Path):
+        record = {"tool_pid": 4242, "tool_pid_start": "123456"}
+        rsp.stamp_worker_record(record, tmp_path)
+        with self._vanished_cwd(tmp_path) as rel:
+            assert rsp.verify_worker_record(record, rel) is False
+
+    def test_stamp_cost_cap_persists_unstamped(self, tmp_path: Path):
+        config = {"max_cost_usd": 5.0}
+        with self._vanished_cwd(tmp_path) as rel:
+            rsp.stamp_cost_cap(config, rel)
+        assert rsp.COST_CAP_PROVENANCE_KEY not in config
+
+    def test_verify_cost_cap_degrades_false(self, tmp_path: Path):
+        config = {"max_cost_usd": 5.0}
+        rsp.stamp_cost_cap(config, tmp_path)
+        with self._vanished_cwd(tmp_path) as rel:
+            assert rsp.verify_cost_cap(config, rel) is False
+
+
 class TestKeyHandling:
     def test_key_usable_creates_key(self):
         assert rsp.key_usable()
