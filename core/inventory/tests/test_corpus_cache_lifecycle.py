@@ -352,3 +352,113 @@ def test_regex_discovers_declared_integration_target_only(tmp_path):
     non_executable.chmod(0o600)
 
     assert _test_binaries(target) == [integration]
+
+
+def test_regex_missing_binary_diagnostics_preserves_build_output(tmp_path):
+    import subprocess
+
+    from core.inventory.binary_oracle_corpora.regex_rust import _missing_binary_diagnostics
+
+    target = tmp_path / "target"
+    deps = target / "release/deps"
+    deps.mkdir(parents=True)
+    artifact = deps / "integration-owned"
+    artifact.write_bytes(b"built but not executable")
+    artifact.chmod(0o600)
+    default = tmp_path / "src/target/release/deps"
+    default.mkdir(parents=True)
+    (default / "integration-elsewhere").write_bytes(b"wrong output tree")
+    build = subprocess.CompletedProcess(["cargo", "build"], 0,
+                                      stdout="cargo output", stderr="Finished release\n\x1b[31m")
+
+    diagnostic = _missing_binary_diagnostics(target, build)
+
+    assert "integration-owned mode=100600 size=24" in diagnostic
+    assert "integration-elsewhere" in diagnostic
+    assert "cargo stdout tail=cargo output" in diagnostic
+    assert "cargo stderr tail=Finished release\\x0a\\x1b[31m" in diagnostic
+    assert "\n" not in diagnostic and "\x1b" not in diagnostic
+
+
+def test_regex_missing_binary_diagnostics_bounds_output_and_entries(tmp_path):
+    import subprocess
+
+    from core.inventory.binary_oracle_corpora.regex_rust import _missing_binary_diagnostics
+
+    target = tmp_path / "target"
+    target.mkdir()
+    for index in range(40):
+        (target / f"artifact-{index}").write_bytes(b"x")
+    build = subprocess.CompletedProcess(["cargo", "build"], 0,
+                                      stdout="discarded-prefix" + "x" * 10000,
+                                      stderr="\x1b" * 10000)
+
+    diagnostic = _missing_binary_diagnostics(target, build)
+
+    assert diagnostic.count("mode=") == 20
+    assert "<more entries>" in diagnostic
+    assert "deps=unavailable(errno=2)" in diagnostic
+    assert "discarded-prefix" not in diagnostic
+    assert "\x1b" not in diagnostic
+    assert len(diagnostic) < 9000
+
+
+def test_regex_build_failure_retains_diagnostics_after_cleanup(tmp_path, monkeypatch):
+    import subprocess
+
+    import core.git as git
+    import core.git.clone as git_clone
+    from core.inventory.binary_oracle_corpora import regex_rust
+    from core.testing.module_bindings import patch_module_attribute
+    from core.testing.module_views import scoped_function_imports
+
+    def clone(url, destination, **kwargs):
+        destination.mkdir(parents=True)
+        return True
+
+    build_calls = []
+
+    def build(command, **kwargs):
+        build_calls.append(command)
+        misplaced = kwargs["cwd"] / "target/release/deps"
+        misplaced.mkdir(parents=True)
+        (misplaced / "integration-misplaced").write_bytes(b"artifact")
+        return subprocess.CompletedProcess(command, 0, stdout="cargo stdout", stderr="Finished release")
+
+    monkeypatch.setattr(regex_rust, "run_build_step", build)
+    patch_module_attribute(monkeypatch, regex_rust, "subprocess", "run",
+                           lambda command, **kwargs: subprocess.CompletedProcess(command, 0))
+    with scoped_function_imports(regex_rust, ("_build_and_run",), {
+        "core.git": git, "core.git.clone": git_clone,
+    }) as imports:
+        getattr(imports, "core.git").clone_repository = clone
+        with pytest.raises(RuntimeError, match="no integration test binary") as caught:
+            regex_rust.driver.prepare(tmp_path / "work")
+
+    assert len(build_calls) == 1
+    assert "integration-misplaced" in str(caught.value)
+    assert "cargo stderr tail=Finished release" in str(caught.value)
+    root = tmp_path / "work" / regex_rust.REGEX_TAG
+    assert not (root / "src").exists()
+    assert not (root / "target").exists()
+    assert not (root / "sentinel.ok").exists()
+
+
+def test_regex_missing_binary_diagnostics_rejects_escaping_directory(tmp_path):
+    import subprocess
+
+    from core.inventory.binary_oracle_corpora.regex_rust import _missing_binary_diagnostics
+
+    cache = tmp_path / "cache"
+    target = cache / "target"
+    (target / "release").mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "private-filename").write_bytes(b"unrelated")
+    (target / "release/deps").symlink_to(outside, target_is_directory=True)
+    build = subprocess.CompletedProcess(["cargo", "build"], 0, stdout="", stderr="")
+
+    diagnostic = _missing_binary_diagnostics(target, build)
+
+    assert "deps=outside cache" in diagnostic
+    assert "private-filename" not in diagnostic

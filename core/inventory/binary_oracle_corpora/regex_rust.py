@@ -160,6 +160,41 @@ def _test_binaries(target_dir: Path) -> list[Path]:
     ]
 
 
+def _missing_binary_diagnostics(target_dir: Path, build: subprocess.CompletedProcess) -> str:
+    """Retain bounded Cargo output and directory facts before cache cleanup."""
+    from itertools import islice
+
+    from core.security.log_sanitisation import sanitise_for_terminal
+
+    details = []
+    for label, directory in (
+        ("target", target_dir),
+        ("deps", target_dir / "release/deps"),
+        ("default-deps", target_dir.parent / "src/target/release/deps"),
+    ):
+        entries = []
+        try:
+            if not directory.resolve(strict=True).is_relative_to(target_dir.parent.resolve()):
+                details.append(f"{label}=outside cache")
+                continue
+            with os.scandir(directory) as scan:
+                for entry in islice(scan, 21):
+                    if len(entries) == 20:
+                        entries.append("<more entries>")
+                        break
+                    info = entry.stat(follow_symlinks=False)
+                    entries.append(
+                        f"{sanitise_for_terminal(entry.name, max_len=160)} "
+                        f"mode={info.st_mode:o} size={info.st_size}")
+            details.append(f"{label}=[{'; '.join(entries)}]")
+        except OSError as exc:
+            details.append(f"{label}=unavailable(errno={exc.errno})")
+    for label, output in (("cargo stdout", build.stdout), ("cargo stderr", build.stderr)):
+        text = output if isinstance(output, str) else "<not captured as text>"
+        details.append(f"{label} tail={sanitise_for_terminal(text[-2000:], max_len=4000)}")
+    return "; ".join(details)
+
+
 def _build_and_run(tag_dir: Path, target_dir: Path, profdata: Path) -> None:
     """Clone → cargo build with coverage + DWARF → run test binary →
     merge profraw."""
@@ -208,7 +243,7 @@ def _build_and_run(tag_dir: Path, target_dir: Path, profdata: Path) -> None:
     # the registry download re-runs per cold corpus build and the
     # sentinel cache absorbs it afterwards.
     build_env["CARGO_HOME"] = str(tag_dir / "cargo-home")
-    run_build_step(
+    build = run_build_step(
         ["cargo", "build", "--release", "--test", "integration"],
         cwd=src, scope=tag_dir, extra_env=build_env, network=True,
         timeout=1800,
@@ -218,7 +253,8 @@ def _build_and_run(tag_dir: Path, target_dir: Path, profdata: Path) -> None:
     # Use the same discovery on a cold build and a warm cache hit.
     candidates = _test_binaries(target_dir)
     if not candidates:
-        msg = f"regex-rust: no integration test binary built at {target_dir}/release/deps/"
+        msg = (f"regex-rust: no integration test binary built at {target_dir}/release/deps/; "
+               f"{_missing_binary_diagnostics(target_dir, build)}")
         raise RuntimeError(msg)
     test_bin = candidates[-1]
 
