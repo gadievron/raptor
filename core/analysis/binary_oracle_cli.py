@@ -673,6 +673,7 @@ def _flag_build_produced(
         return
     from core.analysis.binary_build_ledger import (
         build_produced_candidates,
+        reset_remedy,
     )
     flagged, ledger_reason = build_produced_candidates(repo, candidates)
     if not flagged:
@@ -685,16 +686,22 @@ def _flag_build_produced(
         "their content was produced by a traced build (repo-controlled "
         "build scripts ran with a repo write grant)"
     )
+    # An unverifiable ledger never heals on its own (the marker is
+    # permanent by design) — name the delete-the-file reset alongside
+    # the per-binary trust assertions, or the demotion looks like a
+    # dead end.
+    remedy = f"; or {reset_remedy(repo)}" if ledger_reason else ""
     # Candidate names come from walking the scanned repo —
     # attacker-chosen bytes; escape before logging.
     logger.warning(
         "binary-oracle: %d auto-detected binary(s) demoted — %s. "
         "Verdicts still enrich, but absent will not suppress off them. "
         "Use --binary <path> to assert trust for a run, or "
-        "/project binary add <path> to persist: %s",
+        "/project binary add <path> to persist: %s%s",
         len(flagged), why,
         ", ".join(escape_nonprintable(str(p)) for p in flagged[:3])
         + ("..." if len(flagged) > 3 else ""),
+        remedy,
     )
 
 

@@ -209,6 +209,27 @@ def ledger_paths(repo: Path | str) -> list[Path]:
     return paths
 
 
+def reset_remedy(repo: Path | str) -> str:
+    """One-line operator remedy for an unverifiable ledger, naming the
+    key file(s). Deleting them is a TRUST ASSERTION, not housekeeping:
+    the capture record is discarded, the ledger reads absent again,
+    and auto-detected binaries regain absent-suppression authority —
+    including any a recorded build actually planted — until the next
+    traced build re-records. Spelled out wherever the unverifiable
+    posture is reported, because nothing else ever resets it (the
+    marker is permanent by design: silently aging it out would
+    fail-open)."""
+    try:
+        names = ", ".join(str(p) for p in ledger_paths(repo))
+    except Exception:  # noqa: BLE001 — a remedy string must never raise
+        names = "(ledger path unresolvable)"
+    return (
+        "to reset it instead — an operator trust assertion that "
+        "discards the capture record and restores auto-detect "
+        f"suppression authority — delete the ledger file(s): {names}"
+    )
+
+
 def _hash_capped(path: Path) -> str | None:
     """sha256 of *path*, or ``None`` when it vanished, is unreadable,
     or exceeds :data:`MAX_HASH_BYTES` (see the cap's rationale)."""
@@ -406,8 +427,8 @@ def record_build_delta(
                     "build-ledger: post-build inventory unavailable for "
                     "%s — ledger marked capture-incomplete; auto-detected "
                     "binaries lose absent-suppression authority for this "
-                    "repo (assert trust with --binary / /project binary "
-                    "add)", repo,
+                    "repo. Assert trust per binary with --binary / "
+                    "/project binary add; %s", repo, reset_remedy(repo),
                 )
                 return 0
             # Exemptions are provenance-gated, not mere pre-presence:
@@ -423,8 +444,8 @@ def record_build_delta(
                 logger.warning(
                     "build-ledger: ledger for %s is unverifiable (%s) — "
                     "traced-build delta not recorded; suppression stays "
-                    "withheld for auto-detected binaries",
-                    repo, existing.reason,
+                    "withheld for auto-detected binaries; %s",
+                    repo, existing.reason, reset_remedy(repo),
                 )
                 return 0
             # Candidate build-produced contents from this run's
@@ -450,7 +471,9 @@ def record_build_delta(
                     "build-ledger: entry cap (%d) exceeded for %s — "
                     "ledger marked capture-incomplete; auto-detected "
                     "binaries lose absent-suppression authority for "
-                    "this repo", LEDGER_ENTRY_CAP, repo,
+                    "this repo. Assert trust per binary with --binary / "
+                    "/project binary add; %s",
+                    LEDGER_ENTRY_CAP, repo, reset_remedy(repo),
                 )
                 return 0
             ts = _utc_now()
@@ -652,5 +675,6 @@ __all__ = [
     "ledger_paths",
     "load_build_ledger",
     "record_build_delta",
+    "reset_remedy",
     "snapshot_repo_binaries",
 ]
