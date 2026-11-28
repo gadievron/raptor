@@ -380,6 +380,34 @@ class TestEligibility(unittest.TestCase):
             self.assertTrue(any(
                 "UNVERIFIED" in line for line in cm.output))
 
+    def test_unverified_warning_once_per_run_dir(self):
+        """The advisory check and resume_run's in-lock gate apply the
+        same demote rule to the same record; one resume invocation
+        must not repeat the same five-line warning. First report warns
+        in full, later reports for the same run dir demote to debug."""
+        import logging
+
+        from core.run import start_run
+        from core.run.metadata import resume_run
+        with TemporaryDirectory() as d:
+            out = Path(d) / "run"
+            start_run(out, "example")
+            self._mark_running(out, os.getpid())  # alive, unstamped
+            with self.assertLogs("core.run.resume",
+                                 level="WARNING") as cm:
+                self.assertIsNone(self._check(out))
+            self.assertTrue(any(
+                "UNVERIFIED" in line for line in cm.output))
+            with self.assertLogs("core.run.metadata",
+                                 level="DEBUG") as cm:
+                self.assertEqual(resume_run(out), 2)
+            self.assertFalse(any(
+                r.levelno >= logging.WARNING
+                and "UNVERIFIED" in r.getMessage()
+                for r in cm.records))
+            self.assertTrue(any(
+                "already warned" in r.getMessage() for r in cm.records))
+
     def test_running_with_cross_run_replayed_stamp_proceeds(self):
         """A verified worker record copied from ANOTHER run's metadata
         must not read as this run's live worker: the token binds the

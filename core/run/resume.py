@@ -144,7 +144,10 @@ def resume_ineligibility(
         reopen_run,
         worker_liveness_for_meta,
     )
-    from core.run.resume_state_provenance import verify_worker_record
+    from core.run.resume_state_provenance import (
+        first_unverified_liveness_report,
+        verify_worker_record,
+    )
 
     out_dir = Path(out_dir)
     meta = load_run_metadata(out_dir)
@@ -171,16 +174,23 @@ def resume_ineligibility(
             # why an unverified one must not).
             alive, detail = worker_liveness_for_meta(meta)
             if alive and not verify_worker_record(meta, out_dir):
-                logger.warning(
-                    "run metadata reports a live worker (%s) but the "
-                    "record carries no valid provenance stamp (legacy "
-                    "run, foreign install, or a tampered run dir) — "
-                    "liveness is UNVERIFIED and never blocks a reopen. "
-                    "Proceeding; if the prior worker is genuinely "
-                    "still running, stop it first or this resume will "
-                    "double-drive the run.",
-                    detail,
-                )
+                if first_unverified_liveness_report(out_dir):
+                    logger.warning(
+                        "run metadata reports a live worker (%s) but "
+                        "the record carries no valid provenance stamp "
+                        "(legacy run, foreign install, or a tampered "
+                        "run dir) — liveness is UNVERIFIED and never "
+                        "blocks a reopen. Proceeding; if the prior "
+                        "worker is genuinely still running, stop it "
+                        "first or this resume will double-drive the "
+                        "run.",
+                        detail,
+                    )
+                else:
+                    logger.debug(
+                        "unverified live worker (%s) for %s — already "
+                        "warned for this run dir", detail, out_dir,
+                    )
                 alive = False
             if alive:
                 return (
@@ -230,16 +240,22 @@ def resume_ineligibility(
         # same rule, so the two layers never disagree.
         alive, detail = worker_liveness_for_meta(meta)
         if alive and not verify_worker_record(meta, out_dir):
-            logger.warning(
-                "run metadata reports a live worker (%s) but the "
-                "record carries no valid provenance stamp (legacy "
-                "run, foreign install, or a tampered run dir) — "
-                "liveness is UNVERIFIED and never blocks resume. "
-                "Proceeding; if the prior worker is genuinely still "
-                "running, stop it first or this resume will "
-                "double-drive the run.",
-                detail,
-            )
+            if first_unverified_liveness_report(out_dir):
+                logger.warning(
+                    "run metadata reports a live worker (%s) but the "
+                    "record carries no valid provenance stamp (legacy "
+                    "run, foreign install, or a tampered run dir) — "
+                    "liveness is UNVERIFIED and never blocks resume. "
+                    "Proceeding; if the prior worker is genuinely "
+                    "still running, stop it first or this resume will "
+                    "double-drive the run.",
+                    detail,
+                )
+            else:
+                logger.debug(
+                    "unverified live worker (%s) for %s — already "
+                    "warned for this run dir", detail, out_dir,
+                )
             alive = False
         if alive:
             return (

@@ -2824,6 +2824,7 @@ def resume_run(output_dir: Path, note: str | None = None) -> int:
             alive, detail = worker_liveness_for_meta(metadata)
             if alive:
                 from core.run.resume_state_provenance import (
+                    first_unverified_liveness_report,
                     verify_worker_record,
                 )
                 if verify_worker_record(metadata, output_dir):
@@ -2834,7 +2835,7 @@ def resume_run(output_dir: Path, note: str | None = None) -> int:
                             "for it to stop, or kill it first."
                         )
                         raise ValueError(msg)
-                else:
+                elif first_unverified_liveness_report(output_dir):
                     logger.warning(
                         "run metadata reports a live worker (%s) but "
                         "the record carries no valid provenance stamp "
@@ -2845,6 +2846,11 @@ def resume_run(output_dir: Path, note: str | None = None) -> int:
                         "first or this resume will double-drive the "
                         "run.",
                         detail,
+                    )
+                else:
+                    logger.debug(
+                        "unverified live worker (%s) for %s — already "
+                        "warned for this run dir", detail, output_dir,
                     )
         extra = metadata.get("extra") or {}
         resumes = extra.get("resumes")

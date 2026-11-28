@@ -56,6 +56,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+import threading
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -233,6 +234,34 @@ def verify_worker_record(record: Mapping[str, Any], out_dir: Path) -> bool:
     return _verify(_worker_fields(record), token)
 
 
+_unverified_reported_dirs: set[str] = set()
+_unverified_reported_lock = threading.Lock()
+
+
+def first_unverified_liveness_report(out_dir: Path | str) -> bool:
+    """Whether this is the FIRST unverified-liveness report for
+    *out_dir* in this process.
+
+    Three guards apply the same demote rule to the same record — the
+    advisory eligibility check, the reopen guard, and the in-lock gate
+    in ``resume_run`` — so one resume invocation repeated the same
+    five-line warning up to three times. Callers warn in full on the
+    first report for a run dir and demote duplicates to debug; which
+    guard warns depends on the entry path, so the dedup lives here,
+    keyed by resolved run dir, rather than in any one of them.
+    Per-process only, and permissive on failure: an unresolvable path
+    reads as first every time (louder, never quieter)."""
+    try:
+        key = str(Path(out_dir).resolve())
+    except OSError:
+        return True
+    with _unverified_reported_lock:
+        if key in _unverified_reported_dirs:
+            return False
+        _unverified_reported_dirs.add(key)
+        return True
+
+
 # ── Persisted cost caps (pinned run configs) ─────────────────────────
 
 def _cap_canonical(value: object) -> str:
@@ -291,6 +320,7 @@ def verify_cost_cap(config: Mapping[str, Any], out_dir: Path) -> bool:
 __all__ = [
     "COST_CAP_PROVENANCE_KEY",
     "WORKER_PROVENANCE_KEY",
+    "first_unverified_liveness_report",
     "key_usable",
     "stamp_cost_cap",
     "stamp_worker_record",
