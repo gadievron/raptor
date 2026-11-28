@@ -280,6 +280,102 @@ class TestPreBuildProvenance:
         assert calls == [(Path(repo), {a, b})]
 
 
+class TestDualKeyIdentity:
+    def test_ledger_paths_two_keys_path_first(self, tmp_path):
+        repo = _repo_with_build(tmp_path)
+        paths = ledger_mod.ledger_paths(repo)
+        assert len(paths) == 2
+        assert paths[0] == ledger_path(repo)
+        assert paths[0] != paths[1]
+
+    def test_records_land_in_both_key_files(self, tmp_path):
+        repo = _repo_with_build(tmp_path)
+        _elf(repo / "build" / "app", b"content")
+        post = snapshot_repo_binaries(repo)
+        assert record_build_delta(repo, {}, post) == 1
+        for p in ledger_mod.ledger_paths(repo):
+            assert p.is_file()
+            assert len(p.read_text().splitlines()) == 1
+
+    def test_moved_repo_keeps_identity(self, tmp_path):
+        # The evasion the alias key closes: record under one path,
+        # move the repo — the path key reads absent there, but the
+        # repo root keeps its inode, so the alias key still carries
+        # the record and consultation keeps flagging.
+        repo = _repo_with_build(tmp_path)
+        _elf(repo / "build" / "planted", b"build-made")
+        post = snapshot_repo_binaries(repo)
+        assert record_build_delta(repo, {}, post) == 1
+        moved = tmp_path / "repo-moved"
+        repo.rename(moved)
+        view = load_build_ledger(moved)
+        assert view.status == "ok"
+        assert sha256_file(moved / "build" / "planted") in view.hashes
+        flagged, reason = build_produced_candidates(
+            moved, [moved / "build" / "planted"])
+        assert flagged == [moved / "build" / "planted"]
+        assert reason is None
+
+    def test_rebuild_after_move_backfills_the_new_path_key(
+        self, tmp_path,
+    ):
+        # Appends dedupe per key FILE, not against the merged union:
+        # after a move, a deterministic rebuild reproduces hashes the
+        # alias already carries, and those must STILL land in the new
+        # path-key file. Union-deduped appends would skip them,
+        # leaving the path file empty — and a later alias-identity
+        # loss (device renumber, recycled inode) would then consult
+        # that empty file alone and read the build-produced binary as
+        # eligible for absent suppression again (fail-open).
+        repo = _repo_with_build(tmp_path)
+        _elf(repo / "build" / "planted", b"build-made")
+        post = snapshot_repo_binaries(repo)
+        assert record_build_delta(repo, {}, post) == 1
+        moved = tmp_path / "repo-moved"
+        repo.rename(moved)
+        new_path_key = ledger_mod.ledger_paths(moved)[0]
+        assert not new_path_key.exists()
+        post2 = snapshot_repo_binaries(moved)
+        # No NEW content — the rebuild reproduced the recorded hash —
+        # but the new path key gets backfilled all the same.
+        assert record_build_delta(moved, {}, post2) == 0
+        digest = sha256_file(moved / "build" / "planted")
+        solo = ledger_mod._load_ledger_file(new_path_key)
+        assert solo.status == "ok"
+        assert digest in solo.hashes
+
+    def test_copied_repo_loses_identity(self, tmp_path):
+        # cp -r mints fresh inodes: both keys are new, the ledger
+        # reads absent — the accepted identity loss (same reach the
+        # path key alone had).
+        import shutil
+        repo = _repo_with_build(tmp_path)
+        _elf(repo / "build" / "planted", b"build-made")
+        post = snapshot_repo_binaries(repo)
+        assert record_build_delta(repo, {}, post) == 1
+        copied = tmp_path / "repo-copy"
+        shutil.copytree(repo, copied)
+        assert load_build_ledger(copied).status == "absent"
+
+    def test_unverifiable_alias_file_poisons_merge_naming_it(
+        self, tmp_path,
+    ):
+        repo = _repo_with_build(tmp_path)
+        _elf(repo / "build" / "app", b"content")
+        post = snapshot_repo_binaries(repo)
+        assert record_build_delta(repo, {}, post) == 1
+        alias = ledger_mod.ledger_paths(repo)[1]
+        with open(alias, "a") as f:
+            f.write("not json\n")
+        view = load_build_ledger(repo)
+        assert view.status == "unverifiable"
+        assert str(alias) in (view.reason or "")
+
+    def test_unstatable_repo_falls_back_to_path_key(self, tmp_path):
+        missing = tmp_path / "never-existed"
+        assert ledger_mod.ledger_paths(missing) == [ledger_path(missing)]
+
+
 class TestLoadFailClosed:
     def _seed_ok(self, repo: Path) -> None:
         record_build_delta(repo, {}, {"/x/a": "ab" * 32})

@@ -41,9 +41,26 @@ need no new states. Explicit operator assertions (``--binary`` /
 ledger-listed — operator ownership, the same doctrine as the
 provenance-drop consent.
 
-Storage / trust model: one JSONL file per target repo under the
+Storage / trust model: JSONL files per target repo under the
 per-user XDG data dir (``$XDG_DATA_HOME/raptor/build-ledger/``, else
-``~/.local/share/raptor/build-ledger/``). That location is
+``~/.local/share/raptor/build-ledger/``). Each repo is keyed TWICE —
+by its resolved path hash and by a ``st_dev:st_ino`` alias of the repo
+root — with every record appended to both files and consultation
+merging their union. The path key alone was an identity seam: moving
+or bind-mounting the repo to a new path landed consultation on a
+fresh key, which read as an ABSENT ledger (the migration window), so
+a binary recorded as build-produced regained absent-suppression
+authority by re-scanning from a different path. The inode alias
+survives renames, moves within a filesystem, and bind mounts — for as
+long as the device number itself is stable (``st_dev`` is not durable
+across reboots on btrfs subvolumes, overlayfs and other
+anonymous-device filesystems; alias loss alone is safe because every
+record also lives in the path-key file). It is a
+fail-closed-only widening: a copied repo (``cp -r``) gets fresh
+inodes and keeps only the path key's reach (same identity loss as
+today), and a recycled inode can at worst attribute ANOTHER repo's
+build-produced hashes to this one — withholding authority it would
+otherwise grant, never granting any. That location is
 RAPTOR-owned: traced builds run sandboxed with write grants limited to
 the repo tree and the per-call staging workspace, and run output dirs
 — which less-trusted code CAN write — are never under it. The ledger
@@ -162,10 +179,34 @@ def _ledger_dir() -> Path:
 
 
 def ledger_path(repo: Path | str) -> Path:
-    """The per-repo ledger file (keyed by resolved repo path hash)."""
+    """The PRIMARY per-repo ledger file (keyed by resolved repo path
+    hash). Writers and readers use :func:`ledger_paths` — both keys —
+    this accessor names the path-key file only."""
     from core.hash import sha256_string
     key = sha256_string(str(Path(repo).resolve()))
     return _ledger_dir() / f"{key}.jsonl"
+
+
+def ledger_paths(repo: Path | str) -> list[Path]:
+    """Every ledger file keyed to *repo*: the resolved-path key plus,
+    when the repo root is statable, the ``st_dev:st_ino`` alias key
+    (see the module docstring's identity doctrine). Records append to
+    ALL of these; consultation merges their union. Order is stable:
+    path key first."""
+    resolved = Path(repo).resolve()
+    paths = [ledger_path(resolved)]
+    try:
+        st = os.stat(resolved)
+    except OSError:
+        # Unstatable repo root: the alias identity is unavailable, the
+        # path key alone applies (pre-alias behaviour).
+        return paths
+    from core.hash import sha256_string
+    alias = _ledger_dir() / (
+        f"{sha256_string(f'dev-ino:{st.st_dev}:{st.st_ino}')}.jsonl")
+    if alias != paths[0]:
+        paths.append(alias)
+    return paths
 
 
 def _hash_capped(path: Path) -> str | None:
@@ -310,6 +351,16 @@ def _append_lines(path: Path, records: list[dict[str, object]]) -> bool:
         return False
 
 
+def _append_all(
+    paths: list[Path], records: list[dict[str, object]],
+) -> bool:
+    """Append *records* to every key file. No short-circuit: a failed
+    append on one key must not skip the other (the union merge at read
+    time absorbs a torn pair). True only when all appends landed."""
+    results = [_append_lines(p, records) for p in paths]
+    return all(results)
+
+
 def record_build_delta(
     repo: Path | str,
     pre: dict[str, str] | None,
@@ -329,14 +380,23 @@ def record_build_delta(
     remediable by an explicit operator assertion. ``post is None``
     (post-build inventory failed) records a capture-incomplete marker:
     the ledger can no longer vouch for what the build wrote, so
-    consultation fail-closes for this repo. Returns the number of
-    entries appended. Never raises.
+    consultation fail-closes for this repo. Appends dedupe per key
+    FILE, so each file stays a self-contained record of the repo's
+    build-produced contents even when the other key already carries
+    them. Returns the number of distinct NEW build-produced contents
+    (a backfill of an already-known hash into a key file that lacked
+    it counts zero). Never raises.
     """
     try:
-        path = ledger_path(repo)
+        # Every record lands in BOTH key files (path + dev:ino alias)
+        # so consultation from a moved/bind-mounted path still sees
+        # it. The two appends are not atomic; a torn pair only makes
+        # one file a subset of the other, and the union merge at read
+        # time absorbs that.
+        paths = ledger_paths(repo)
         with _write_lock:
             if post is None:
-                _append_lines(path, [{
+                _append_all(paths, [{
                     "v": LEDGER_SCHEMA, "kind": _KIND_INCOMPLETE,
                     "reason": "post-build binary inventory failed or "
                               "exceeded the snapshot cap",
@@ -367,18 +427,21 @@ def record_build_delta(
                     repo, existing.reason,
                 )
                 return 0
-            new: dict[str, str] = {}
+            # Candidate build-produced contents from this run's
+            # post-build inventory (deduped within the run; the first
+            # carrier path wins the record's path field).
+            candidates: dict[str, str] = {}
             for p, digest in sorted(post.items()):
-                if digest in pre_hashes or digest in existing.hashes:
+                if digest in pre_hashes:
                     continue
-                new.setdefault(digest, p)
-            if not new:
-                return 0
+                candidates.setdefault(digest, p)
+            new = {d: p for d, p in candidates.items()
+                   if d not in existing.hashes}
             if len(existing.hashes) + len(new) > LEDGER_ENTRY_CAP:
                 # Dropping entries silently would fail-open (an
                 # unrecorded planted binary keeps authority); the
                 # overflow marker fail-closes the whole repo instead.
-                _append_lines(path, [{
+                _append_all(paths, [{
                     "v": LEDGER_SCHEMA, "kind": _KIND_INCOMPLETE,
                     "reason": f"entry cap ({LEDGER_ENTRY_CAP}) exceeded",
                     "ts": _utc_now(),
@@ -391,18 +454,47 @@ def record_build_delta(
                 )
                 return 0
             ts = _utc_now()
-            ok = _append_lines(path, [
-                {"v": LEDGER_SCHEMA, "kind": _KIND_BINARY,
-                 "sha256": digest, "path": p, "ts": ts}
-                for digest, p in new.items()
-            ])
-            if ok:
+            # Dedupe per DESTINATION file, never against the merged
+            # union: each key file must stay self-contained. A hash
+            # the alias file carries but the path file lacks (repo
+            # moved, then deterministically rebuilt) must still land
+            # in the path file — deduping against the union would
+            # skip it, and a later alias-identity loss (device
+            # renumber across reboots, recycled inode) would consult
+            # the incomplete path file alone and hand the recorded
+            # build-produced binary absent-suppression authority back
+            # (fail-open).
+            ok = True
+            appended = 0
+            for path in paths:
+                have = _load_ledger_file(path).hashes
+                residue = [
+                    {"v": LEDGER_SCHEMA, "kind": _KIND_BINARY,
+                     "sha256": digest, "path": p, "ts": ts}
+                    for digest, p in candidates.items()
+                    if digest not in have
+                ]
+                if not residue:
+                    continue
+                if _append_lines(path, residue):
+                    appended += len(residue)
+                else:
+                    ok = False
+            if not appended or not ok:
+                # _append_lines warned loudly on any failure.
+                return 0
+            if new:
                 logger.info(
                     "build-ledger: recorded %d traced-build binary "
                     "content(s) for %s", len(new), repo,
                 )
-                return len(new)
-            return 0
+            else:
+                logger.info(
+                    "build-ledger: backfilled %d ledger record(s) for "
+                    "%s into a key file that lacked them (repo "
+                    "identity previously split)", appended, repo,
+                )
+            return len(new)
     except Exception:  # noqa: BLE001 — capture must never fail the run
         logger.warning(
             "build-ledger: recording traced-build output failed for %s",
@@ -416,11 +508,14 @@ def _unverifiable(reason: str) -> LedgerView:
 
 
 def load_build_ledger(repo: Path | str) -> LedgerView:
-    """Load one repo's ledger. Never raises; every failure shape maps
-    to the fail-closed ``unverifiable`` status (see
-    :class:`LedgerView`), absence to ``absent``."""
+    """Load one repo's ledger across BOTH key files (path + dev:ino
+    alias), merged: either file unverifiable → ``unverifiable``,
+    naming the offending file; otherwise the union of their hashes;
+    ``absent`` only when neither file exists. Never raises; every
+    failure shape maps to the fail-closed ``unverifiable`` status
+    (see :class:`LedgerView`)."""
     try:
-        path = ledger_path(repo)
+        paths = ledger_paths(repo)
     except Exception:  # noqa: BLE001 — resolution failure reads as absence
         # When no home directory resolves (HOME unset and no passwd
         # entry — systemd DynamicUser-style runners), there is no
@@ -436,6 +531,24 @@ def load_build_ledger(repo: Path | str) -> LedgerView:
             "inoperative in this environment)", repo, exc_info=True,
         )
         return LedgerView(status="absent")
+    hashes: set[str] = set()
+    seen_ok = False
+    for path in paths:
+        view = _load_ledger_file(path)
+        if view.status == "unverifiable":
+            return _unverifiable(f"{view.reason} [{path}]")
+        if view.status == "ok":
+            seen_ok = True
+            hashes.update(view.hashes)
+    if not seen_ok:
+        return LedgerView(status="absent")
+    return LedgerView(status="ok", hashes=frozenset(hashes))
+
+
+def _load_ledger_file(path: Path) -> LedgerView:
+    """Load ONE key file; same status semantics as
+    :func:`load_build_ledger` but unmerged and without naming the
+    file in the reason (the caller does)."""
     try:
         fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW)
     except FileNotFoundError:
@@ -536,6 +649,7 @@ __all__ = [
     "SNAPSHOT_FILE_CAP",
     "build_produced_candidates",
     "ledger_path",
+    "ledger_paths",
     "load_build_ledger",
     "record_build_delta",
     "snapshot_repo_binaries",
