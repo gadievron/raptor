@@ -20,8 +20,9 @@ Notable Rust quirks:
     by c++filt — we build a ``nm --demangle``-derived map first
     (nm's libiberty handles both) and fall back to c++filt only for
     names absent from the binary's symbol table (inlined-only DIEs).
-  * Test binary lives at ``target/release/deps/integration-<hash>``; we
-    glob for the latest.
+  * Cargo reports the integration executable through its JSON artifact
+    stream. We retain it as ``target/integration`` for cache reuse; Cargo
+    build-directory internals differ between toolchain versions.
 """
 
 from __future__ import annotations
@@ -30,8 +31,10 @@ import json
 import logging
 import os
 import subprocess
+import stat
+from pathlib import Path
 from dataclasses import dataclass
-from typing import Any, Literal, TYPE_CHECKING
+from typing import Any, Literal
 
 from core.analysis.binary_oracle import (
     _qualified_from_demangled,
@@ -50,10 +53,6 @@ from .snappy import (
     _LLVM_PROFDATA_CANDIDATES,
     _resolve,
 )
-
-if TYPE_CHECKING:
-    from pathlib import Path
-
 
 _rust_sysroot_llvm_bin_cache: str | None | bool = False
 
@@ -113,7 +112,7 @@ def _rust_cov_candidates() -> tuple[str, ...]:
 
 REGEX_URL = "https://github.com/rust-lang/regex.git"
 REGEX_TAG = "1.10.6"
-CACHE_VERSION = "2"
+CACHE_VERSION = "3"
 
 
 @dataclass
@@ -136,10 +135,10 @@ class _RegexRustDriver:
             transient=(tag_dir / "src", tag_dir / "cargo-home"), profile_pattern="cov-*.profraw",
             ready=lambda: bool(_test_binaries(target_dir)),
         ):
-            # Test binary path (hash suffix; glob to find latest).
+            # The retained executable is independent of Cargo build layouts.
             candidates = _test_binaries(target_dir)
             if not candidates:
-                msg = f"regex-rust: no test binary at {target_dir}/release/deps/"
+                msg = f"regex-rust: no retained test binary at {target_dir}/integration"
                 raise RuntimeError(msg)
             test_bin = candidates[-1]
 
@@ -151,13 +150,48 @@ class _RegexRustDriver:
             }
 
 
+def _valid_test_binary(path: Path, target_dir: Path) -> bool:
+    try:
+        info = path.lstat()
+        return (stat.S_ISDIR(target_dir.lstat().st_mode)
+                and stat.S_ISREG(info.st_mode) and info.st_size > 0
+                and os.access(path, os.X_OK)
+                and path.resolve().is_relative_to(target_dir.resolve()))
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
 def _test_binaries(target_dir: Path) -> list[Path]:
-    return [
-        path for path in sorted((target_dir / "release/deps").glob("integration-*"))
-        if path.is_file() and path.stat().st_size > 0 and os.access(path, os.X_OK)
-        and "." not in path.name.removeprefix("integration-")
-        and path.resolve().is_relative_to(target_dir.resolve())
-    ]
+    retained = target_dir / "integration"
+    return [retained] if _valid_test_binary(retained, target_dir) else []
+
+
+def _cargo_test_binary(output: str, src: Path, target_dir: Path) -> Path | None:
+    """Read Cargo's public artifact protocol, never its private layout."""
+    candidates = set()
+    for line in output.splitlines():
+        try:
+            artifact = json.loads(line)
+        except (ValueError, RecursionError):
+            continue  # Build tools may interleave non-JSON stdout.
+        if (not isinstance(artifact, dict)
+                or artifact.get("reason") != "compiler-artifact"
+                or artifact.get("manifest_path") != str(src / "Cargo.toml")):
+            continue
+        target = artifact.get("target")
+        profile = artifact.get("profile")
+        if (not isinstance(target, dict) or target.get("name") != "integration"
+                or target.get("kind") != ["test"]
+                or not isinstance(profile, dict) or profile.get("test") is not True):
+            continue
+        executable = artifact.get("executable")
+        if not isinstance(executable, str):
+            return None
+        path = Path(executable)
+        if not path.is_absolute() or not _valid_test_binary(path, target_dir):
+            return None
+        candidates.add(path)
+    return next(iter(candidates)) if len(candidates) == 1 else None
 
 
 def _missing_binary_diagnostics(target_dir: Path, build: subprocess.CompletedProcess) -> str:
@@ -222,6 +256,7 @@ def _build_and_run(tag_dir: Path, target_dir: Path, profdata: Path) -> None:
     )
 
     target_dir.mkdir(parents=True)
+    target_identity = target_dir.lstat()
 
     # Rust release profile strips DWARF + LLVM coverage instrumentation
     # by default; restore both via RUSTFLAGS. Single codegen unit so the
@@ -244,19 +279,26 @@ def _build_and_run(tag_dir: Path, target_dir: Path, profdata: Path) -> None:
     # sentinel cache absorbs it afterwards.
     build_env["CARGO_HOME"] = str(tag_dir / "cargo-home")
     build = run_build_step(
-        ["cargo", "build", "--release", "--test", "integration"],
+        ["cargo", "build", "--release", "--test", "integration", "--message-format=json"],
         cwd=src, scope=tag_dir, extra_env=build_env, network=True,
         timeout=1800,
     )
 
-    # The pinned crate declares tests/lib.rs as the "integration" target.
-    # Use the same discovery on a cold build and a warm cache hit.
-    candidates = _test_binaries(target_dir)
-    if not candidates:
-        msg = (f"regex-rust: no integration test binary built at {target_dir}/release/deps/; "
+    # Integration executables moved out of release/deps in Cargo 1.100.
+    # Match the pinned root crate's target in the public artifact stream,
+    # then retain one stable path before source/build-cache pruning.
+    current = target_dir.lstat()
+    if (not stat.S_ISDIR(current.st_mode)
+            or (current.st_dev, current.st_ino) != (target_identity.st_dev, target_identity.st_ino)):
+        raise RuntimeError("regex-rust: Cargo target directory changed during build")
+    test_bin = _cargo_test_binary(build.stdout, src, target_dir)
+    if test_bin is None:
+        msg = (f"regex-rust: no integration test binary reported under {target_dir}; "
                f"{_missing_binary_diagnostics(target_dir, build)}")
         raise RuntimeError(msg)
-    test_bin = candidates[-1]
+    retained = target_dir / "integration"
+    test_bin.replace(retained)
+    test_bin = retained
 
     profraw_pattern = str(tag_dir / "cov-%p-%m.profraw")
     # The built test binary is untrusted-origin code — run it inside

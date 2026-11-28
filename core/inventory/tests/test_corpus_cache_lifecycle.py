@@ -62,7 +62,7 @@ def case(request, tmp_path, monkeypatch):
         builder = "_build_fresh"
     else:
         dirs = [root / ("target" if name == "regex_rust" else "build")]
-        tail = {"snappy": "snappy_unittest", "leveldb": "leveldb_tests", "regex_rust": "release/deps/integration-owned"}[name]
+        tail = {"snappy": "snappy_unittest", "leveldb": "leveldb_tests", "regex_rust": "integration"}[name]
         files = [dirs[0] / tail, root / "merged.profdata"]
         profile = root / {"snappy": "snappy_123.profraw", "leveldb": "leveldb_123.profraw", "regex_rust": "cov-123-456.profraw"}[name]
         builder = "_build_and_run"
@@ -334,24 +334,25 @@ def test_cleanup_cancellation_preserves_build_error_and_continues(case, monkeypa
     assert not (root / "sentinel.ok").exists()
 
 
-def test_regex_discovers_declared_integration_target_only(tmp_path):
+def test_regex_cache_uses_only_retained_integration_executable(tmp_path):
     from core.inventory.binary_oracle_corpora.regex_rust import _test_binaries
 
     target = tmp_path / "target"
     deps = target / "release/deps"
     deps.mkdir(parents=True)
-    integration = deps / "integration-abc123"
-    integration.write_bytes(b"owned test binary")
+    stale = deps / "integration-abc123"
+    stale.write_bytes(b"old internal artifact")
+    stale.chmod(0o700)
+    assert _test_binaries(target) == []
+    integration = target / "integration"
+    integration.write_bytes(b"retained test binary")
     integration.chmod(0o700)
-    for name in ("regex-abc123", "integration-abc123.d", "integration-empty"):
-        path = deps / name
-        path.write_bytes(b"" if name.endswith("empty") else b"other artifact")
-        path.chmod(0o700)
-    non_executable = deps / "integration-data"
-    non_executable.write_bytes(b"non-executable artifact")
-    non_executable.chmod(0o600)
-
     assert _test_binaries(target) == [integration]
+    integration.chmod(0o600)
+    assert _test_binaries(target) == []
+    integration.chmod(0o700)
+    integration.write_bytes(b"")
+    assert _test_binaries(target) == []
 
 
 def test_regex_missing_binary_diagnostics_preserves_build_output(tmp_path):
@@ -462,3 +463,150 @@ def test_regex_missing_binary_diagnostics_rejects_escaping_directory(tmp_path):
 
     assert "deps=outside cache" in diagnostic
     assert "private-filename" not in diagnostic
+
+
+@pytest.fixture
+def regex_artifact_build(tmp_path, monkeypatch):
+    import json
+    import subprocess
+
+    import core.git as git
+    import core.git.clone as git_clone
+    from core.inventory.binary_oracle_corpora import regex_rust
+    from core.testing.module_bindings import patch_module_attribute
+    from core.testing.module_views import scoped_function_imports
+
+    root = tmp_path / "work" / regex_rust.REGEX_TAG
+    state = {"layout": "release/deps/integration-owned", "mode": "valid", "builds": 0, "runs": 0}
+
+    def clone(url, destination, **kwargs):
+        destination.mkdir(parents=True)
+        (destination / "Cargo.toml").write_text("owned manifest")
+        (root / "cargo-home").mkdir()
+        return True
+
+    def build(command, **kwargs):
+        if command[0] != "cargo":
+            assert command == [str(root / "target/integration"), "--test-threads=1"]
+            assert kwargs["cwd"] == root
+            assert kwargs["extra_env"]["LLVM_PROFILE_FILE"] == str(root / "cov-%p-%m.profraw")
+            state["runs"] += 1
+            if state["mode"] == "run-error":
+                raise subprocess.CalledProcessError(9, command)
+            (root / "cov-123-456.profraw").write_bytes(b"coverage")
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        assert "--message-format=json" in command
+        state["builds"] += 1
+        if state["mode"] == "build-error":
+            raise subprocess.CalledProcessError(8, command)
+        target = root / "target"
+        executable = target / state["layout"]
+        executable.parent.mkdir(parents=True, exist_ok=True)
+        executable.write_bytes(b"owned integration executable")
+        executable.chmod(0o700)
+        record = {"reason": "compiler-artifact", "manifest_path": str(root / "src/Cargo.toml"),
+                  "target": {"name": "integration", "kind": ["test"]},
+                  "profile": {"test": True}, "executable": str(executable)}
+        records = [record]
+        if state["mode"] == "null":
+            record["executable"] = None
+        elif state["mode"] == "wrong-manifest":
+            record["manifest_path"] = str(root / "src/dependency/Cargo.toml")
+        elif state["mode"] == "wrong-kind":
+            record["target"]["kind"] = ["bin"]
+        elif state["mode"] == "not-test-profile":
+            record["profile"]["test"] = False
+        elif state["mode"] == "malformed-target":
+            record["target"] = []
+        elif state["mode"] == "relative":
+            record["executable"] = str(executable.relative_to(root))
+        elif state["mode"] == "not-executable":
+            executable.chmod(0o600)
+        elif state["mode"] == "empty":
+            executable.write_bytes(b"")
+        elif state["mode"] in {"outside", "symlink"}:
+            outside = tmp_path / "outside-executable"
+            outside.write_bytes(b"operator file")
+            outside.chmod(0o700)
+            if state["mode"] == "outside":
+                record["executable"] = str(outside)
+            else:
+                executable.unlink()
+                executable.symlink_to(outside)
+        elif state["mode"] == "ambiguous":
+            other = target / "another-executable"
+            other.write_bytes(b"another test")
+            other.chmod(0o700)
+            records.append({**record, "executable": str(other)})
+        elif state["mode"] == "root-replaced":
+            target.rename(root / "parked-target")
+            target.mkdir()
+        elif state["mode"] == "move-error":
+            (target / "integration").mkdir()
+        dependency = {**record, "manifest_path": str(root / "src/dependency/Cargo.toml"),
+                      "executable": "/outside/dependency"}
+        stdout = "tool noise\n[]\n{broken JSON\n" + "\n".join(map(json.dumps, [dependency, *records]))
+        if state["mode"] == "no-artifact":
+            stdout = "tool noise only"
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="Finished release")
+
+    def merge(command, **kwargs):
+        if state["mode"] == "merge-error":
+            raise subprocess.CalledProcessError(10, command)
+        Path(command[-1]).write_bytes(b"merged coverage")
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(regex_rust, "run_build_step", build)
+    monkeypatch.setattr(regex_rust, "run_tool", merge)
+    monkeypatch.setattr(regex_rust, "_rust_profdata_candidates", lambda: ("llvm-profdata",))
+    monkeypatch.setattr(regex_rust, "_resolve", lambda candidates: candidates[0])
+    monkeypatch.setattr(regex_rust, "_liveness_from_llvm_cov", lambda *args: ({"live"}, {"live", "absent"}))
+    patch_module_attribute(monkeypatch, regex_rust, "subprocess", "run",
+                           lambda command, **kwargs: subprocess.CompletedProcess(command, 0))
+    with scoped_function_imports(regex_rust, ("_build_and_run",), {
+        "core.git": git, "core.git.clone": git_clone,
+    }) as imports:
+        getattr(imports, "core.git").clone_repository = clone
+        yield regex_rust.driver, root, state
+
+
+@pytest.mark.parametrize("layout", ["release/deps/integration-owned",
+                                   "release/build/regex/unit-id/out/integration"])
+def test_regex_cargo_artifact_survives_layout_and_warm_cache(regex_artifact_build, layout):
+    driver, root, state = regex_artifact_build
+    state["layout"] = layout
+
+    cold = driver.prepare(root.parent)
+    assert cold["o2_binary"] == root / "target/integration"
+    assert cold["o2_binary"].read_bytes() == b"owned integration executable"
+    assert cold["live_set"] == {"live"}
+    assert not (root / "src").exists()
+    assert not (root / "cargo-home").exists()
+    assert not list(root.glob("*.profraw"))
+    assert not (root / "target" / layout).exists()
+    assert driver.prepare(root.parent) == cold
+    assert state["builds"] == 1 and state["runs"] == 1
+
+
+@pytest.mark.parametrize("mode", ["null", "wrong-manifest", "wrong-kind", "not-test-profile",
+                                  "malformed-target", "relative", "not-executable", "empty",
+                                  "outside", "symlink", "ambiguous", "root-replaced",
+                                  "move-error", "no-artifact", "build-error", "run-error", "merge-error"])
+def test_regex_cargo_artifact_failure_never_publishes_cache(regex_artifact_build, tmp_path, mode):
+    import subprocess
+
+    driver, root, state = regex_artifact_build
+    state["mode"] = mode
+
+    with pytest.raises((RuntimeError, OSError, subprocess.CalledProcessError)):
+        driver.prepare(root.parent)
+
+    assert not (root / "sentinel.ok").exists()
+    assert not (root / "target").exists()
+    assert not (root / "src").exists()
+    assert not (root / "cargo-home").exists()
+    assert not list(root.glob("*.profraw"))
+    if mode in {"outside", "symlink"}:
+        assert (tmp_path / "outside-executable").read_bytes() == b"operator file"
+    if mode not in {"run-error", "merge-error"}:
+        assert state["runs"] == 0
