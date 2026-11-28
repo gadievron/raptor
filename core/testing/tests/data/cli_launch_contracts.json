@@ -659,7 +659,7 @@
     "core/startup/tests/test_process_init.py": "dc517bc5675fc53172be5b888738156ff9ae39f0dc533a55250400495223ae2a",
     "core/startup/tests/test_python_import_acceptance.py": "a6a37cd5cda3654444acbde9456b767e70b6f1aa0a2b4c7d550e3cb6514b2c9e",
     "core/startup/tests/test_session_init_env_file.py": "6d3174466144d270a7869c2cfd2c5bec46d41fff7c6f3561ae3cead891f08f39",
-    "core/startup/tests/test_session_title.py": "d24a6a7269691eb6b3cb67fb2f0a35d0b44a7b2a17875d862d0ea2df4513b936",
+    "core/startup/tests/test_session_title.py": "d53c36bded531c3421359e5a3c3899c73d1225aced624b98e32772dcd0bafaa0",
     "core/symbolic/tests/conftest.py": "92c8ec2ba36928b0dabf2bb1808b1cfcd1fcc85850c1fb2a7aef4ff96f276c9b",
     "core/symbolic/tests/test_availability.py": "6fcbd4156bcb41d619b8e3d0d5e2d904e96bc66d8f3083466ca84c8ec3457210",
     "core/symbolic/tests/test_constraints.py": "e22ddd48773f41937f554736cd204c9db2ab649ba7410a8371ee7adb72e542fe",

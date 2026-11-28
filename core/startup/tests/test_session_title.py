@@ -187,7 +187,13 @@ def test_same_session_parallel_requests_do_not_lose_retry_budget(tmp_path):
             return None  # A contended optional hook may skip this turn.
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(request, range(8)))
-    assert sum(value is not None for value in results) == 3
+    granted = sum(value is not None for value in results)
+    # Contention may skip any number of turns, but a skipped turn must not
+    # consume budget and the budget itself is never exceeded.
+    assert granted <= 3
+    for _ in range(3 - granted):
+        assert request(None) == 'raptor · alpha'
+    assert request(None) is None
     state = load_json(next(directory.glob('*.json')), strict=True)
     assert state['attempts'] == 3 and state['confirmed'] is None
 
